@@ -1,0 +1,49 @@
+# Binaries
+larry
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output directory
+out/
+
+# Go workspace
+*.work
+
+# Vendor directory (if vendoring is used)
+vendor/
+
+# Coverage
+coverage.out
+coverage.html
+
+# Build artifacts
+*.tar
+*.tar.gz
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated
+*.1
+man/
+
+# Local config (never commit)
+config.yaml
+
+# Temporary files
+tmp/
+*.tmp

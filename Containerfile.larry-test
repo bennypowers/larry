@@ -1,0 +1,61 @@
+# larry-test container for running Gentoo ebuild tests
+# Usage: podman build -f Containerfile.larry-test -t larry-test .
+
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+ENV LANG=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
+
+# Install base system packages via microdnf
+RUN microdnf update -y && \
+    microdnf install -y --setopt=install_weak_deps=0 \
+        bash \
+        coreutils \
+        curl \
+        findutils \
+        gawk \
+        gcc \
+        git \
+        gzip \
+        make \
+        patch \
+        sed \
+        tar \
+        util-linux \
+        which \
+        xz \
+        && microdnf clean all
+
+# Install Python for Portage
+RUN microdnf install -y python3 && microdnf clean all
+
+# Create non-root user
+RUN useradd -m -s /bin/bash larry && \
+    mkdir -p /home/larry/.cache && \
+    chown -R larry:larry /home/larry
+
+# Set up Gentoo overlay directories
+RUN mkdir -p /var/db/repos/gentoo && \
+    mkdir -p /etc/portage && \
+    mkdir -p /var/cache/distfiles && \
+    mkdir -p /var/cache/larry
+
+# Set environment
+ENV EPREFIX=/
+ENV PORTAGE_CONFIGROOT=/
+ENV PORTDIR=/var/db/repos/gentoo
+ENV PORTDIR_OVERLAY=/var/lib/overlay
+ENV DISTDIR=/var/cache/distfiles
+ENV PKGDIR=/var/cache/packages
+
+# Copy Portage installation scripts (will be provided at runtime via volume mount)
+RUN mkdir -p /opt/portage/bin && \
+    mkdir -p /opt/portage/lib
+
+# Expose for debugging
+EXPOSE 8080
+
+USER larry
+WORKDIR /home/larry
+
+CMD ["/bin/bash"]
