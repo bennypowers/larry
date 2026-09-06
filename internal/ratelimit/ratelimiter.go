@@ -140,7 +140,19 @@ func (r *RateLimiter) Release() {
 
 // Do wraps a function call with full rate limiting (concurrency + per-host).
 // The global concurrency slot is acquired before fn() runs and released after.
+// If ctx is nil, no cancellation is supported and the call blocks until a slot is available.
 func (r *RateLimiter) Do(ctx context.Context, host string, fn func() error) error {
+	if ctx == nil {
+		// No context: acquire semaphore and proceed.
+		// Block until a slot is available.
+		r.sem <- struct{}{}
+		defer func() { <-r.sem }()
+
+		ticker := r.getPerHostTicker(host)
+		<-ticker.C
+		return fn()
+	}
+
 	// Acquire global concurrency slot
 	select {
 	case r.sem <- struct{}{}:

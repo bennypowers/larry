@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"bennypowers.dev/larry/internal/remoteid"
@@ -24,14 +25,34 @@ func NewClient() *Client {
 
 // NewClientWithLimiter creates a new HTTP client with a specific rate limiter.
 func NewClientWithLimiter(rl *ratelimit.RateLimiter) *Client {
+	return NewClientWithLimiterAndTransport(rl, nil)
+}
+
+// NewClientWithTransport creates a new HTTP client with a custom transport.
+// If transport is nil, the default transport is used.
+// If rateLimiter is nil, a new default rate limiter is created.
+func NewClientWithTransport(transport http.RoundTripper) *Client {
+	return NewClientWithLimiterAndTransport(nil, transport)
+}
+
+// NewClientWithLimiterAndTransport creates a new HTTP client with a specific
+// rate limiter and an optional custom transport. If transport is nil, the
+// default transport is used.
+func NewClientWithLimiterAndTransport(rl *ratelimit.RateLimiter, transport http.RoundTripper) *Client {
+	if rl == nil {
+		rl = ratelimit.NewRateLimiter()
+	}
+	if transport == nil {
+		transport = &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+		}
+	}
 	return &Client{
 		http: &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-			},
+			Timeout:   30 * time.Second,
+			Transport: transport,
 		},
 		rateLimiter: rl,
 		config:      ratelimit.DefaultRetryConfig(),
@@ -85,18 +106,7 @@ func (c *Client) DoWithRetry(req *http.Request) (*http.Response, error) {
 // It reuses the provided rate limiter (which should already be configured for the provider).
 func NewClientForProvider(rl *ratelimit.RateLimiter, rtype remoteid.RemoteIdType) *Client {
 	_ = rtype // provider type is used for rate limiter config (applied via rl)
-	return &Client{
-		http: &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-			},
-		},
-		rateLimiter: rl,
-		config:      ratelimit.DefaultRetryConfig(),
-	}
+	return NewClientWithLimiterAndTransport(rl, nil)
 }
 
 // ParseRateHeaders extracts rate-limit information from response headers.
@@ -175,9 +185,11 @@ func extractHost(url string) string {
 	} else if idx := len("http://"); len(url) > idx && url[:idx] == "http://" {
 		host = url[idx:]
 	}
-	// Strip path
-	if idx := len(host) - len(url); idx > 0 {
-		host = url[:idx]
+	// Strip path: find first '/' after host
+	if idx := len(host); idx > 0 {
+		if slash := strings.Index(host, "/"); slash >= 0 {
+			host = host[:slash]
+		}
 	}
 	return host
 }

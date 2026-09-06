@@ -1,154 +1,109 @@
-# HTTP / Infrastructure Tasks (T7–T8)
+# HTTP / Infrastructure (T7–T8b)
 
-**What this covers:** Rate limiter, retry/backoff, HTTP client, go-git helpers, GitHub API.
-**Why third:** Shared infrastructure that the domain types and commands depend on.
+**Why:** Shared infra for rate limiting, retry, HTTP, git ops, and provider implementations.
 
 ---
 
-### T7 — Rate limiter, retry/backoff, HTTP client wrapper
+### T7 — Rate limiter, retry/backoff, HTTP client
 
-**Precondition:** None (standalone infra)
-
-**Scope note:** Rate limiter + retry/backoff apply **only** to direct-HTTP providers (PyPI, npm, GitLab, Codeberg, SourceHut). GitHub goes through the `gh` CLI (T8), which handles its own rate limiting — it is out of scope here.
+**Precondition:** None
 
 **Tests:**
-- `TestRateLimiter_PerHost` — same host, requests serialized when approaching limit
-- `TestRateLimiter_GlobalSemaphore` — max 8 concurrent across all hosts
-- `TestRateLimiter_ResetOnWindow` — counter resets after time window
-- `TestRetry_ExponentialBackoff` — 429 triggers 1s, 2s, 4s, 8s, 16s delays, max 5 attempts
+- `TestRateLimiter_PerHost` — serialized requests approaching limit
+- `TestRateLimiter_GlobalSemaphore` — max 8 concurrent across hosts
+- `TestRateLimiter_ResetOnWindow` — counter resets after window
+- `TestRetry_ExponentialBackoff` — 429→1s,2s,4s,8s,16s, 5 attempts max
 - `TestRetry_5xx` — same backoff on server errors
 - `TestRetry_Success` — no retries on 200
 - `TestRetry_HaltsOn4xx` — 400/401/403 not retried
-- `TestHTTPClient_ParseRateHeaders` — extracts `X-RateLimit-Remaining`, `X-RateLimit-Reset` from response
-
-**Note:** `TestHTTPClient_GraphQLHeaders` has been removed. There are no raw GitHub GraphQL calls via `net/http` anymore — all GitHub interaction goes through the `gh` CLI (T8).
+- `TestHTTPClient_ParseRateHeaders` — extracts `X-RateLimit-*` from response
 
 **Implementation:**
-1. `internal/ratelimit/ratelimiter.go`:
-   - `PerHostLimiter` — token bucket + sliding window per host
-   - `GlobalSemaphore` — `sync.WaitGroup`-based concurrency cap (default 8)
-   - Configurable via `Config.Jobs`
-2. `internal/ratelimit/retry.go` — `DoWithRetry(ctx, req, maxRetries)` with exponential backoff
-3. `internal/httpclient/client.go` — shared HTTP client with:
-   - Timeout (30s per request)
-   - User-Agent: `larry/<version>`
-   - Automatic retry wrapper integration
-   - Rate-limit header extraction helpers
-4. Per-provider rate limit configs — **already implemented in D1** (02-PLAN): `ProviderDelays()`, `PerProviderDelay()`, `ConfigForProvider()` in `ratelimiter.go`. T7 just uses these defaults when creating rate limiters.
+1. `internal/ratelimit/ratelimiter.go` — `PerHostLimiter` (token bucket + sliding window) + `GlobalSemaphore` (`sync.WaitGroup`, default 8) + `Config.Jobs`
+2. `internal/ratelimit/retry.go` — `DoWithRetry(ctx, req, maxRetries)` exponential backoff
+3. `internal/httpclient/client.go` — 30s timeout, User-Agent `larry/<version>`, rate-limit helpers
+4. Per-provider configs already exist (D1): `ProviderDelays()`, `PerProviderDelay()`, `ConfigForProvider()`
 
-**Acceptance:** Under load, concurrent requests are throttled. 429 responses trigger backoff and retry. 500s trigger retry. 4xx fails immediately.
+**Acceptance:** 429→backoff+retry, 500→retry, 4xx→fail immediately.
 
 ---
 
-### T8 — go-git helper + `gh` CLI wrapper for GitHub
+### T8 — go-git helper + `gh` CLI wrapper (replaces native HTTP client)
 
-**Precondition:** T3 complete
+**Precondition:** T3 (logger)
 
-**Design note:** Drop the native `internal/github/github.go` HTTP client entirely — no `httpclient`/`net/http` calls to the GitHub REST API. Replace it with a thin wrapper around the `gh` CLI (subprocess via `os/exec`) for: `LatestRelease`, checking/creating a release, uploading assets, downloading tarballs. Keep `go-git` for what it's actually good for: reading the local `origin` remote URL, listing tags, resolving tag→commit.
-
-**Auth note:** `gh` reads `GITHUB_TOKEN` from the environment directly — no need for `gh auth login`. This is explicit: "native auth" and "use the `gh` CLI" are not in tension. The token is passed through the environment to the subprocess.
-
-**Tests (go-git — native):**
-- `TestGoGit_RemoteURL` — opens local repo, reads `origin` remote URL
-- `TestGoGit_ParseRemoteURL` — `git@github.com:owner/repo.git` → `{Owner, Repo}`
-- `TestGoGit_ParseRemoteURL_https` — `https://github.com/owner/repo.git` → `{Owner, Repo}`
-- `TestGoGit_ParseRemoteURL_Failure` — non-GitHub URL returns error
-- `TestGoGit_ListTags` — enumerates all tags sorted by commit date
+**Tests (go-git):**
+- `TestGoGit_RemoteURL` / `_ParseRemoteURL` / `_ParseRemoteURL_https` / `_ParseRemoteURL_Failure` — origin URL → `{owner, repo}`, rejects non-GitHub
+- `TestGoGit_ListTags` — tags sorted by commit date
 - `TestGoGit_ResolveTagCommit` — `v1.2.3` → commit hash
 
-**Tests (gh CLI — subprocess stub mocking):**
-- `TestGitHub_LatestRelease` — `gh release view --json tagName,url` → tag + URL (stub `os/exec`)
-- `TestGitHub_UploadAsset` — `gh release upload` handles existing asset (skip/clobber) (stub `os/exec`)
-- `TestGitHub_AssetCollision_ChecksumMatch` — `gh release view --json assets` returns existing with same SHA-256 → skip
-- `TestGitHub_AssetCollision_ChecksumMismatch` — existing asset with different SHA-256 → upload with `--clobber` (stub `os/exec`)
-- `TestGitHub_AssetCollision_New` — no existing asset → upload (stub `os/exec`)
-- `TestGitHub_DownloadTarball` — `gh release download` source tarball from `v${PV}` tag (stub `os/exec`)
-
-All `os/exec` stub mocking follows the same pattern as `portageq`/`pkgdev`/`podman` — wrap `exec.Command` in an interface so it can be replaced in tests.
+**Tests (gh CLI, `os/exec` stub via `CmdRunner` interface):**
+- `TestGitHub_LatestRelease` / `_ParsesJSON` / `_NoOutput` / `_GHError` / `_MalformedJSON` — `gh release view --json tagName,url`
+- `TestGitHub_EnsureRelease_Exists` / `_Create` — check then create
+- `TestGitHub_UploadAsset` / `_AssetCollision_ChecksumMatch` / `_Mismatch` / `_New` — `gh release upload` with SHA-256 collision logic
+- `TestGitHub_DownloadTarball` — `gh release download` source tarball
+- `TestGitHub_ListReleaseAssets` / `_Empty` / `_GHError` / `_MalformedJSON` — list assets
 
 **Implementation:**
-1. `internal/git/git.go`:
-   ```go
-   type GitRepo struct { /* internal */ }
-   func OpenRepo(path string) (*GitRepo, error)
-   ```
-   Using `github.com/go-git/go-git/v5`:
-   - `GetRemoteURL(repo *GitRepo, name string) (string, error)` — reads remote from repo config
-   - `ListTags(repo *GitRepo) ([]string, error)` — enumerates refs/tags, sorted
-   - `ResolveTag(repo *GitRepo, tag string) (hash plumbing.Hash, err error)` — tag → commit
-   - `ParseRemoteURL(url string) (owner, repo string, err error)` — regex on known formats
-2. `internal/github/github.go` — **gh CLI wrapper** (no raw HTTP):
-   - `LatestRelease(owner, repo string) (tag, URL string, err error)` → `gh release view --json tagName,url`
-   - `EnsureRelease(owner, repo, tag string) error` → `gh release view` checks existence, `gh release create` if missing
-   - `UploadAsset(owner, repo, tag, filePath, name string) (err error)` → `gh release upload` with `--clobber` logic
-   - `DownloadSourceTarball(owner, repo, tag string, dest string) (path, err error)` → `gh release download`
-   - `ListReleaseAssets(owner, repo, tag string) ([]Asset, error)` → `gh release view --json assets`, parse JSON
-3. All `gh` commands invoked via `exec.Command` with `GITHUB_TOKEN` in the env. No `httpclient` involvement.
-4. Auth: `gh` reads `GITHUB_TOKEN` from the env directly — pass it through when spawning subprocesses.
+1. `internal/git/git.go` — `Open()`, `RemoteURL()`, `Tags()`, `ListTagsSorted()`, `ResolveTag()`, `CommitByTag()`, `ParseRemoteURL()`, `HasRemote()`, `LatestCommit()`
+2. `internal/github/github.go` — `CmdRunner` interface (abstract `exec.Command`), `StubRunner` for external tests. Methods: `LatestRelease()`, `EnsureRelease()`, `UploadAsset()`, `DownloadSourceTarball()`, `ListReleaseAssets()`
+3. `internal/github/testutil.go` — `StubRunner` for external test packages
+4. All `gh` commands via `exec.Command` with `GITHUB_TOKEN` in env.
 
-**Acceptance:** Remote URLs parsed from local repo via go-git. Tags enumerated natively. GitHub releases checked/created/uploaded via `gh` CLI. All GitHub tests use `os/exec` stub mocking.
+**Acceptance:** go-git reads remotes/tags natively. Releases via `gh` CLI.
 
 ---
 
-### T8b — Provider implementations
+### T8b — Provider implementations (6 providers)
 
-**Precondition:** T6, T7, T8 complete (registry, rate limiter, go-git + gh wrapper)
+**Precondition:** T6, T7, T8
 
-**What this covers:** The six concrete provider implementations: `providers/{github,gitlab,pypi,npm,codeberg,sourcehut}.go`. Currently T10 consumes `FetchLatestVersion` as if it already works, but nothing builds or tests the providers themselves.
+**Interface:** Each implements `UpstreamProvider` (`FetchLatestVersion(ctx, RemoteId) (string, error)`).
 
-**Tests (per provider, via `httptest.Server` or `os/exec` stub as appropriate):**
-
-- **GitHubProvider** — uses `gh` CLI wrapper (T8), not HTTP client
-  - `TestGitHubProvider_FetchLatest` — `gh release view` → latest version, prerelease filtered
-  - `TestGitHubProvider_FetchLatest_Prerelease` — `--prereleases` flag includes prereleases
-  - `TestGitHubProvider_FetchLatest_NoReleases` — no releases → error with clear message
-
-- **PyPIProvider** — `httptest.Server` mocking
+**Tests:**
+- **GitHubProvider** (gh CLI stub):
+  - `TestGitHubProvider_FetchLatest` — `gh release view` → latest, prerelease filtered
+  - `TestGitHubProvider_FetchLatest_Prerelease` — `--prereleases` flag
+  - `TestGitHubProvider_FetchLatest_NoReleases` → error
+- **PyPIProvider** (httptest):
+  - `TestPyPIProvider_NotFound` — empty name → error
   - `TestPyPIProvider_FetchLatest` — `/pypi/<name>/json` → latest stable
-  - `TestPyPIProvider_FetchLatest_Prerelease` — includes prereleases when requested
-  - `TestPyPIProvider_NotFound` — 404 → error
-  - `TestPyPIProvider_RateLimited` — 429 → retry via T7 rate limiter
-
-- **NpmProvider** — `httptest.Server` mocking
-  - `TestNpmProvider_FetchLatest` — registry endpoint → latest version
+  - `TestPyPIProvider_FetchLatest_Prerelease` — includes prereleases
+  - `TestPyPIProvider_RateLimited` — 429→retry
+- **NpmProvider** (httptest):
+  - `TestNpmProvider_FetchLatest` — `/registry/<name>/latest` → version
   - `TestNpmProvider_FetchLatest_Prerelease` — includes prereleases
-  - `TestNpmProvider_NotFound` — 404 → error
-
-- **GitLabProvider** — `httptest.Server` mocking
-  - `TestGitLabProvider_FetchLatest` — projects/:id/releases → latest
-  - `TestGitLabProvider_RateLimited` — 429 → retry
-
-- **CodebergProvider** — `httptest.Server` mocking (Codeberg is a Gitea fork)
-  - `TestCodebergProvider_FetchLatest` — releases endpoint → latest
-
-- **SourceHutProvider** — research task
-  - `TestSourceHutProvider_Research` — document which API approach works (git-refs-via-HTTP, GraphQL, or tag enumeration)
-  - `TestSourceHutProvider_FetchLatest` — works once API strategy is determined
-  - ⚠️ **Known unknown:** SourceHut does not have a conventional "latest release" REST endpoint. Options:
-    - `git-refs-via-protocol`: `https://git.sr.ht/~user/project/refs` → parse HTML/JSON for latest tag
-    - GraphQL API at `https://api.sr.ht`: query `refs` with `type: tag`, sort by date
-    - Fallback: use go-git to clone/fetch tags locally (slow, avoid in tests)
-  - Test strategy: once API is determined, use `httptest.Server` to mock the response
-
-**Additional test — URL-pattern resolution helper (unit-level only):**
-- `TestResolveProviderFromURL_GitHub` — `github.com/owner/repo` → `RemoteIdTypeGitHub`
-- `TestResolveProviderFromURL_PyPI` — `pypi.org/project/foo` or `registry.npmjs.org` → appropriate type
-- `TestResolveProviderFromURL_Unknown` — unrecognized URL → nil
-
-**Ownership split for SRC_URI fallback:**
-- **T8b owns** only the unit-level helper: `ResolveProviderFromURL(url string) (RemoteIdType, error)` — a pure function that matches URL patterns to provider types. This is tested in T8b as shown above.
-- **T10 owns** the integration: when `RemoteId` is absent from metadata.xml, the upstream command calls `ResolveProviderFromURL` and proceeds. `TestUpstream_NoRemoteId` in T10 exercises the full end-to-end path (metadata parsing → fallback call → provider resolution → version fetch).
-- No duplicate implementation: T8b's `ResolveProviderFromURL` is a single pure function; T10 merely calls it in the right place in its dispatch logic.
+- **GitLabProvider** (httptest):
+  - `TestGitLabProvider_FetchLatest` — empty host → error
+  - `TestGitLabProvider_FetchLatest` — `projects/:id/releases` → latest
+  - `TestGitLabProvider_RateLimited` — 429→retry
+- **CodebergProvider** (httptest, Gitea API):
+  - `TestCodebergProvider_FetchLatest` — empty owner → error
+  - `TestCodebergProvider_FetchLatest` — releases → latest, prerelease filtered
+- **SourceHutProvider** (research: GraphQL at `https://api.sr.ht/gitea` / HTML fallback):
+  - `TestSourceHutProvider_FetchLatest` — empty host/path → error
+  - `TestSourceHutProvider_FetchLatest` — API query → latest
+- **URL resolver** (unit):
+  - `TestResolveProviderFromURL` — github.com → GitHub, pypi.org → PyPI, registry.npmjs.org → NPM, unknown → nil (20+ cases)
 
 **Implementation:**
-1. `internal/providers/github.go` — wraps `internal/github` (gh CLI), applies rate limiter
-2. `internal/providers/pypi.go` — `httptest.Server`-mockable, rate-limited HTTP
-3. `internal/providers/npm.go` — `httptest.Server`-mockable, rate-limited HTTP
-4. `internal/providers/gitlab.go` — `httptest.Server`-mockable, rate-limited HTTP
-5. `internal/providers/codeberg.go` — `httptest.Server`-mockable, rate-limited HTTP
-6. `internal/providers/sourcehut.go` — implement based on research outcome
-7. `internal/providers/urlresolve.go` — `ResolveProviderFromURL(url string) (RemoteIdType, error)` — pure URL-pattern matching function (tested in T8b above)
-8. Each provider implements `UpstreamProvider` interface from T6
+1. `internal/providers/github.go` — wraps `internal/github`, rate-limited, `NewGitHubProviderWithClient()` for testing
+2. `internal/providers/pypi.go` — `httpclient.GetWithRetry()` → `/pypi/<name>/json`, `NewPyPIProviderWithClient()`
+3. `internal/providers/npm.go` — `httpclient.GetWithRetry()` → `/registry/<name>/latest`, `NewNpmProviderWithClient()`
+4. `internal/providers/gitlab.go` — `httpclient.GetWithRetry()` → `projects/:id/releases` (fallback: `repository/tags`), `NewGitLabProviderWithClient()`
+5. `internal/providers/codeberg.go` — `httpclient.GetWithRetry()` → `/api/v1/repos/:owner/:repo/releases` (Gitea), `NewCodebergProviderWithClient()`
+6. `internal/providers/sourcehut.go` — GraphQL `api.sr.ht/gitea` / HTML fallback, `extractTagsFromHTML()`, `NewSourceHutProviderWithClient()`
+7. `internal/providers/urlresolve.go` — `ResolveProviderFromURL(url) (RemoteIdType, error)`
+8. `internal/providers/provider_test.go` — all provider tests
 
-**Acceptance:** All six providers resolve to correct latest versions. Prerelease filtering works. Rate limiter applied for HTTP providers. SourceHut has a documented and tested API strategy. `ResolveProviderFromURL` returns correct type for known URL patterns (integration tested in T10).
+**Acceptance:** All 6 providers resolve latest versions. Prerelease filtering. Rate limiting for HTTP providers.
 
+---
+
+## T10 Integration
+
+HTTP provider tests via `httptest.Server` use the factory added to `httpclient/client.go`:
+```go
+func NewClientWithTransport(rl *ratelimit.RateLimiter, transport http.RoundTripper) *Client
+```
+This enables T10's `TestUpstream_Check*Outdated` tests to hit mock servers. No other deferred items carry forward.
