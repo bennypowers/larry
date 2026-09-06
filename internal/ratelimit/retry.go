@@ -2,6 +2,7 @@ package ratelimit
 
 import (
 	"fmt"
+	"net/http"
 	"time"
 )
 
@@ -31,6 +32,8 @@ func (c *RetryConfig) ExponentialBackoff(attempt int) time.Duration {
 }
 
 // Retry executes a function with exponential backoff.
+// Retries ALL errors (generic). For HTTP-aware retry with 4xx non-retry,
+// use RetryHTTP.
 func Retry(config *RetryConfig, fn func() error) error {
 	if config == nil {
 		config = DefaultRetryConfig()
@@ -44,6 +47,49 @@ func Retry(config *RetryConfig, fn func() error) error {
 				time.Sleep(config.ExponentialBackoff(i))
 			}
 			continue
+		}
+		return nil
+	}
+
+	return fmt.Errorf("after %d retries, last error: %w", config.MaxRetries, lastErr)
+}
+
+// RetryHTTP executes an HTTP request with exponential backoff.
+// Unlike generic Retry, this does NOT retry 4xx client errors
+// (they indicate a problem with the request, not a transient server issue).
+// Retries 429 (rate limited) and 5xx (server error).
+func RetryHTTP(config *RetryConfig, reqFn func() (*http.Response, error)) error {
+	if config == nil {
+		config = DefaultRetryConfig()
+	}
+
+	var lastErr error
+	for i := 0; i <= config.MaxRetries; i++ {
+		resp, err := reqFn()
+		if err != nil {
+			lastErr = err
+			if i < config.MaxRetries {
+				time.Sleep(config.ExponentialBackoff(i))
+			}
+			continue
+		}
+
+		// Check response status
+		if resp.StatusCode >= 500 || resp.StatusCode == 429 {
+			// Server error or rate limited — retry
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			if i < config.MaxRetries {
+				time.Sleep(config.ExponentialBackoff(i))
+			}
+			if resp.Body != nil {
+				resp.Body.Close()
+			}
+			continue
+		}
+
+		// 4xx or 2xx — don't retry
+		if resp.Body != nil {
+			resp.Body.Close()
 		}
 		return nil
 	}

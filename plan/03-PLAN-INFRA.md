@@ -34,7 +34,7 @@
    - User-Agent: `larry/<version>`
    - Automatic retry wrapper integration
    - Rate-limit header extraction helpers
-4. Per-provider rate limit configs (GitLab, PyPI, npm, Codeberg, SourceHut defaults)
+4. Per-provider rate limit configs — **already implemented in D1** (02-PLAN): `ProviderDelays()`, `PerProviderDelay()`, `ConfigForProvider()` in `ratelimiter.go`. T7 just uses these defaults when creating rate limiters.
 
 **Acceptance:** Under load, concurrent requests are throttled. 429 responses trigger backoff and retry. 500s trigger retry. 4xx fails immediately.
 

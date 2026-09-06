@@ -15,7 +15,7 @@ func DetectType(srcURI string) remoteid.RemoteIdType {
 	case strings.Contains(srcURI, "pypi.io") || strings.Contains(srcURI, "pypi.org"):
 		return remoteid.TypePyPI
 	case strings.Contains(srcURI, "registry.npmjs.org"):
-		return remoteid.TypeNpm
+		return remoteid.TypeNPM
 	case strings.Contains(srcURI, "codeberg.org"):
 		return remoteid.TypeCodeberg
 	case strings.Contains(srcURI, "git.sr.ht"):

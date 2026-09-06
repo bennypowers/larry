@@ -2,6 +2,8 @@ package provider
 
 import (
 	"bennypowers.dev/larry/internal/remoteid"
+	"bennypowers.dev/larry/internal/ratelimit"
+	"bennypowers.dev/larry/internal/version"
 )
 
 // ProviderMetadata holds metadata about a provider.
@@ -17,8 +19,11 @@ type UpstreamProvider interface {
 	Type() remoteid.RemoteIdType
 	// Metadata returns provider metadata
 	Metadata() ProviderMetadata
-	// FindLatest finds the latest version from the upstream
-	FindLatest(remoteid.RemoteId) (string, error)
-	// CheckVersion checks if a specific version exists on the upstream
-	CheckVersion(remoteid.RemoteId, string) (bool, error)
+	// FetchLatestVersion fetches the latest version for the given remote id
+	FetchLatestVersion(rid remoteid.RemoteId, allowPrereleases bool) (*version.Version, error)
+	// Name returns a human-readable name
+	Name() string
 }
+
+// Factory creates a new provider instance with the given rate limiter.
+type Factory func(rl *ratelimit.RateLimiter) UpstreamProvider

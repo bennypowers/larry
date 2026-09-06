@@ -11,7 +11,7 @@ func Prepare(ei *ebuild.EbuildInfo, p provider.UpstreamProvider) error {
 	switch ebuild.DetectType(ei.SRC_URI) {
 	case remoteid.TypeGitHub, remoteid.TypeGitLab, remoteid.TypeCodeberg:
 		return generic(ei)
-	case remoteid.TypeNpm:
+	case remoteid.TypeNPM:
 		return npmPipeline(ei)
 	default:
 		return generic(ei)
