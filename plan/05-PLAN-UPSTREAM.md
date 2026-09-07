@@ -4,6 +4,8 @@
 **Precondition:** T4, T5, T6, T7, T8, T8b, T9
 **Note:** T10 uses `httpclient.NewClientWithTransport(rl, transport)` from T8b to inject `httptest.Server` for PyPI/NPM/GitLab/Codeberg provider tests.
 
+### Status: 🔴 **STUB** — 4 stub files, 0 tests, 0 CLI subcommand
+
 ---
 
 ### T10 — `larry upstream` — providers + CLI + cache + output

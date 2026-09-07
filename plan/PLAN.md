@@ -47,25 +47,25 @@
 | # | Task | File | Status |
 |---|------|------|--------|
 | 1 | Foundation (scaffold, config, logging, CLI) | `01-PLAN-FOUNDATION.md` | ✅ |
-| 2 | Core domain (version, remoteid, provider registry) | `02-PLAN-CORE-DOMAIN.md` | ⬜ |
-| 3 | Infra: rate limiter, retry, HTTP client | `03-PLAN-INFRA.md#T7` | ⬜ |
-| 3b | go-git helper + gh CLI wrapper | `03-PLAN-INFRA.md#T8` | ⬜ |
-| 3c | Provider implementations (6 providers) | `03-PLAN-INFRA.md#T8b` | ⬜ |
-| 4 | Ebuild helper (portageq, info, SRC_URI, type detection) | `04-PLAN-EBUILD.md` | ⬜ |
-| 5 | Upstream command (providers + CLI + cache + deps) | `05-PLAN-UPSTREAM.md` | ⬜ |
-| 6a | Bump: file creation (no prepare dep) | `06-PLAN-BUMP.md#T12a` | ⬜ |
-| 6b | Bump: invoke prepare on new ebuild | `06-PLAN-BUMP.md#T12b` | ⬜ |
-| 7 | Prepare: generic + type detection | `07-PLAN-PREPARE.md#T13` | ⬜ |
-| 7b | Prepare: npm pipeline | `07-PLAN-PREPARE.md#T14` | ⬜ |
-| 7c | Prepare: cargo pipeline | `07-PLAN-PREPARE.md#T15` | ⬜ |
-| 7d | Prepare: go pipeline | `07-PLAN-PREPARE.md#T16` | ⬜ |
-| 7e | Prepare: rpi-kernel pipeline | `07-PLAN-PREPARE.md#T17` | ⬜ |
-| 7f | Prepare: dry-run/staging mode | `07-PLAN-PREPARE.md#T18` | ⬜ |
-| 8 | Import command | `08-PLAN-IMPORT.md` | ⬜ |
-| 9 | Test: local mode | `09-PLAN-TEST.md#T20` | ⬜ |
-| 9b | Test: podman container mode + Containerfile | `09-PLAN-TEST.md#T21` | ⬜ |
-| 10 | TUI (bubbletea progress + results) | `10-PLAN-TUI.md` | ⬜ |
-| 11 | Polish (integration tests, docs, packaging) | `11-PLAN-POLISH.md` | ⬜ |
+| 2 | Core domain (version, remoteid, provider registry) | `02-PLAN-CORE-DOMAIN.md` | ✅ |
+| 3 | Infra: rate limiter, retry, HTTP client | `03-PLAN-INFRA.md#T7` | ✅ |
+| 3b | go-git helper + gh CLI wrapper | `03-PLAN-INFRA.md#T8` | ✅ |
+| 3c | Provider implementations (6 providers) | `03-PLAN-INFRA.md#T8b` | ✅ |
+| 4 | Ebuild helper (portageq, info, SRC_URI, type detection) | `04-PLAN-EBUILD.md` | ✅ |
+| 5 | Upstream command (providers + CLI + cache + deps) | `05-PLAN-UPSTREAM.md` | 🔴 |
+| 6a | Bump: file creation (no prepare dep) | `06-PLAN-BUMP.md#T12a` | 🔴 |
+| 6b | Bump: invoke prepare on new ebuild | `06-PLAN-BUMP.md#T12b` | 🔴 |
+| 7 | Prepare: generic + type detection | `07-PLAN-PREPARE.md#T13` | 🔴 |
+| 7b | Prepare: npm pipeline | `07-PLAN-PREPARE.md#T14` | 🔴 |
+| 7c | Prepare: cargo pipeline | `07-PLAN-PREPARE.md#T15` | 🔴 |
+| 7d | Prepare: go pipeline | `07-PLAN-PREPARE.md#T16` | 🔴 |
+| 7e | Prepare: rpi-kernel pipeline | `07-PLAN-PREPARE.md#T17` | 🔴 |
+| 7f | Prepare: dry-run/staging mode | `07-PLAN-PREPARE.md#T18` | 🔴 |
+| 8 | Import command | `08-PLAN-IMPORT.md` | 🔴 |
+| 9 | Test: local mode | `09-PLAN-TEST.md#T20` | 🔴 |
+| 9b | Test: podman container mode + Containerfile | `09-PLAN-TEST.md#T21` | 🔴 |
+| 10 | TUI (bubbletea progress + results) | `10-PLAN-TUI.md` | 🔴 |
+| 11 | Polish (integration tests, docs, packaging) | `11-PLAN-POLISH.md` | 🔴 |
 
 ## Key Dependencies
 

@@ -5,6 +5,8 @@
 **Rollback (all T13–T18):** Ebuild backed up `.bak` before mutations, restored on failure.
 **Dry-run (all T13–T18):** `$XDG_CACHE_HOME/larry/dry-run/`. No external mutations.
 
+### Status: 🔴 **STUB** — 9 files in `internal/prepare/`, 87 lines impl, 0 tests, 0 CLI subcommand
+
 ---
 
 ### T13 — `larry prepare` — type detection + generic + variable resolution

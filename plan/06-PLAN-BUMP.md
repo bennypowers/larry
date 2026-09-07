@@ -2,6 +2,8 @@
 
 **Why:** Depends on provider (T6, auto-version) and prepare (T13). Split into file creation + prepare invocation.
 
+### Status: 🔴 **STUB** — 1 file (`internal/bump/bump.go`), 10 lines, 0 tests, 0 CLI subcommand
+
 ---
 
 ### T12a — `larry bump` — create bumped ebuild (no prepare dependency)

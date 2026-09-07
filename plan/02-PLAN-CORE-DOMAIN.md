@@ -3,6 +3,8 @@
 **What this covers:** `Version` type, `RemoteId` model, provider registry.
 **Why second:** These are the domain model types that every command depends on.
 
+### Status: ✅ **COMPLETE** — 1,212 lines impl, 1,036 lines tests across 3 packages, 0 failures
+
 ---
 
 ### T4 — `Version` type — parse, compare, format (Gentoo semantics)

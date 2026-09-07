@@ -3,6 +3,8 @@
 **Why:** Self-contained; depends on ebuild helpers + output/color.
 **TUI stream isolation:** Subprocess stdout/stderr piped via `StdoutPipe()`/`StderrPipe()` when `useTUI` is true.
 
+### Status: 🔴 **STUB** — 3 files in `internal/test/`, 28 lines impl, 0 tests, 0 CLI subcommand
+
 ---
 
 ### T20 — `larry test` — local mode (phase runner)

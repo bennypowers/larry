@@ -3,6 +3,8 @@
 **Why:** Relatively standalone; depends on ebuild helpers + prepare.
 **Precondition:** T9 (T13 implicit — import calls prepare)
 
+### Status: 🔴 **EMPTY** — No `internal/import/` directory, 0 files
+
 **Tests:**
 - `TestImport_FindSource` — finds latest ebuild in source overlay
 - `TestImport_CopyEbuild` — copies to local overlay
