@@ -1,61 +1,49 @@
-# larry-test container for running Gentoo ebuild tests
-# Usage: podman build -f Containerfile.larry-test -t larry-test .
+# larry test container image
+# Minimal Gentoo-like environment for ebuild testing
+#
+# Build: podman build -t larry-test -f Containerfile.larry-test .
+# Usage: podman run --rm -v /path/to/overlay:/overlay larry-test emerge <pkg>
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+FROM docker.io/library/ubuntu:24.04
 
-ENV LANG=en_US.UTF-8
-ENV LC_ALL=en_US.UTF-8
+# Avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Install base system packages via microdnf
-RUN microdnf update -y && \
-    microdnf install -y --setopt=install_weak_deps=0 \
-        bash \
-        coreutils \
-        curl \
-        findutils \
-        gawk \
-        gcc \
-        git \
-        gzip \
-        make \
-        patch \
-        sed \
-        tar \
-        util-linux \
-        which \
-        xz \
-        && microdnf clean all
+# Install base dependencies
+RUN apt-get update && apt-get install -y \
+    bash \
+    coreutils \
+    diffutils \
+    findutils \
+    grep \
+    gzip \
+    make \
+    sed \
+    tar \
+    xz-utils \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Python for Portage
-RUN microdnf install -y python3 && microdnf clean all
+# Install Gentoo Portage dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-setuptools \
+    python3-wheel \
+    git \
+    rsync \
+    && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN useradd -m -s /bin/bash larry && \
-    mkdir -p /home/larry/.cache && \
-    chown -R larry:larry /home/larry
+# Create larry user for non-root operation
+RUN useradd -m -s /bin/bash larry
 
-# Set up Gentoo overlay directories
-RUN mkdir -p /var/db/repos/gentoo && \
-    mkdir -p /etc/portage && \
-    mkdir -p /var/cache/distfiles && \
-    mkdir -p /var/cache/larry
+# Set Gentoo EPREFIX
+ENV EPREFIX=/larry
+
+# Create necessary directories
+RUN mkdir -p /overlay /distfiles /binpkgs /var/cache/distfiles /var/cache/binpkgs /larry
 
 # Set environment
-ENV EPREFIX=/
-ENV PORTAGE_CONFIGROOT=/
-ENV PORTDIR=/var/db/repos/gentoo
-ENV PORTDIR_OVERLAY=/var/lib/overlay
-ENV DISTDIR=/var/cache/distfiles
-ENV PKGDIR=/var/cache/packages
+ENV DISTDIR=/distfiles
+ENV PKGDIR=/binpkgs
 
-# Copy Portage installation scripts (will be provided at runtime via volume mount)
-RUN mkdir -p /opt/portage/bin && \
-    mkdir -p /opt/portage/lib
-
-# Expose for debugging
-EXPOSE 8080
-
-USER larry
-WORKDIR /home/larry
-
-CMD ["/bin/bash"]
+# Default command
+CMD ["emerge", "--help"]

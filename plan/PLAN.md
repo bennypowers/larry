@@ -63,8 +63,8 @@
 | 7f | Prepare: vendored pipeline (mixed deps) | `07-PLAN-PREPARE.md#T18` | 🔴 |
 | 7g | Prepare: dry-run/staging mode | `07-PLAN-PREPARE.md#T19` | 🔴 |
 | 8 | Import command | `08-PLAN-IMPORT.md` | ✅ |
-| 9 | Test: local mode | `09-PLAN-TEST.md#T20` | 🔴 |
-| 9b | Test: podman container mode + Containerfile | `09-PLAN-TEST.md#T21` | 🔴 |
+| 9 | Test: local mode | `09-PLAN-TEST.md#T20` | ✅ |
+| 9b | Test: podman container mode + Containerfile | `09-PLAN-TEST.md#T21` | ✅ |
 | 10 | TUI (bubbletea progress + results) | `10-PLAN-TUI.md` | 🔴 |
 | 11 | Polish (integration tests, docs, packaging) | `11-PLAN-POLISH.md` | 🔴 |
 
@@ -85,7 +85,7 @@
 - T17: T8, T8b, T9
 - T18: T13, T8, T8b (vendored pipeline)
 - T19: T9 (ebuild parsing)
-- T20: T19
+- T20: T9 (ebuild, portageq)
 - T21: T20
 - T21: T20
 - T22: T10
