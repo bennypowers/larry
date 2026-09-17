@@ -29,7 +29,7 @@
 │   ├── prepare/            # Generic, npm, cargo, go, rpi-kernel pipelines
 │   ├── bump/               # Version/revision bump
 │   ├── upstream/           # Version check + cache + dep scanning + output
-│   ├── import/             # Import pipeline
+│   ├── importcmd/          # Import pipeline
 │   ├── test/               # Local + podman test runners
 │   ├── output/             # Logger, color, progress
 │   └── cli/                # TUI models (bubbletea)
@@ -62,7 +62,7 @@
 | 7e | Prepare: rpi-kernel pipeline | `07-PLAN-PREPARE.md#T17` | 🔴 |
 | 7f | Prepare: vendored pipeline (mixed deps) | `07-PLAN-PREPARE.md#T18` | 🔴 |
 | 7g | Prepare: dry-run/staging mode | `07-PLAN-PREPARE.md#T19` | 🔴 |
-| 8 | Import command | `08-PLAN-IMPORT.md` | 🔴 |
+| 8 | Import command | `08-PLAN-IMPORT.md` | ✅ |
 | 9 | Test: local mode | `09-PLAN-TEST.md#T20` | 🔴 |
 | 9b | Test: podman container mode + Containerfile | `09-PLAN-TEST.md#T21` | 🔴 |
 | 10 | TUI (bubbletea progress + results) | `10-PLAN-TUI.md` | 🔴 |
@@ -84,9 +84,9 @@
 - T16: T8, T8b, T9
 - T17: T8, T8b, T9
 - T18: T13, T8, T8b (vendored pipeline)
-- T19: T13–T18
-- T19: T9
-- T20: T3, T9
+- T19: T9 (ebuild parsing)
+- T20: T19
+- T21: T20
 - T21: T20
 - T22: T10
 - T23: T1–T22
