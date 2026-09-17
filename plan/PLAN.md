@@ -52,7 +52,7 @@
 | 3b | go-git helper + gh CLI wrapper | `03-PLAN-INFRA.md#T8` | ✅ |
 | 3c | Provider implementations (6 providers) | `03-PLAN-INFRA.md#T8b` | ✅ |
 | 4 | Ebuild helper (portageq, info, SRC_URI, type detection) | `04-PLAN-EBUILD.md` | ✅ |
-| 5 | Upstream command (providers + CLI + cache + deps) | `05-PLAN-UPSTREAM.md` | 🔴 |
+| 5 | Upstream command (providers + CLI + cache + deps + scanning) | `05-PLAN-UPSTREAM.md` | ✅ (T10, T11) |
 | 6a | Bump: file creation (no prepare dep) | `06-PLAN-BUMP.md#T12a` | 🔴 |
 | 6b | Bump: invoke prepare on new ebuild | `06-PLAN-BUMP.md#T12b` | 🔴 |
 | 7 | Prepare: generic + type detection | `07-PLAN-PREPARE.md#T13` | 🔴 |
