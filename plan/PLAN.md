@@ -53,14 +53,15 @@
 | 3c | Provider implementations (6 providers) | `03-PLAN-INFRA.md#T8b` | ✅ |
 | 4 | Ebuild helper (portageq, info, SRC_URI, type detection) | `04-PLAN-EBUILD.md` | ✅ |
 | 5 | Upstream command (providers + CLI + cache + deps + scanning) | `05-PLAN-UPSTREAM.md` | ✅ (T10, T11) |
-| 6a | Bump: file creation (no prepare dep) | `06-PLAN-BUMP.md#T12a` | 🔴 |
+| 6a | Bump: file creation (no prepare dep) | `06-PLAN-BUMP.md#T12a` | ✅ |
 | 6b | Bump: invoke prepare on new ebuild | `06-PLAN-BUMP.md#T12b` | 🔴 |
-| 7 | Prepare: generic + type detection | `07-PLAN-PREPARE.md#T13` | 🔴 |
+| 7 | Prepare: generic + npm + cargo + go | `07-PLAN-PREPARE.md#T13-T16` | ✅ |
 | 7b | Prepare: npm pipeline | `07-PLAN-PREPARE.md#T14` | 🔴 |
 | 7c | Prepare: cargo pipeline | `07-PLAN-PREPARE.md#T15` | 🔴 |
 | 7d | Prepare: go pipeline | `07-PLAN-PREPARE.md#T16` | 🔴 |
 | 7e | Prepare: rpi-kernel pipeline | `07-PLAN-PREPARE.md#T17` | 🔴 |
-| 7f | Prepare: dry-run/staging mode | `07-PLAN-PREPARE.md#T18` | 🔴 |
+| 7f | Prepare: vendored pipeline (mixed deps) | `07-PLAN-PREPARE.md#T18` | 🔴 |
+| 7g | Prepare: dry-run/staging mode | `07-PLAN-PREPARE.md#T19` | 🔴 |
 | 8 | Import command | `08-PLAN-IMPORT.md` | 🔴 |
 | 9 | Test: local mode | `09-PLAN-TEST.md#T20` | 🔴 |
 | 9b | Test: podman container mode + Containerfile | `09-PLAN-TEST.md#T21` | 🔴 |
@@ -82,7 +83,8 @@
 - T15: T8, T8b, T9
 - T16: T8, T8b, T9
 - T17: T8, T8b, T9
-- T18: T13–T17
+- T18: T13, T8, T8b (vendored pipeline)
+- T19: T13–T18
 - T19: T9
 - T20: T3, T9
 - T21: T20

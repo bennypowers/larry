@@ -15,6 +15,28 @@ CLI tool for managing a Gentoo overlay repository.
 | `larry import` | Import an ebuild from another overlay |
 | `larry test` | Test-build an ebuild locally or in a podman container |
 
+### Custom prepare scripts
+
+For packages with non-standard prepare logic, drop a `files/prepare.sh` script
+into the package directory. Larry executes it instead of any built-in pipeline.
+
+```bash
+# sys-kernel/raspberrypi-kernel/files/prepare.sh
+#!/bin/sh
+date=$(echo "$PV" | grep -oP '_p\K\d{8}$')
+date=$(echo $date | sed 's/^\(.\{4\}\)\(.\{2\}\)\(.\{2\}\)$/\1-\2-\3/')
+commit=$(curl -s "api.github.com/repos/raspberrypi/firmware/releases" \
+         | jq -r ".[] | select(.created_at | startswith(\"$date\")) | .body" \
+         | grep -oP '(?:commit|hash)\s*[:=]\s*\K[0-9a-f]{8,40}' | head -1)
+sed -i "s/COMMIT=\"\([^\"]*\)\"/COMMIT=\"$commit\"/" "$EBUILD"
+```
+
+**Environment variables:** `EBUILD`, `PN`, `PV`, `P`, `CATEGORY`, `DISTDIR`, `LARRY_PREPARE=1`
+
+**Working directory:** the ebuild's parent directory (`filepath.Dir(ebuildPath)`)
+
+**Dry-run:** detected but script is NOT executed.
+
 ### Dependencies
 
 | Tool                       | Purpose                                |

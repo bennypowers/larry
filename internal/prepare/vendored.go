@@ -1,0 +1,394 @@
+package prepare
+
+import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"bennypowers.dev/larry/internal/ebuild"
+	"bennypowers.dev/larry/internal/github"
+)
+
+// DepType identifies the dependency ecosystem.
+type DepType string
+
+const (
+	DepNPM    DepType = "npm"
+	DepCargo  DepType = "cargo"
+	DepGo     DepType = "go"
+)
+
+// DepSpec describes a single vendored dependency directory.
+type DepSpec struct {
+	Type           DepType // npm | cargo | go
+	SourcePath     string  // relative to S, e.g. "src/web-app"
+	DistName       string  // distfile name, e.g. "pkg-1.0.0-npm-deps.tar.xz"
+	TarballContent string  // "node_modules" or "vendor"
+}
+
+// ---------------------------------------------------------------------------
+// parseDepSpec — infer DepSpec from distfile name
+// ---------------------------------------------------------------------------
+
+// parseDepSpec infers a DepSpec from a distfile name and package version string.
+func parseDepSpec(distName, pVal string) DepSpec {
+	var depType DepType
+	var tarballContent string
+
+	switch {
+	case strings.HasSuffix(distName, "-npm-deps.tar.xz") ||
+		strings.HasSuffix(distName, "-npm-deps.tar.gz") ||
+		strings.HasSuffix(distName, "-npm-deps.tar.zst"):
+		depType = DepNPM
+		tarballContent = "node_modules"
+	case strings.HasSuffix(distName, "-cargo-deps.tar.xz") ||
+		strings.HasSuffix(distName, "-cargo-deps.tar.gz") ||
+		strings.HasSuffix(distName, "-cargo-deps.tar.zst"):
+		depType = DepCargo
+		tarballContent = "vendor"
+	case strings.HasSuffix(distName, "-go-deps.tar.gz"):
+		depType = DepGo
+		tarballContent = "vendor"
+	default:
+		return DepSpec{}
+	}
+
+	return DepSpec{
+		Type:           depType,
+		DistName:       distName,
+		TarballContent: tarballContent,
+	}
+}
+
+// parseDepSpecsFromURI extracts DepSpecs from a SRC_URI containing
+// "releases/download/${PN}/" entries.
+func parseDepSpecsFromURI(srcURI, pVal string) []DepSpec {
+	distNames := extractSRCURIForPN(srcURI, filepath.Base(strings.Split(pVal, "-")[0]))
+	deps := make([]DepSpec, 0, len(distNames))
+	for _, dn := range distNames {
+		ds := parseDepSpec(dn, pVal)
+		if ds.Type != "" {
+			deps = append(deps, ds)
+		}
+	}
+	return deps
+}
+
+// extractSRCURIForPN extracts distfile names from SRC_URI for a specific package.
+func extractSRCURIForPN(srcURI, pkg string) []string {
+	var dists []string
+	pattern := fmt.Sprintf("releases/download/%s/", pkg)
+
+	for _, part := range strings.Fields(srcURI) {
+		if strings.Contains(part, pattern) {
+			// Extract just the filename
+			idx := strings.LastIndex(part, "/")
+			if idx >= 0 {
+				dists = append(dists, part[idx+1:])
+			}
+		}
+	}
+	return dists
+}
+
+// ---------------------------------------------------------------------------
+// downloadFileFromURL — download a file from a URL
+// ---------------------------------------------------------------------------
+
+// downloadFileFromURL downloads a file from url to dest.
+func downloadFileFromURL(url, dest string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("download %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
+	}
+
+	out, err := os.Create(dest)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", dest, err)
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, resp.Body)
+	return err
+}
+
+// ---------------------------------------------------------------------------
+// extractTarball — extract a tar.gz/xz/zst archive
+// ---------------------------------------------------------------------------
+
+// extractTarball extracts a tarball to destDir.
+func extractTarball(tarballPath, destDir string) error {
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return fmt.Errorf("create dest dir: %w", err)
+	}
+
+	// Determine compression from extension
+	var cmd *exec.Cmd
+	switch {
+	case strings.HasSuffix(tarballPath, ".tar.gz") || strings.HasSuffix(tarballPath, ".tgz"):
+		cmd = exec.Command("tar", "xzf", tarballPath)
+	case strings.HasSuffix(tarballPath, ".tar.xz"):
+		cmd = exec.Command("tar", "xJf", tarballPath)
+	case strings.HasSuffix(tarballPath, ".tar.zst"):
+		cmd = exec.Command("tar", "xIf", tarballPath)
+	case strings.HasSuffix(tarballPath, ".tar"):
+		cmd = exec.Command("tar", "xf", tarballPath)
+	default:
+		return fmt.Errorf("unsupported compression for %s", tarballPath)
+	}
+
+	cmd.Dir = destDir
+	return cmd.Run()
+}
+
+// ---------------------------------------------------------------------------
+// createVendorTarball — package a vendor dir into a tarball
+// ---------------------------------------------------------------------------
+
+// createVendorTarball creates a tarball of contentDir under baseDir.
+func createVendorTarball(baseDir, contentDir, outputPath string) error {
+	contentPath := filepath.Join(baseDir, contentDir)
+	if _, err := os.Stat(contentPath); err != nil {
+		return fmt.Errorf("content dir %s not found: %w", contentPath, err)
+	}
+
+	// Use tar cf with -C to set working dir
+	cmd := exec.Command("tar", "cf", outputPath, "-C", baseDir, contentDir)
+	if strings.HasSuffix(outputPath, ".gz") || strings.HasSuffix(outputPath, ".tgz") {
+		cmd = exec.Command("tar", "czf", outputPath, "-C", baseDir, contentDir)
+	} else if strings.HasSuffix(outputPath, ".xz") {
+		cmd = exec.Command("tar", "cJf", outputPath, "-C", baseDir, contentDir)
+	} else if strings.HasSuffix(outputPath, ".zst") {
+		cmd = exec.Command("tar", "cIf", outputPath, "-C", baseDir, contentDir)
+	}
+
+	return cmd.Run()
+}
+
+// ---------------------------------------------------------------------------
+// copyTarballToDistdir — copy a tarball to DISTDIR
+// ---------------------------------------------------------------------------
+
+// copyTarballToDistdir copies srcTarball into distdir, creating distdir if needed.
+func copyTarballToDistdir(srcTarball, distdir string) error {
+	if err := os.MkdirAll(distdir, 0755); err != nil {
+		return fmt.Errorf("create distdir %s: %w", distdir, err)
+	}
+
+	base := filepath.Base(srcTarball)
+	dest := filepath.Join(distdir, base)
+
+	data, err := os.ReadFile(srcTarball)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", srcTarball, err)
+	}
+
+	return os.WriteFile(dest, data, 0644)
+}
+
+// ---------------------------------------------------------------------------
+// GitHub helpers — release view, create, upload
+// ---------------------------------------------------------------------------
+
+// ghReleaseViewExists checks if a GitHub release tag exists.
+func ghReleaseViewExists(tag string, runner github.CmdRunner) (bool, error) {
+	cmd := exec.Command("gh", "release", "view", tag, "--json", "tagName,url")
+	cmd.Env = append(os.Environ(), "GH_TOKEN=") // ensure token is set by caller
+
+	out, err := runner.Output(cmd)
+	if err != nil {
+		return false, nil // not found is not an error for our purposes
+	}
+
+	if len(out) == 0 {
+		return false, nil
+	}
+
+	// Verify it's actually our tag
+	var result struct {
+		TagName string `json:"tagName"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return false, err
+	}
+
+	return result.TagName == tag, nil
+}
+
+// ghReleaseCreate creates a GitHub release for the given tag.
+func ghReleaseCreate(tag string, runner github.CmdRunner) error {
+	cmd := exec.Command("gh", "release", "create", tag)
+	return runner.Run(cmd)
+}
+
+// ghUploadAsset uploads a tarball asset to a GitHub release.
+func ghUploadAsset(tag, tarballPath string, runner github.CmdRunner) error {
+	if _, err := os.Stat(tarballPath); err != nil {
+		return fmt.Errorf("asset file not found: %w", err)
+	}
+
+	cmd := exec.Command("gh", "release", "upload", tag, tarballPath, "--clobber")
+	return runner.Run(cmd)
+}
+
+// ---------------------------------------------------------------------------
+// sha256OfFile — compute SHA-256 hash of a file
+// ---------------------------------------------------------------------------
+
+// sha256OfFile computes the SHA-256 hex digest of a file.
+func sha256OfFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
+}
+
+// ---------------------------------------------------------------------------
+// PrepareVendored — main vendored pipeline entry point
+// ---------------------------------------------------------------------------
+
+// PrepareVendored runs the vendored-dependency pipeline.
+func PrepareVendored(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
+	if cfg.DryRun {
+		return nil
+	}
+
+	distdir := cfg.Distdir
+
+	// 1. Extract dep specs from SRC_URI
+	depSpecs := parseDepSpecsFromURI(ei.SRC_URI, ei.P())
+	if len(depSpecs) == 0 {
+		return fmt.Errorf("no vendored deps found in SRC_URI")
+	}
+
+	// 2. Download source tarball
+	sourceURL := downloadSourceURL(ei)
+	if sourceURL == "" {
+		return fmt.Errorf("no source tarball URL in SRC_URI")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "larry-vendored-")
+	if err != nil {
+		return fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sourceTarball := filepath.Join(tmpDir, "source.tar.gz")
+	if err := downloadFileFromURL(sourceURL, sourceTarball); err != nil {
+		return fmt.Errorf("download source: %w", err)
+	}
+
+	// 3. Extract source
+	extractDir := filepath.Join(tmpDir, "source")
+	if err := extractTarball(sourceTarball, extractDir); err != nil {
+		return fmt.Errorf("extract source: %w", err)
+	}
+
+	// 4. For each dep, run vendor command, create tarball, upload
+	gh := github.NewClient()
+	for _, ds := range depSpecs {
+		// Run vendor command in source dir
+		buildDir := filepath.Join(extractDir, ds.SourcePath)
+		if err := runVendorCommand(ds.Type, buildDir); err != nil {
+			return fmt.Errorf("vendor %s: %w", ds.Type, err)
+		}
+
+		// Create tarball
+		outputTarball := filepath.Join(tmpDir, ds.DistName)
+		if err := createVendorTarball(extractDir, ds.TarballContent, outputTarball); err != nil {
+			return fmt.Errorf("create tarball %s: %w", ds.DistName, err)
+		}
+
+		// Copy to distdir
+		if err := copyTarballToDistdir(outputTarball, distdir); err != nil {
+			return fmt.Errorf("copy to distdir: %w", err)
+		}
+
+		// Upload to GitHub release
+		exists, err := ghReleaseViewExists(ei.Pkg, gh.Runner())
+		if err != nil {
+			return fmt.Errorf("check release %s: %w", ei.Pkg, err)
+		}
+		if !exists {
+			if err := ghReleaseCreate(ei.Pkg, gh.Runner()); err != nil {
+				return fmt.Errorf("create release %s: %w", ei.Pkg, err)
+			}
+		}
+		if err := ghUploadAsset(ei.Pkg, outputTarball, gh.Runner()); err != nil {
+			return fmt.Errorf("upload asset %s: %w", ds.DistName, err)
+		}
+	}
+
+	// 5. Run manifest
+	return runManifest(ei.Path, distdir)
+}
+
+// ---------------------------------------------------------------------------
+// Vendor command helpers
+// ---------------------------------------------------------------------------
+
+// runVendorCommand runs the appropriate vendor command for the dep type.
+func runVendorCommand(depType DepType, workDir string) error {
+	switch depType {
+	case DepNPM:
+		// Create .npmrc to suppress audit/fund prompts
+		npmrc := filepath.Join(workDir, ".npmrc")
+		if err := os.WriteFile(npmrc, []byte("audit=false\nfund=false\n"), 0644); err != nil {
+			return fmt.Errorf("write .npmrc: %w", err)
+		}
+		cmd := exec.Command("npm", "ci", "--ignore-scripts")
+		cmd.Dir = workDir
+		return cmd.Run()
+	case DepCargo:
+		cmd := exec.Command("cargo", "vendor", "vendor/")
+		cmd.Dir = workDir
+		return cmd.Run()
+	case DepGo:
+		cmd := exec.Command("go", "mod", "vendor")
+		cmd.Dir = workDir
+		return cmd.Run()
+	default:
+		return fmt.Errorf("unknown dep type: %s", depType)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// downloadSourceURL — extract source tarball URL from SRC_URI
+// ---------------------------------------------------------------------------
+
+// downloadSourceURL returns the source tarball URL from ebuild SRC_URI.
+// It excludes releases/download/ URLs (those are dep tarballs, not source).
+func downloadSourceURL(ei *ebuild.EbuildInfo) string {
+	srcURI := ei.SRC_URI
+	if srcURI == "" {
+		return ""
+	}
+
+	// Find the first URL that is NOT a releases/download/ entry
+	for _, part := range strings.Fields(srcURI) {
+		if !strings.Contains(part, "releases/download/") &&
+			(strings.HasPrefix(part, "http://") || strings.HasPrefix(part, "https://") ||
+				strings.HasPrefix(part, "mirror://")) {
+			return part
+		}
+	}
+	return ""
+}
+
+// ---------------------------------------------------------------------------
+// HTTP helper (standalone to avoid import cycle with httpclient)
+// ---------------------------------------------------------------------------
+
+

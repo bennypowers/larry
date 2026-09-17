@@ -73,6 +73,19 @@ func (c *Client) gh(args ...string) ([]byte, error) {
 	return c.runner.Output(cmd)
 }
 
+// Gh runs a gh CLI command and returns its combined output (exported for testing).
+func (c *Client) Gh(args ...string) ([]byte, error) {
+	return c.gh(args...)
+}
+
+// Runner returns the CmdRunner used by this client (for testing).
+func (c *Client) Runner() CmdRunner {
+	if c.runner == nil {
+		return &realCmdRunner{}
+	}
+	return c.runner
+}
+
 // LatestRelease gets the latest release tag name and URL from GitHub.
 // Returns the tag name and the release URL (e.g., https://github.com/owner/repo/releases/tag/v1.0.0).
 func (c *Client) LatestRelease(owner, repo string) (tag, url string, err error) {

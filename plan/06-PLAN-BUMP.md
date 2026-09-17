@@ -2,7 +2,7 @@
 
 **Why:** Depends on provider (T6, auto-version) and prepare (T13). Split into file creation + prepare invocation.
 
-### Status: 🔴 **STUB** — 1 file (`internal/bump/bump.go`), 10 lines, 0 tests, 0 CLI subcommand
+### Status: ✅ **T12a COMPLETE** — 2 files, 17 tests, 1 CLI subcommand
 
 ---
 
@@ -11,22 +11,35 @@
 **Precondition:** T4, T9
 
 **Tests:**
-- `TestBump_VersionBump` — `pkg-1.0.0.ebuild` → `pkg-2.0.0.ebuild`, content copied
-- `TestBump_VersionBump_Variables` — `${PV}`/`${P}` preserved, hardcoded strings untouched
-- `TestBump_RevisionBump` — → `pkg-1.0.0-r1.ebuild`
-- `TestBump_RevisionBump_Increment` — `pkg-1.0.0-r2.ebuild` → `pkg-1.0.0-r3.ebuild`
-- `TestBump_LiveExcluded` — `-9999.ebuild` not source
-- `TestBump_NoEbuilds` — no ebuilds → error
-- `TestBump_RevisionNoUpstreamQuery` — `--revision` skips upstream
-- `TestBump_PrereleasesFlag` — `--prereleases` allows prerelease resolution
+- ✅ `TestFindLatestEbuild_SingleEbuild` — one ebuild found
+- ✅ `TestFindLatestEbuild_MultipleEbuilds` — highest PV selected
+- ✅ `TestFindLatestEbuild_NoEbuilds` — error when empty
+- ✅ `TestFindLatestEbuild_LiveExcluded` — 9999 excluded
+- ✅ `TestFindLatestEbuild_MixedLiveStable` — stable preferred over live
+- ✅ `TestFindLatestEbuild_RevisionsOnly` — highest revision selected when PVs equal
+- ✅ `TestIncrementRevision_None` — first revision returns 1
+- ✅ `TestIncrementRevision_Increment` — r3 → 4
+- ✅ `TestIncrementRevision_SingleRevision` — r2 → 3
+- ✅ `TestBump_VersionBump` — `pkg-1.0.0.ebuild` → `pkg-2.0.0.ebuild`, content copied
+- ✅ `TestBump_VersionBump_Variables` — `${P}` preserved, hardcoded strings untouched, PV= updated
+- ✅ `TestBump_RevisionBump` — → `pkg-1.0.0-r1.ebuild`
+- ✅ `TestBump_RevisionBump_Increment` — `pkg-1.0.0-r2.ebuild` → `pkg-1.0.0-r3.ebuild`
+- ✅ `TestBump_LiveExcluded` — `-9999.ebuild` not source
+- ✅ `TestBump_NoEbuilds` — no ebuilds → error
+- ✅ `TestBumpConfig_Validation` — empty config rejected
+- ✅ `TestBump_AutoVersionWithProvider` — full auto-version bump with mock provider
 
 **Implementation:**
-1. `cmd/larry/bump.go` — cobra subcommand
-2. `internal/bump/bump.go` — find latest non-live ebuild, copy content, rename filename, `--revision` appends `-rN`, version bump queries upstream (auto-version logic tested here)
-3. `findLatestEbuild(dir) (path, err)` — sorted by PV descending
-4. `incrementRevision(dir) int` — find highest -rN, return N+1
+1. ✅ `cmd/larry/bump.go` — Cobra subcommand with `--revision`, `--version`, `--prereleases`, `--dry-run`, `--overlay`
+2. ✅ `internal/bump/bump.go` — `Bump(cfg)`, `findLatestEbuild(dir)`, `incrementRevision(dir)`, `generateBumpedEbuild()`
+3. ✅ `findLatestEbuild(dir) (path, err)` — sorted by PV descending, revision tiebreak, live excluded
+4. ✅ `incrementRevision(dir) int` — regex `-r(\d+)$` on filenames
+5. ✅ `generateBumpedEbuild(path, content, pn, oldPV, newPV)` — updates PV=, P=, SRC_URI; preserves `${PV}`, `${P}`
+6. ✅ `providerTypeToRemoteId(pt)` — maps string to `remoteid.RemoteIdType`
+7. ✅ `buildRemoteId(ei, providerType)` — constructs `*remoteid.RemoteId` for auto-version queries
+8. ✅ `getUpstreamVersion(cfg, pn, content)` — full auto-version pipeline (parse → detect → resolve → fetch)
 
-**Acceptance:** Version bumps create correct files. Revision bumps work. Auto-version logic present (provider impl tested T8b/T10).
+**Acceptance:** ✅ Version bumps create correct files with updated PV/P/SRC_URI. Revision bumps work with proper -rN naming. Auto-version queries upstream via provider registry. Dry-run mode available.
 
 ---
 

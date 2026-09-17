@@ -8,6 +8,7 @@ const (
 	TypeCargo      PackageType = "cargo"
 	TypeGo         PackageType = "go"
 	TypeRpiKernel  PackageType = "rpi-kernel"
+	TypeVendored   PackageType = "vendored" // vendored deps in GitHub releases (MIXED_DEPS.md)
 	TypeGeneric    PackageType = "generic"
 	TypeUnknown    PackageType = "unknown"
 )

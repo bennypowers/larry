@@ -7,6 +7,7 @@ import (
 
 // DetectType determines the package type from an ebuild file path.
 // It reads the ebuild content and checks for type-indicating patterns:
+//   - vendored:  releases/download/${PN}/ in SRC_URI (pre-vendored deps in GH releases)
 //   - npm:       mirror://npm/ in SRC_URI
 //   - cargo:     CRATES=" variable definition present
 //   - go:        inherits go-module eclass
@@ -30,6 +31,11 @@ func DetectTypeForce(ebuildPath string, force PackageType) (PackageType, error) 
 	}
 
 	content := string(data)
+
+	// Check for vendored: releases/download/${PN}/ in SRC_URI
+	if strings.Contains(content, "releases/download/") && strings.Contains(content, "${PN}/") {
+		return TypeVendored, nil
+	}
 
 	// Check for npm: mirror://npm/ in SRC_URI
 	if strings.Contains(content, "mirror://npm/") {
@@ -85,6 +91,11 @@ func DetectTypeFromInfoForce(info *EbuildInfo, force PackageType) (PackageType, 
 
 	if info == nil {
 		return TypeGeneric, nil
+	}
+
+	// Check for vendored: releases/download/${PN}/ in SRC_URI
+	if strings.Contains(info.SRC_URI, "releases/download/") && strings.Contains(info.SRC_URI, "${PN}/") {
+		return TypeVendored, nil
 	}
 
 	// Check for npm: mirror://npm/ in SRC_URI
