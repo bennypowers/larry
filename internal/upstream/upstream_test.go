@@ -640,6 +640,8 @@ func TestCacheIntegration_CacheMissAfterTTL(t *testing.T) {
 // --- Utility tests ---
 
 func TestStatusIsSignificant(t *testing.T) {
+	// Significant = shown by default (everything except UP-TO-DATE and LIVE)
+	// Matches fish script behavior of filtering with 'grep -v UP-TO-DATE'
 	if !StatusOutdated.IsSignificant() {
 		t.Error("OUTDATED should be significant")
 	}
@@ -652,8 +654,11 @@ func TestStatusIsSignificant(t *testing.T) {
 	if StatusLive.IsSignificant() {
 		t.Error("LIVE should not be significant")
 	}
-	if StatusUnknown.IsSignificant() {
-		t.Error("UNKNOWN should not be significant")
+	if !StatusUnknown.IsSignificant() {
+		t.Error("UNKNOWN should be significant (shown by default)")
+	}
+	if !StatusNewerTag.IsSignificant() {
+		t.Error("NEWER-TAG should be significant (shown by default)")
 	}
 }
 

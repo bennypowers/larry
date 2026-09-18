@@ -44,6 +44,12 @@ func CheckUpstream(ei *ebuild.EbuildInfo, registry *provider.ProviderRegistry, a
 
 	// Detect package type from SRC_URI and HOMEPAGE
 	providerType := detectProviderFromSRCURI(ei.SRC_URI, ei.HOMEPAGE)
+	if providerType == "github" || providerType == "gitlab" || providerType == "codeberg" {
+		meta := detectProviderFromMetadata(ei.Inherit, ei.Raw)
+		if meta == "pypi" || meta == "npm" {
+			providerType = meta
+		}
+	}
 	if providerType == "" {
 		// Try to resolve from SRC_URI URL patterns
 		providerType = string(providers.ResolveProviderFromURL(ei.SRC_URI))
@@ -242,8 +248,8 @@ func walkAndCheck(dir string, registry *provider.ProviderRegistry, allowPrerelea
 					continue
 				}
 
-				// Detect provider from SRC_URI and HOMEPAGE
-				providerType := detectProviderFromSRCURI(einfo.SRC_URI, einfo.HOMEPAGE)
+				// Detect provider from SRC_URI/HOMEPAGE + metadata
+				providerType := resolveProviderType(einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
 				if providerType == "" {
 					providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
 				}
@@ -439,6 +445,18 @@ func parseEbuildInfo(path string) (*ebuild.EbuildInfo, error) {
 	// Extract INHERIT
 	info.Inherit = extractInherit(content)
 
+	// Store raw inherit line for metadata detection
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "inherit ") {
+			info.InheritRaw = line[len("inherit "):]
+			break
+		}
+	}
+
+	// Store raw content for metadata detection
+	info.Raw = content
+
 	// Derive category from directory
 	info.Path = path
 	info.Category = extractCategoryFromPath(path)
@@ -450,18 +468,30 @@ func parseEbuildInfo(path string) (*ebuild.EbuildInfo, error) {
 // Only matches variables at the start of a line (after optional whitespace).
 func extractVar(content, name string) string {
 	lines := strings.Split(content, "\n")
-	for _, line := range lines {
+	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if !strings.HasPrefix(trimmed, name+"=") {
 			continue
 		}
 		valuePart := strings.TrimSpace(trimmed[len(name)+1:])
-		if len(valuePart) >= 2 && (valuePart[0] == '"' || valuePart[0] == '\'') {
+		if len(valuePart) >= 1 && (valuePart[0] == '"' || valuePart[0] == '\'') {
 			quote := valuePart[0]
 			end := strings.Index(valuePart[1:], string(quote))
 			if end >= 0 {
 				return valuePart[1 : 1+end]
 			}
+			// Multi-line value: collect lines after the opening-quote line until closing quote
+			var parts []string
+			parts = append(parts, valuePart[1:])
+			for j := i + 1; j < len(lines); j++ {
+				closeIdx := strings.Index(lines[j], string(quote))
+				if closeIdx >= 0 {
+					parts = append(parts, lines[j][:closeIdx])
+					return strings.Join(parts, "\n")
+				}
+				parts = append(parts, lines[j])
+			}
+			return strings.Join(parts, "\n")
 		}
 		end := strings.IndexAny(valuePart, " \t\n")
 		if end > 0 {
@@ -472,6 +502,22 @@ func extractVar(content, name string) string {
 		}
 	}
 	return ""
+}
+
+// expandVar expands shell variable patterns in PYPI_PN/MY_PN values.
+// Handles patterns like ${PN//-/_} (replace all dashes with underscores),
+// ${PN/-/_} (replace first dash with underscore), and ${PN} (literal).
+func expandVar(raw, pn string) string {
+	switch raw {
+	case "${PN//-/_}", "$PN//-/_":
+		return strings.ReplaceAll(pn, "-", "_")
+	case "${PN/-/_}", "$PN/-/_":
+		return strings.Replace(pn, "-", "_", 1)
+	case "${PN}", "$PN":
+		return pn
+	}
+	// Return raw value as-is if no known pattern
+	return raw
 }
 
 // extractVersionFromFilename extracts version from ebuild filename.
@@ -606,6 +652,71 @@ func detectProviderFromSRCURI(srcURI string, homepage string) string {
 	return ""
 }
 
+// detectProviderFromMetadata detects the provider type from ebuild metadata
+// (PYPI_* variables, inherit directives). This is used as a fallback when
+// SRC_URI/HOMEPAGE detection is ambiguous (e.g., PyPI packages hosted on GitHub).
+// inherit is the parsed inherit list (works for both file parsing and ebuild info).
+// content is the raw ebuild file content (may be empty for ebuild info output).
+func detectProviderFromMetadata(inherit []string, content string) string {
+	// Check for PYPI_* variables (indicates PyPI package)
+	if content != "" {
+		pypiVars := []string{"PYPI_SOURCE_URI", "PYPI_PN", "PYPI_P", "PYPI_S"}
+		for _, v := range pypiVars {
+			if strings.Contains(content, v+"=") {
+				return "pypi"
+			}
+		}
+		// Check for NPM_* variables (indicates npm package)
+		npmVars := []string{"NPM_PN", "NPM_P", "NPM_PKGNAME"}
+		for _, v := range npmVars {
+			if strings.Contains(content, v+"=") {
+				return "npm"
+			}
+		}
+		// Check for Go-related variables (indicates Go module)
+		goVars := []string{"GO_MODULE_PATH", "GO_PROJECT"}
+		for _, v := range goVars {
+			if strings.Contains(content, v+"=") {
+				return "github"
+			}
+		}
+	}
+	// Check inherit for PyPI-specific eclasses (NOT general Python eclasses like
+	// python-single-r1 or distutils-r1, which are used for local/Codeberg/GitHub
+	// Python packages too). Only "pypi" eclass specifically indicates PyPI source.
+	pypiEclasses := []string{"pypi"}
+	for _, eclass := range inherit {
+		for _, pe := range pypiEclasses {
+			if eclass == pe {
+				return "pypi"
+			}
+		}
+	}
+	return ""
+}
+
+// resolveProviderType resolves the final provider type, preferring metadata
+// (e.g., PYPI_* variables, Python eclasses) over URL detection. This handles
+// cases like PyPI packages hosted on GitHub where URL detection would
+// incorrectly return "github" instead of "pypi".
+func resolveProviderType(srcURI, homepage string, inherit []string, content string) string {
+	// Primary: detect from SRC_URI/HOMEPAGE
+	provider := detectProviderFromSRCURI(srcURI, homepage)
+	if provider == "" {
+		// No URL detected, fall back to metadata
+		return detectProviderFromMetadata(inherit, content)
+	}
+	// Secondary: if URL detection says GitHub/npm but metadata says PyPI,
+	// prefer PyPI (the package is likely a PyPI package with a GitHub mirror)
+	if provider == "github" || provider == "gitlab" || provider == "codeberg" {
+		meta := detectProviderFromMetadata(inherit, content)
+		if meta == "pypi" || meta == "npm" {
+			return meta
+		}
+	}
+	return provider
+}
+
 // mapTypeToRemoteIdType maps an ebuild package type to a RemoteIdType.
 func mapTypeToRemoteIdType(pkgType string) remoteid.RemoteIdType {
 	switch pkgType {
@@ -630,14 +741,32 @@ func mapTypeToRemoteIdType(pkgType string) remoteid.RemoteIdType {
 func resolveRemoteId(ei *ebuild.EbuildInfo, providerType string) (*remoteid.RemoteId, error) {
 	switch providerType {
 	case "pypi":
+		// Use PYPI_PN if present, otherwise fall back to Gentoo PN
+		pypiName := ei.Pkg
+		if raw := extractVar(ei.Raw, "PYPI_PN"); raw != "" {
+			pypiName = expandVar(raw, ei.Pkg)
+		}
 		return &remoteid.RemoteId{
 			Type: remoteid.TypePyPI,
-			Name: ei.Pkg,
+			Name: pypiName,
 		}, nil
 	case "npm":
+		// Extract npm package name from SRC_URI mirror URL if available
+		// Pattern: mirror://npm/@scope/name/... or mirror://npm/name/...
+		name := extractNpmNameFromSRCURI(ei.SRC_URI, ei.Raw, ei.Pkg)
+		if name == "" {
+			// Fall back to MY_NPM_NAME, NPM_PN, or Gentoo PN
+			if pn := extractVar(ei.Raw, "MY_NPM_NAME"); pn != "" {
+				name = pn
+			} else if pn := extractVar(ei.Raw, "NPM_PN"); pn != "" {
+				name = pn
+			} else {
+				name = ei.Pkg
+			}
+		}
 		return &remoteid.RemoteId{
 			Type: remoteid.TypeNPM,
-			Name: ei.Pkg,
+			Name: name,
 		}, nil
 	case "github":
 		owner, repo := extractRepoFromURLs(ei.SRC_URI, ei.HOMEPAGE, "github.com")
@@ -859,7 +988,7 @@ func walkAndCheckCategories(dir string, registry *provider.ProviderRegistry, cat
 			}
 
 			// Detect provider from SRC_URI and HOMEPAGE
-			providerType := detectProviderFromSRCURI(einfo.SRC_URI, einfo.HOMEPAGE)
+			providerType := resolveProviderType(einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
 			if providerType == "" {
 				providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
 			}
@@ -958,4 +1087,55 @@ func walkAndCheckCategories(dir string, registry *provider.ProviderRegistry, cat
 	}
 
 	return results, nil
+}
+
+// extractNpmNameFromSRCURI extracts the npm package name from SRC_URI,
+// expanding ${MY_NPM_NAME}, ${MY_NPM_SCOPE}, or ${PN} if present.
+// e.g., "mirror://npm/@scope/pkg/-/pkg-1.0.tgz" -> "@scope/pkg"
+// e.g., "mirror://npm/pkg/-/pkg-1.0.tgz" -> "pkg"
+// e.g., "mirror://npm/${MY_NPM_SCOPE}/${PN}/-/${P}.tgz" -> "@scope/pkg"
+// fullContent is the raw ebuild content for variable expansion.
+// pn is the Gentoo package name (for ${PN} fallback).
+func extractNpmNameFromSRCURI(srcURI, fullContent, pn string) string {
+	// Find mirror://npm/ prefix
+	idx := strings.Index(srcURI, "mirror://npm/")
+	if idx < 0 {
+		return ""
+	}
+	// Extract path after "mirror://npm/"
+	path := srcURI[idx+len("mirror://npm/"):]
+
+	// The npm mirror URL format is: mirror://npm/<package-name>/-/<filename>
+	// Extract everything before the first "-/" (the package name)
+	sepIdx := strings.Index(path, "/-/")
+	if sepIdx < 0 {
+		// Fallback: use path up to the first "/"
+		sepIdx = len(path)
+		for i, c := range path {
+			if c == '/' {
+				sepIdx = i
+				break
+			}
+		}
+	}
+
+	name := path[:sepIdx]
+
+	// Expand ${MY_NPM_NAME} if present
+	if strings.Contains(name, "${MY_NPM_NAME}") {
+		if v := extractVar(fullContent, "MY_NPM_NAME"); v != "" {
+			name = strings.Replace(name, "${MY_NPM_NAME}", v, -1)
+		}
+	}
+	// Expand ${MY_NPM_SCOPE} if present
+	if strings.Contains(name, "${MY_NPM_SCOPE}") {
+		if v := extractVar(fullContent, "MY_NPM_SCOPE"); v != "" {
+			name = strings.Replace(name, "${MY_NPM_SCOPE}", v, -1)
+		}
+	}
+	// Expand ${PN} (Gentoo package name) using passed pn param
+	if strings.Contains(name, "${PN}") && pn != "" {
+		name = strings.Replace(name, "${PN}", pn, -1)
+	}
+	return name
 }

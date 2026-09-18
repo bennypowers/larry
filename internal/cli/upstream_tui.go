@@ -184,6 +184,10 @@ func (m *upstreamModel) statusColor(s upstream.Status) string {
 		return m.colors.Red("OUTDATED")
 	case upstream.StatusUpToDate:
 		return m.colors.Green("UP-TO-DATE")
+	case upstream.StatusAhead:
+		return m.colors.Cyan("AHEAD")
+	case upstream.StatusNewerTag:
+		return m.colors.Yellow("NEWER-TAG")
 	case upstream.StatusLive:
 		return m.colors.Blue("LIVE")
 	case upstream.StatusUnknown:

@@ -37,15 +37,27 @@ func ParseEbuildInfo(path string) (*EbuildInfo, error) {
 
 	info, _ := parseInfoOutput(path, out.String())
 
-	// If ebuild info didn't produce useful fields, fall back to direct file parsing
-	if info != nil && info.Category == "" && info.Pkg == "" {
-		info, err := ParseEbuildFromFile(path)
-		if err == nil {
-			return info, nil
+	// Always fall back to direct file parsing to get accurate SRC_URI, HOMEPAGE,
+	// INHERIT, and Raw content. ebuid info often produces truncated/malformed
+	// SRC_URI for multi-line URIs (e.g., SRC_URI="\"\"\").
+	fileInfo, err := ParseEbuildFromFile(path)
+	if err != nil {
+		return info, nil
+	}
+
+	// Merge: ebuild info fields take priority for PN/PV, but file parsing
+	// provides accurate SRC_URI, HOMEPAGE, INHERIT, and Raw content.
+	if info != nil && (info.Category != "" || info.Pkg != "") {
+		// Use ebuild info Category/PV if valid
+		if fileInfo.Category == "" {
+			fileInfo.Category = info.Category
+		}
+		if fileInfo.PVVal == "" {
+			fileInfo.PVVal = info.PVVal
 		}
 	}
 
-	return info, nil
+	return fileInfo, nil
 }
 
 // parseInfoOutput parses the text output of `ebuild <path> info` into EbuildInfo.
@@ -177,27 +189,51 @@ func ParseEbuildFromFile(path string) (*EbuildInfo, error) {
 
 	// Extract INHERIT
 	info.Inherit = extractInherit(content)
+	info.InheritRaw = extractInheritRaw(content)
+	info.Raw = content
 
 	return info, nil
 }
 
 // extractVar extracts a variable value from ebuild content.
 // Only matches variables at the start of a line (after optional whitespace).
+// Handles both single-line and multi-line quoted values (e.g., SRC_URI="...").
 func extractVar(content, name string) string {
 	lines := strings.Split(content, "\n")
-	for _, line := range lines {
+	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if !strings.HasPrefix(trimmed, name+"=") {
 			continue
 		}
 		valuePart := strings.TrimSpace(trimmed[len(name)+1:])
-		if len(valuePart) >= 2 && (valuePart[0] == '"' || valuePart[0] == '\'') {
+
+		// Check if value starts with a quote
+		if len(valuePart) >= 1 && (valuePart[0] == '"' || valuePart[0] == '\'') {
 			quote := valuePart[0]
+			// Check if the closing quote is on the same line (after the opening quote)
 			end := strings.Index(valuePart[1:], string(quote))
 			if end >= 0 {
+				// Single-line value
 				return valuePart[1 : 1+end]
 			}
+			// Multi-line value: collect lines until closing quote
+			var parts []string
+			// Take remainder of first line (after opening quote)
+			parts = append(parts, valuePart[1:])
+			for j := i + 1; j < len(lines); j++ {
+				l := lines[j]
+				closeIdx := strings.Index(l, string(quote))
+				if closeIdx >= 0 {
+					parts = append(parts, l[:closeIdx])
+					return strings.Join(parts, "\n")
+				}
+				parts = append(parts, l)
+			}
+			// No closing quote found, return what we have
+			return strings.Join(parts, "\n")
 		}
+
+		// Unquoted value: take until whitespace
 		end := strings.IndexAny(valuePart, " \t\n")
 		if end > 0 {
 			return valuePart[:end]
@@ -212,8 +248,9 @@ func extractVar(content, name string) string {
 // extractCategoryFromPath extracts the category from an ebuild file path.
 // e.g., "/path/to/overlay/dev-python/pkg-1.0.ebuild" -> "dev-python"
 func extractCategoryFromPath(path string) string {
-	dir := filepath.Dir(path)
-	return filepath.Base(dir)
+	pkgDir := filepath.Dir(path)        // "/path/to/overlay/dev-python/pkg"
+	catDir := filepath.Dir(pkgDir)      // "/path/to/overlay/dev-python"
+	return filepath.Base(catDir)        // "dev-python"
 }
 
 // extractVersionFromFilename extracts version from ebuild filename.
@@ -248,4 +285,15 @@ func extractInherit(content string) []string {
 		}
 	}
 	return nil
+}
+
+// extractInheritRaw extracts the raw inherit line content (after "inherit ").
+func extractInheritRaw(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "inherit ") {
+			return strings.TrimSpace(line[len("inherit "):])
+		}
+	}
+	return ""
 }

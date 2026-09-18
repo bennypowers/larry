@@ -63,7 +63,15 @@ func (c *ColorHelper) Red(text string) string {
 	if !c.enabled {
 		return text
 	}
-	return termenv.String(text).Foreground(termenv.ANSIBlue).String()
+	return termenv.String(text).Foreground(termenv.ANSIRed).String()
+}
+
+// Cyan returns cyan-colored text.
+func (c *ColorHelper) Cyan(text string) string {
+	if !c.enabled {
+		return text
+	}
+	return termenv.String(text).Foreground(termenv.ANSICyan).String()
 }
 
 // Green returns green-colored text.

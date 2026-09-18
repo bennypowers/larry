@@ -44,9 +44,11 @@ func (s Status) String() string {
 	}
 }
 
-// IsSignificant returns true for statuses that indicate a notable state.
+// IsSignificant returns true for statuses that should be shown by default
+// (i.e., everything except UP-TO-DATE and LIVE). Matches fish script behavior
+// of filtering with 'grep -v UP-TO-DATE'.
 func (s Status) IsSignificant() bool {
-	return s == StatusOutdated || s == StatusAhead
+	return s != StatusUpToDate && s != StatusLive
 }
 
 // SourceGlyph returns the Nerd Font icon for a source label.
@@ -161,22 +163,25 @@ func RenderTable(w io.Writer, results []UpstreamResult) error {
 		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("240"))).
 		StyleFunc(func(row, col int) lipgloss.Style {
 			switch {
-			case row == 0: // header
+			case row == table.HeaderRow: // header row
 				return lipgloss.NewStyle().Bold(true).PaddingLeft(1).PaddingRight(1)
 			case col == 3 && colorProfile != termenv.Ascii: // status column
-				rIdx := row - 1
 				var r UpstreamResult
-				if rIdx >= 0 && rIdx < len(results) {
-					r = results[rIdx]
+				if row >= 0 && row < len(results) {
+					r = results[row]
 				}
 				var color lipgloss.Color
 				switch r.Status {
 				case StatusOutdated:
-					color = lipgloss.Color("204") // orange-red
+					color = lipgloss.Color("208") // bright orange
+				case StatusUpToDate:
+					color = lipgloss.Color("42") // green
 				case StatusAhead:
-					color = lipgloss.Color("63") // blue
+					color = lipgloss.Color("32") // cyan
 				case StatusNewerTag:
 					color = lipgloss.Color("220") // yellow
+				case StatusLive:
+					color = lipgloss.Color("39") // blue
 				default:
 					color = lipgloss.Color("249") // dim
 				}
