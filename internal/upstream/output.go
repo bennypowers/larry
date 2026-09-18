@@ -6,6 +6,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
+	"github.com/lrstanley/go-nf/glyphs/dev"
 	"github.com/muesli/termenv"
 )
 
@@ -46,48 +49,95 @@ func (s Status) IsSignificant() bool {
 	return s == StatusOutdated || s == StatusAhead
 }
 
-// Color returns the ANSI color code for this status.
-func (s Status) Color() string {
-	switch s {
-	case StatusOutdated:
-		return "\033[31m" // red
-	case StatusUpToDate:
-		return "\033[32m" // green
-	case StatusAhead:
-		return "\033[34m" // blue
-	case StatusNewerTag:
-		return "\033[33m" // yellow
+// SourceGlyph returns the Nerd Font icon for a source label.
+func SourceGlyph(sourceLabel string) string {
+	switch {
+	case strings.HasPrefix(sourceLabel, "GitHub:"):
+		return string(dev.Github)
+	case strings.HasPrefix(sourceLabel, "GitLab:"):
+		return string(dev.Gitlab)
+	case strings.HasPrefix(sourceLabel, "npm:"):
+		return string(dev.Npm)
+	case strings.HasPrefix(sourceLabel, "PyPI:"):
+		return "\ue73c" // dev-pypi (not in go-nf, hardcoded)
+	case strings.HasPrefix(sourceLabel, "Codeberg:"):
+		return "\uf330" // codeberg-icon (not in go-nf, hardcoded)
+	case strings.HasPrefix(sourceLabel, "SourceHut:"):
+		return "\ue702" // git icon as fallback for sourcehut
 	default:
-		return "\033[2m" // dim/gray
+		return ""
 	}
+}
+
+// SourceURL extracts the source URL from a SourceLabel.
+func SourceURL(sourceLabel string) string {
+	switch {
+	case strings.HasPrefix(sourceLabel, "GitHub:"):
+		return "https://github.com/" + sourceLabel[7:]
+	case strings.HasPrefix(sourceLabel, "GitLab:"):
+		return "https://gitlab.com/" + sourceLabel[7:]
+	case strings.HasPrefix(sourceLabel, "PyPI:"):
+		return "https://pypi.org/project/" + sourceLabel[5:]
+	case strings.HasPrefix(sourceLabel, "npm:"):
+		return "https://www.npmjs.com/package/" + sourceLabel[4:]
+	case strings.HasPrefix(sourceLabel, "Codeberg:"):
+		return "https://codeberg.org/" + sourceLabel[9:]
+	case strings.HasPrefix(sourceLabel, "SourceHut:"):
+		return "https://git.sr.ht/" + sourceLabel[10:]
+	}
+	return ""
+}
+
+// SourceLabelShort strips the provider prefix from a SourceLabel (e.g. "GitHub:owner/repo" -> "owner/repo").
+func SourceLabelShort(sourceLabel string) string {
+	if idx := strings.Index(sourceLabel, ":"); idx != -1 {
+		return sourceLabel[idx+1:]
+	}
+	return sourceLabel
+}
+
+// SourceCell builds a source cell with glyph + hyperlink.
+func SourceCell(r UpstreamResult) string {
+	var sourceCell string
+
+	switch {
+	case r.SourceLabel != "":
+		glyph := SourceGlyph(r.SourceLabel)
+		url := SourceURL(r.SourceLabel)
+		short := SourceLabelShort(r.SourceLabel)
+		if glyph != "" && url != "" {
+			sourceCell = renderCellHyperlink(url, glyph+" "+short)
+		} else if glyph != "" {
+			sourceCell = glyph + " " + short
+		} else {
+			sourceCell = r.SourceLabel
+		}
+	case r.Source != "":
+		sourceCell = renderCellHyperlink(r.Source, r.Source)
+	case r.Error != "":
+		sourceCell = "unknown"
+	}
+	return sourceCell
 }
 
 // UpstreamResult holds the result of an upstream version check.
 type UpstreamResult struct {
-	Package string // "category/pkgname"
-	Current string // Current version in overlay
-	Latest  string // Latest upstream version
-	Status  Status
-	Source  string // Source URL (for hyperlink)
-	Error   string // Error message if any
+	Package     string
+	Current     string
+	Latest      string
+	Status      Status
+	Source      string
+	SourceLabel string
+	Error       string
 }
 
 // String returns a human-readable string representation.
 func (r UpstreamResult) String() string {
-	var sb strings.Builder
-	sb.WriteString(r.Package)
-	sb.WriteString(" (")
-	sb.WriteString(r.Status.String())
-	sb.WriteString(")")
-	if r.Latest != "" && r.Latest != r.Current {
-		sb.WriteString(" -> ")
-		sb.WriteString(r.Latest)
-	}
-	return sb.String()
+	return fmt.Sprintf("%s (%s)", r.Package, r.Status.String())
 }
 
-// renderHyperlink creates an OSC 8 hyperlink for the source URL.
-func renderHyperlink(url, text string) string {
+// renderCellHyperlink wraps text in an OSC 8 hyperlink.
+func renderCellHyperlink(url, text string) string {
 	if url == "" || text == "" {
 		return text
 	}
@@ -97,54 +147,54 @@ func renderHyperlink(url, text string) string {
 // RenderTable renders upstream check results as a formatted table.
 func RenderTable(w io.Writer, results []UpstreamResult) error {
 	// Detect color support
-	forceColor := false
+	colorProfile := termenv.Ascii
 	if colorEnv := os.Getenv("LARRY_COLOR"); colorEnv == "always" {
-		forceColor = true
+		colorProfile = termenv.TrueColor
 	} else if colorEnv != "never" {
 		output := termenv.DefaultOutput()
-		forceColor = output.ColorProfile() != termenv.Ascii
+		colorProfile = output.ColorProfile()
 	}
 
-	// Render header
-	if forceColor {
-		fmt.Fprintf(w, "\033[1m%-30s %-12s %-12s %-15s %s\033[0m\n",
-			"PACKAGE", "CURRENT", "LATEST", "STATUS", "SOURCE")
-		fmt.Fprintln(w, strings.Repeat("─", 80))
-	} else {
-		fmt.Fprintf(w, "%-30s %-12s %-12s %-15s %s\n",
-			"PACKAGE", "CURRENT", "LATEST", "STATUS", "SOURCE")
-		fmt.Fprintln(w, strings.Repeat("─", 80))
-	}
+	// Create table with rounded borders
+	t := table.New().
+		Border(lipgloss.NormalBorder()).
+		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("240"))).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			switch {
+			case row == 0: // header
+				return lipgloss.NewStyle().Bold(true).PaddingLeft(1).PaddingRight(1)
+			case col == 3 && colorProfile != termenv.Ascii: // status column
+				rIdx := row - 1
+				var r UpstreamResult
+				if rIdx >= 0 && rIdx < len(results) {
+					r = results[rIdx]
+				}
+				var color lipgloss.Color
+				switch r.Status {
+				case StatusOutdated:
+					color = lipgloss.Color("204") // orange-red
+				case StatusAhead:
+					color = lipgloss.Color("63") // blue
+				case StatusNewerTag:
+					color = lipgloss.Color("220") // yellow
+				default:
+					color = lipgloss.Color("249") // dim
+				}
+				return lipgloss.NewStyle().Foreground(color).PaddingLeft(1).PaddingRight(1)
+			default:
+				return lipgloss.NewStyle().PaddingLeft(1).PaddingRight(1)
+			}
+		})
 
-	// Render rows
+	// Headers
+	t.Headers("Package", "Current", "Latest", "Status", "Source")
+
+	// Data rows
 	for _, r := range results {
-		statusStr := r.Status.String()
-
-		// Build source cell
-		sourceCell := ""
-		if r.Source != "" {
-			sourceCell = renderHyperlink(r.Source, r.Source[:minInt(len(r.Source), 30)])
-		} else if r.Error != "" {
-			sourceCell = r.Error
-		}
-
-		if forceColor && r.Status.IsSignificant() {
-			fmt.Fprintf(w, "%-30s %-12s %-12s %s%s\033[0m %s\n",
-				r.Package, r.Current, r.Latest,
-				r.Status.Color(), statusStr,
-				sourceCell)
-		} else {
-			fmt.Fprintf(w, "%-30s %-12s %-12s %-15s %s\n",
-				r.Package, r.Current, r.Latest, statusStr, sourceCell)
-		}
+		t.Row(r.Package, r.Current, r.Latest, r.Status.String(), SourceCell(r))
 	}
 
+	fmt.Fprint(w, t.Render())
 	return nil
 }
 
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

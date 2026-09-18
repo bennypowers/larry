@@ -48,11 +48,15 @@ func (p *GitHubProvider) FetchLatestVersion(rid remoteid.RemoteId, allowPrerelea
 
 	tag, _, err := p.Client.LatestRelease(rid.Owner, rid.Repo)
 	if err != nil {
-		return nil, fmt.Errorf("github: failed to get latest release: %w", err)
+		// Fall back to tags if no releases exist
+		tag, err = p.Client.LatestTag(rid.Owner, rid.Repo)
+		if err != nil {
+			return nil, fmt.Errorf("github: failed to get latest release or tag: %w", err)
+		}
 	}
 
 	if tag == "" {
-		return nil, fmt.Errorf("github: no releases found for %s/%s", rid.Owner, rid.Repo)
+		return nil, fmt.Errorf("github: no releases or tags found for %s/%s", rid.Owner, rid.Repo)
 	}
 
 	// Normalize the tag (strip v prefix)

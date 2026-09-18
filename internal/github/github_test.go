@@ -26,17 +26,17 @@ func TestNewClientWithRunner(t *testing.T) {
 
 func TestLatestRelease(t *testing.T) {
 	stub := NewStubRunner()
-	releaseOutput := struct {
+	releaseOutput := []struct {
 		TagName string `json:"tagName"`
-		URL     string `json:"url"`
-	}{
+		Name    string `json:"name"`
+	}{{
 		TagName: "v1.2.3",
-		URL:     "https://github.com/owner/repo/releases/tag/v1.2.3",
-	}
+		Name:    "Release v1.2.3",
+	}}
 
 	outJSON, _ := json.Marshal(releaseOutput)
-	// The command is: gh release view --limit 1 --json tagName,url
-	stub.Outputs["gh release view --limit 1 --json tagName,url"] = outJSON
+	// The command is: gh release list --limit 1 --json tagName,name --repo owner/repo
+	stub.Outputs["gh release list --limit 1 --json tagName,name --repo owner/repo"] = outJSON
 
 	c := NewClientWithRunner(stub)
 	tag, url, err := c.LatestRelease("owner", "repo")
@@ -53,7 +53,7 @@ func TestLatestRelease(t *testing.T) {
 
 func TestLatestRelease_NoOutput(t *testing.T) {
 	stub := NewStubRunner()
-	stub.Outputs["gh release view --limit 1 --json tagName,url"] = []byte("")
+	stub.Outputs["gh release list --limit 1 --json tagName,name --repo owner/repo"] = []byte("[]")
 
 	c := NewClientWithRunner(stub)
 	_, _, err := c.LatestRelease("owner", "repo")
@@ -64,7 +64,7 @@ func TestLatestRelease_NoOutput(t *testing.T) {
 
 func TestLatestRelease_GHError(t *testing.T) {
 	stub := NewStubRunner()
-	stub.Errors["gh release view --limit 1 --json tagName,url"] = &exec.ExitError{}
+	stub.Errors["gh release list --limit 1 --json tagName,name --repo owner/repo"] = &exec.ExitError{}
 
 	c := NewClientWithRunner(stub)
 	_, _, err := c.LatestRelease("owner", "repo")
@@ -75,16 +75,16 @@ func TestLatestRelease_GHError(t *testing.T) {
 
 func TestLatestRelease_ParsesJSON(t *testing.T) {
 	stub := NewStubRunner()
-	releaseOutput := struct {
+	releaseOutput := []struct {
 		TagName string `json:"tagName"`
-		URL     string `json:"url"`
-	}{
+		Name    string `json:"name"`
+	}{{
 		TagName: "v2.0.0",
-		URL:     "https://github.com/owner/repo/releases/tag/v2.0.0",
-	}
+		Name:    "Release v2.0.0",
+	}}
 
 	outJSON, _ := json.Marshal(releaseOutput)
-	stub.Outputs["gh release view --limit 1 --json tagName,url"] = outJSON
+	stub.Outputs["gh release list --limit 1 --json tagName,name --repo test-owner/test-repo"] = outJSON
 
 	c := NewClientWithRunner(stub)
 	tag, url, err := c.LatestRelease("test-owner", "test-repo")
@@ -94,15 +94,15 @@ func TestLatestRelease_ParsesJSON(t *testing.T) {
 	if tag != "v2.0.0" {
 		t.Errorf("tag = %q, want v2.0.0", tag)
 	}
-	if url != "https://github.com/owner/repo/releases/tag/v2.0.0" {
-		t.Errorf("url = %q, want https://github.com/owner/repo/releases/tag/v2.0.0", url)
+	if url != "https://github.com/test-owner/test-repo/releases/tag/v2.0.0" {
+		t.Errorf("url = %q, want https://github.com/test-owner/test-repo/releases/tag/v2.0.0", url)
 	}
 }
 
 func TestLatestRelease_MalformedJSON(t *testing.T) {
 	stub := NewStubRunner()
 	// Invalid JSON
-	stub.Outputs["gh release view --limit 1 --json tagName,url"] = []byte("not valid json")
+	stub.Outputs["gh release list --limit 1 --json tagName,name --repo owner/repo"] = []byte("not valid json")
 
 	c := NewClientWithRunner(stub)
 	_, _, err := c.LatestRelease("owner", "repo")

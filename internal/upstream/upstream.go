@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -33,15 +34,16 @@ func CheckUpstream(ei *ebuild.EbuildInfo, registry *provider.ProviderRegistry, a
 	// Check for live version (9999)
 	if isLiveVersion(ei.PVVal) {
 		return &UpstreamResult{
-			Package: fmt.Sprintf("%s/%s", ei.Category, ei.Pkg),
-			Current: ei.PVVal,
-			Latest:  "",
-			Status:  StatusLive,
+			Package:     fmt.Sprintf("%s/%s", ei.Category, ei.Pkg),
+			Current:     "",
+			Latest:      "",
+			Status:      StatusLive,
+			SourceLabel: "",
 		}, true, nil
 	}
 
-	// Detect package type from SRC_URI
-	providerType := detectProviderFromSRCURI(ei.SRC_URI)
+	// Detect package type from SRC_URI and HOMEPAGE
+	providerType := detectProviderFromSRCURI(ei.SRC_URI, ei.HOMEPAGE)
 	if providerType == "" {
 		// Try to resolve from SRC_URI URL patterns
 		providerType = string(providers.ResolveProviderFromURL(ei.SRC_URI))
@@ -76,6 +78,7 @@ func CheckUpstream(ei *ebuild.EbuildInfo, registry *provider.ProviderRegistry, a
 		currentV, _ := version.Parse(ei.PVVal)
 		result := buildResult(ei, cachedV, currentV, rid.Type)
 		result.Source = resolveSourceURL(rid)
+		result.SourceLabel = resolveSourceLabel(rid)
 		return result, true, nil
 	}
 
@@ -85,11 +88,12 @@ func CheckUpstream(ei *ebuild.EbuildInfo, registry *provider.ProviderRegistry, a
 	p, err := registry.Resolve(remoteid.RemoteId{Type: ridType, Name: rid.Name, Owner: rid.Owner, Repo: rid.Repo})
 	if err != nil {
 		return &UpstreamResult{
-			Package: fmt.Sprintf("%s/%s", ei.Category, ei.Pkg),
-			Current: ei.PVVal,
-			Latest:  "",
-			Status:  StatusUnknown,
-			Error:   fmt.Sprintf("no provider for %s", providerType),
+			Package:     fmt.Sprintf("%s/%s", ei.Category, ei.Pkg),
+			Current:     ei.PVVal,
+			Latest:      "",
+			Status:      StatusUnknown,
+			SourceLabel: "unknown",
+			Error:       fmt.Sprintf("no provider for %s", providerType),
 		}, true, nil
 	}
 
@@ -97,12 +101,19 @@ func CheckUpstream(ei *ebuild.EbuildInfo, registry *provider.ProviderRegistry, a
 	latestV, err := p.FetchLatestVersion(*rid, allowPrereleases)
 	if err != nil || latestV == nil {
 		// Provider returned an error or nil (e.g., package not found, prerelease filtered)
+		errMsg := ""
+		if err != nil {
+			errMsg = err.Error()
+		} else {
+			errMsg = "latestV is nil"
+		}
 		return &UpstreamResult{
-			Package: fmt.Sprintf("%s/%s", ei.Category, ei.Pkg),
-			Current: ei.PVVal,
-			Latest:  "",
-			Status:  StatusUnknown,
-			Error:   "prerelease filtered or unavailable",
+			Package:     fmt.Sprintf("%s/%s", ei.Category, ei.Pkg),
+			Current:     ei.PVVal,
+			Latest:      "",
+			Status:      StatusUnknown,
+			SourceLabel: resolveSourceLabel(rid),
+			Error:       errMsg,
 		}, true, nil
 	}
 
@@ -113,6 +124,7 @@ func CheckUpstream(ei *ebuild.EbuildInfo, registry *provider.ProviderRegistry, a
 	currentV, _ := version.Parse(ei.PVVal)
 	result := buildResult(ei, latestV, currentV, rid.Type)
 	result.Source = resolveSourceURL(rid)
+	result.SourceLabel = resolveSourceLabel(rid)
 
 	return result, true, nil
 }
@@ -129,10 +141,11 @@ func CheckUpstreamSimple(ei *ebuild.EbuildInfo, p provider.UpstreamProvider, all
 	// Check for live version
 	if isLiveVersion(ei.PVVal) {
 		return &UpstreamResult{
-			Package: fmt.Sprintf("%s/%s", ei.Category, ei.Pkg),
-			Current: ei.PVVal,
-			Latest:  "",
-			Status:  StatusLive,
+			Package:     fmt.Sprintf("%s/%s", ei.Category, ei.Pkg),
+			Current:     "",
+			Latest:      "",
+			Status:      StatusLive,
+			SourceLabel: "",
 		}, true, nil
 	}
 
@@ -221,26 +234,28 @@ func walkAndCheck(dir string, registry *provider.ProviderRegistry, allowPrerelea
 				if isLiveVersion(einfo.PVVal) {
 					results = append(results, UpstreamResult{
 						Package: fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg),
-						Current: einfo.PVVal,
+						Current: "",
 						Latest:  "",
 						Status:  StatusLive,
+						SourceLabel: "",
 					})
 					continue
 				}
 
-				// Detect provider from SRC_URI
-				providerType := detectProviderFromSRCURI(einfo.SRC_URI)
+				// Detect provider from SRC_URI and HOMEPAGE
+				providerType := detectProviderFromSRCURI(einfo.SRC_URI, einfo.HOMEPAGE)
 				if providerType == "" {
 					providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
 				}
 
 				if providerType == "" || providerType == "unknown" {
 					results = append(results, UpstreamResult{
-						Package: fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg),
-						Current: einfo.PVVal,
-						Latest:  "",
-						Status:  StatusUnknown,
-						Error:   "no provider match",
+						Package:     fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg),
+						Current:     einfo.PVVal,
+						Latest:      "",
+						Status:      StatusUnknown,
+						SourceLabel: "unknown",
+						Error:       "no provider match",
 					})
 					continue
 				}
@@ -249,11 +264,12 @@ func walkAndCheck(dir string, registry *provider.ProviderRegistry, allowPrerelea
 				rid, err := resolveRemoteId(einfo, providerType)
 				if err != nil {
 					results = append(results, UpstreamResult{
-						Package: fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg),
-						Current: einfo.PVVal,
-						Latest:  "",
-						Status:  StatusUnknown,
-						Error:   err.Error(),
+						Package:     fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg),
+						Current:     einfo.PVVal,
+						Latest:      "",
+						Status:      StatusUnknown,
+						SourceLabel: "unknown",
+						Error:       err.Error(),
 					})
 					continue
 				}
@@ -262,21 +278,24 @@ func walkAndCheck(dir string, registry *provider.ProviderRegistry, allowPrerelea
 				cacheKey := MakeKey(einfo.Category, einfo.Pkg, string(rid.Type), einfo.PVVal)
 				var latestV *version.Version
 				var sourceURL string
+				var sourceLabel string
 
 				if cachedVer, ok := cache.Get(cacheKey); ok {
 					latestV, _ = version.Parse(cachedVer)
 					sourceURL = resolveSourceURL(rid)
+					sourceLabel = resolveSourceLabel(rid)
 				} else if registry != nil {
 					// Resolve provider from registry
 					ridType := mapTypeToRemoteIdType(providerType)
 					p, err := registry.Resolve(remoteid.RemoteId{Type: ridType, Name: rid.Name, Owner: rid.Owner, Repo: rid.Repo})
 					if err != nil {
 						results = append(results, UpstreamResult{
-							Package: fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg),
-							Current: einfo.PVVal,
-							Latest:  "",
-							Status:  StatusUnknown,
-							Error:   fmt.Sprintf("no provider for %s", providerType),
+							Package:     fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg),
+							Current:     einfo.PVVal,
+							Latest:      "",
+							Status:      StatusUnknown,
+							SourceLabel: "unknown",
+							Error:       fmt.Sprintf("no provider for %s", providerType),
 						})
 						continue
 					}
@@ -284,11 +303,12 @@ func walkAndCheck(dir string, registry *provider.ProviderRegistry, allowPrerelea
 					latestV, err = p.FetchLatestVersion(*rid, allowPrereleases)
 					if err != nil {
 						results = append(results, UpstreamResult{
-							Package: fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg),
-							Current: einfo.PVVal,
-							Latest:  "",
-							Status:  StatusUnknown,
-							Error:   err.Error(),
+							Package:     fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg),
+							Current:     einfo.PVVal,
+							Latest:      "",
+							Status:      StatusUnknown,
+							SourceLabel: resolveSourceLabel(rid),
+							Error:       err.Error(),
 						})
 						continue
 					}
@@ -296,17 +316,20 @@ func walkAndCheck(dir string, registry *provider.ProviderRegistry, allowPrerelea
 					// Cache the result
 					cache.Set(cacheKey, latestV.Format())
 					sourceURL = resolveSourceURL(rid)
+					sourceLabel = resolveSourceLabel(rid)
 				} else {
 					// No registry — try to parse provider-specific logic
 					latestV, sourceURL = resolveVersionFromSRCURI(einfo, providerType, rid)
+					sourceLabel = resolveSourceLabel(rid)
 				}
 
 				if latestV == nil {
 					results = append(results, UpstreamResult{
-						Package: fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg),
-						Current: einfo.PVVal,
-						Latest:  "",
-						Status:  StatusUnknown,
+						Package:     fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg),
+						Current:     einfo.PVVal,
+						Latest:      "",
+						Status:      StatusUnknown,
+						SourceLabel: sourceLabel,
 						Error:   "could not resolve upstream version",
 					})
 					continue
@@ -315,6 +338,7 @@ func walkAndCheck(dir string, registry *provider.ProviderRegistry, allowPrerelea
 				currentV, _ := version.Parse(einfo.PVVal)
 				result := buildResult(einfo, latestV, currentV, rid.Type)
 				result.Source = sourceURL
+				result.SourceLabel = sourceLabel
 				results = append(results, *result)
 			}
 		} else {
@@ -329,17 +353,53 @@ func walkAndCheck(dir string, registry *provider.ProviderRegistry, allowPrerelea
 	return results, nil
 }
 
-// findEbuilds finds all .ebuild files in a directory.
+// findEbuilds finds all .ebuild files in a directory, returning only the
+// latest version of each package name. This avoids checking every historical
+// ebuild, which would be slow and produce duplicate results.
 func findEbuilds(dir string) ([]string, error) {
-	var ebuilds []string
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
+
+	// Group by package name (filename without version), keeping latest version
+	type namedVersion struct {
+		name string
+		ver  *version.Version
+		path string
+	}
+	best := make(map[string]*namedVersion) // pkgName -> best version
+
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".ebuild") {
-			ebuilds = append(ebuilds, filepath.Join(dir, entry.Name()))
+			pv := strings.TrimSuffix(entry.Name(), ".ebuild")
+			// Extract package name: everything before the last "-<version>"
+			idx := strings.LastIndex(pv, "-")
+			if idx <= 0 {
+				continue
+			}
+			pkgName := pv[:idx]
+			pvStr := pv[idx+1:]
+
+			parsed, err := version.Parse(pvStr)
+			if err != nil {
+				continue
+			}
+
+			if cur, ok := best[pkgName]; ok {
+				if parsed.Compare(cur.ver) > 0 {
+					best[pkgName] = &namedVersion{name: pkgName, ver: parsed, path: filepath.Join(dir, entry.Name())}
+				}
+			} else {
+				best[pkgName] = &namedVersion{name: pkgName, ver: parsed, path: filepath.Join(dir, entry.Name())}
+			}
 		}
+	}
+
+	// Collect the best (latest) ebuild for each package
+	var ebuilds []string
+	for _, nv := range best {
+		ebuilds = append(ebuilds, nv.path)
 	}
 	return ebuilds, nil
 }
@@ -387,28 +447,29 @@ func parseEbuildInfo(path string) (*ebuild.EbuildInfo, error) {
 }
 
 // extractVar extracts a variable value from ebuild content.
+// Only matches variables at the start of a line (after optional whitespace).
 func extractVar(content, name string) string {
-	// Handle both VAR="value" and VAR='value'
-	for _, quote := range []string{"\"", "'"} {
-		prefix := name + "=" + quote
-		idx := strings.Index(content, prefix)
-		if idx >= 0 {
-			start := idx + len(prefix)
-			end := strings.Index(content[start:], quote)
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, name+"=") {
+			continue
+		}
+		valuePart := strings.TrimSpace(trimmed[len(name)+1:])
+		if len(valuePart) >= 2 && (valuePart[0] == '"' || valuePart[0] == '\'') {
+			quote := valuePart[0]
+			end := strings.Index(valuePart[1:], string(quote))
 			if end >= 0 {
-				return content[start : start+end]
+				return valuePart[1 : 1+end]
 			}
 		}
-	}
-	// Handle unquoted: VAR=value
-	idx := strings.Index(content, name+"=")
-	if idx >= 0 {
-		start := idx + len(name) + 1
-		end := start
-		for end < len(content) && content[end] != '\n' && content[end] != ' ' && content[end] != '\t' {
-			end++
+		end := strings.IndexAny(valuePart, " \t\n")
+		if end > 0 {
+			return valuePart[:end]
 		}
-		return content[start:end]
+		if len(valuePart) > 0 {
+			return valuePart
+		}
 	}
 	return ""
 }
@@ -498,6 +559,8 @@ func extractInherit(content string) []string {
 	return nil
 }
 
+
+
 // shouldSkip checks if a category should be skipped.
 // Returns (skip, isSkipRule).
 func shouldSkip(category string) (bool, bool) {
@@ -512,24 +575,35 @@ func isLiveVersion(pv string) bool {
 	return pv == "9999" || strings.HasSuffix(pv, "-9999")
 }
 
-// detectProviderFromSRCURI detects the provider type from SRC_URI.
-func detectProviderFromSRCURI(srcURI string) string {
-	switch {
-	case strings.Contains(srcURI, "mirror://pypi/"):
-		return "pypi"
-	case strings.Contains(srcURI, "mirror://npm/"):
-		return "npm"
-	case strings.Contains(srcURI, "mirror://github/"):
-		return "github"
-	case strings.Contains(srcURI, "mirror://gitlab/"):
-		return "gitlab"
-	case strings.Contains(srcURI, "mirror://codeberg/"):
-		return "codeberg"
-	case strings.Contains(srcURI, "mirror://sourcehut/"):
-		return "sourcehut"
-	default:
-		return ""
+// detectProviderFromSRCURI detects the provider type from SRC_URI and HOMEPAGE.
+// It handles both mirror:// URIs and direct URLs (https://github.com/... etc).
+func detectProviderFromSRCURI(srcURI string, homepage string) string {
+	// Check SRC_URI first, then HOMEPAGE
+	for _, text := range []string{srcURI, homepage} {
+		switch {
+		case strings.Contains(text, "mirror://pypi/"):
+			return "pypi"
+		case strings.Contains(text, "mirror://npm/"):
+			return "npm"
+		case strings.Contains(text, "mirror://github/") || strings.Contains(text, "mirror://github.com/"):
+			return "github"
+		case strings.Contains(text, "mirror://gitlab/") || strings.Contains(text, "mirror://gitlab.com/"):
+			return "gitlab"
+		case strings.Contains(text, "mirror://codeberg/"):
+			return "codeberg"
+		case strings.Contains(text, "mirror://sourcehut/"):
+			return "sourcehut"
+		case strings.Contains(text, "github.com/"):
+			return "github"
+		case strings.Contains(text, "gitlab.com/") || strings.Contains(text, "gitlab."):
+			return "gitlab"
+		case strings.Contains(text, "codeberg.org/"):
+			return "codeberg"
+		case strings.Contains(text, "sr.ht") || strings.Contains(text, "sourcehut"):
+			return "sourcehut"
+		}
 	}
+	return ""
 }
 
 // mapTypeToRemoteIdType maps an ebuild package type to a RemoteIdType.
@@ -552,29 +626,106 @@ func mapTypeToRemoteIdType(pkgType string) remoteid.RemoteIdType {
 	}
 }
 
-// resolveRemoteId extracts a RemoteId from ebuild SRC_URI.
+// resolveRemoteId extracts a RemoteId from ebuild SRC_URI/HOMEPAGE.
 func resolveRemoteId(ei *ebuild.EbuildInfo, providerType string) (*remoteid.RemoteId, error) {
 	switch providerType {
 	case "pypi":
-		// PyPI: use package name
 		return &remoteid.RemoteId{
 			Type: remoteid.TypePyPI,
 			Name: ei.Pkg,
 		}, nil
 	case "npm":
-		// NPM: use package name
 		return &remoteid.RemoteId{
 			Type: remoteid.TypeNPM,
 			Name: ei.Pkg,
 		}, nil
 	case "github":
-		// GitHub: try to extract owner/repo from SRC_URI
+		owner, repo := extractRepoFromURLs(ei.SRC_URI, ei.HOMEPAGE, "github.com")
 		return &remoteid.RemoteId{
-			Type: remoteid.TypeGitHub,
-			Name: ei.Pkg,
+			Type:  remoteid.TypeGitHub,
+			Owner: owner,
+			Repo:  repo,
+		}, nil
+	case "gitlab":
+		host, path := extractRepoFromURLs(ei.SRC_URI, ei.HOMEPAGE, "gitlab")
+		return &remoteid.RemoteId{
+			Type: remoteid.TypeGitLab,
+			Host: host,
+			Path: "/" + path,
+		}, nil
+	case "codeberg":
+		owner, repo := extractRepoFromURLs(ei.SRC_URI, ei.HOMEPAGE, "codeberg.org")
+		return &remoteid.RemoteId{
+			Type:  remoteid.TypeCodeberg,
+			Owner: owner,
+			Repo:  repo,
+		}, nil
+	case "sourcehut":
+		host, path := extractRepoFromURLs(ei.SRC_URI, ei.HOMEPAGE, "sr.ht")
+		return &remoteid.RemoteId{
+			Type: remoteid.TypeSourceHut,
+			Host: host,
+			Path: "/" + path,
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown provider type: %s", providerType)
+	}
+}
+
+// extractRepoFromURLs extracts owner/repo (or host/path) from SRC_URI and HOMEPAGE.
+// It looks for URLs matching the given domain pattern.
+func extractRepoFromURLs(srcURI, homepage, domain string) (string, string) {
+	for _, text := range []string{srcURI, homepage} {
+		owner, repo := extractOwnerRepo(text, domain)
+		if owner != "" && repo != "" {
+			return owner, repo
+		}
+	}
+	return "", ""
+}
+
+// extractOwnerRepo extracts owner/repo from text containing URLs with the given domain.
+func extractOwnerRepo(text, domain string) (string, string) {
+	// Look for URLs like https://domain.com/owner/repo or mirror://domain/owner/repo
+	// Pattern: domain followed by /owner/repo (exactly 2 path segments)
+	pattern := domain + "/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)"
+	re := regexp.MustCompile(pattern)
+	matches := re.FindStringSubmatch(text)
+	if len(matches) >= 3 {
+		return matches[1], matches[2]
+	}
+	return "", ""
+}
+
+// resolveSourceLabel builds a short source label like "GitHub:owner/repo" or "PyPI:name".
+func resolveSourceLabel(rid *remoteid.RemoteId) string {
+	switch rid.Type {
+	case remoteid.TypePyPI:
+		return "PyPI:" + rid.Name
+	case remoteid.TypeNPM:
+		return "npm:" + rid.Name
+	case remoteid.TypeGitHub:
+		if rid.Owner != "" && rid.Repo != "" {
+			return "GitHub:" + rid.Owner + "/" + rid.Repo
+		}
+		return "GitHub:"
+	case remoteid.TypeGitLab:
+		if rid.Host != "" && rid.Path != "" {
+			return "GitLab:" + rid.Host + rid.Path
+		}
+		return "GitLab:"
+	case remoteid.TypeCodeberg:
+		if rid.Owner != "" && rid.Repo != "" {
+			return "Codeberg:" + rid.Owner + "/" + rid.Repo
+		}
+		return "Codeberg:"
+	case remoteid.TypeSourceHut:
+		if rid.Host != "" && rid.Path != "" {
+			return "Sourcehut:" + rid.Host + rid.Path
+		}
+		return "Sourcehut:"
+	default:
+		return "unknown"
 	}
 }
 
@@ -699,15 +850,16 @@ func walkAndCheckCategories(dir string, registry *provider.ProviderRegistry, cat
 			if isLiveVersion(einfo.PVVal) {
 				results = append(results, UpstreamResult{
 					Package: fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg),
-					Current: einfo.PVVal,
+					Current: "",
 					Latest:  "",
 					Status:  StatusLive,
+					SourceLabel: "",
 				})
 				continue
 			}
 
-			// Detect provider
-			providerType := detectProviderFromSRCURI(einfo.SRC_URI)
+			// Detect provider from SRC_URI and HOMEPAGE
+			providerType := detectProviderFromSRCURI(einfo.SRC_URI, einfo.HOMEPAGE)
 			if providerType == "" {
 				providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
 			}
@@ -739,11 +891,12 @@ func walkAndCheckCategories(dir string, registry *provider.ProviderRegistry, cat
 			// Check cache
 			cacheKey := MakeKey(einfo.Category, einfo.Pkg, string(rid.Type), einfo.PVVal)
 			var latestV *version.Version
-			var sourceURL string
+			var sourceURL, sourceLabel string
 
 			if cachedVer, ok := cache.Get(cacheKey); ok {
 				latestV, _ = version.Parse(cachedVer)
 				sourceURL = resolveSourceURL(rid)
+				sourceLabel = resolveSourceLabel(rid)
 			} else if registry != nil {
 				ridType := mapTypeToRemoteIdType(providerType)
 				p, err := registry.Resolve(remoteid.RemoteId{Type: ridType, Name: rid.Name, Owner: rid.Owner, Repo: rid.Repo})
@@ -772,8 +925,10 @@ func walkAndCheckCategories(dir string, registry *provider.ProviderRegistry, cat
 
 				cache.Set(cacheKey, latestV.Format())
 				sourceURL = resolveSourceURL(rid)
+				sourceLabel = resolveSourceLabel(rid)
 			} else {
 				latestV, sourceURL = resolveVersionFromSRCURI(einfo, providerType, rid)
+				sourceLabel = resolveSourceLabel(rid)
 			}
 
 			if latestV == nil {
@@ -790,6 +945,7 @@ func walkAndCheckCategories(dir string, registry *provider.ProviderRegistry, cat
 			currentV, _ := version.Parse(einfo.PVVal)
 			result := buildResult(einfo, latestV, currentV, rid.Type)
 			result.Source = sourceURL
+			result.SourceLabel = sourceLabel
 			results = append(results, *result)
 		}
 		} else {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"bennypowers.dev/larry/internal/git"
@@ -91,23 +92,52 @@ func (c *Client) Runner() CmdRunner {
 func (c *Client) LatestRelease(owner, repo string) (tag, url string, err error) {
 	output, err := c.gh(
 		"release",
-		"view",
+		"list",
 		"--limit", "1",
-		"--json", "tagName,url",
+		"--json", "tagName,name",
+		"--repo", owner+"/"+repo,
 	)
 	if err != nil {
-		return "", "", fmt.Errorf("gh release view: %w", err)
+		return "", "", fmt.Errorf("gh release list: %w", err)
 	}
 
-	var result struct {
+	// gh release list returns a JSON array
+	var results []struct {
 		TagName string `json:"tagName"`
-		URL     string `json:"url"`
+		Name    string `json:"name"`
 	}
-	if err := json.Unmarshal(output, &result); err != nil {
-		return "", "", fmt.Errorf("parse gh release view output: %w", err)
+	if err := json.Unmarshal(output, &results); err != nil {
+		return "", "", fmt.Errorf("parse gh release list output: %w", err)
+	}
+	if len(results) == 0 {
+		return "", "", fmt.Errorf("no releases found for %s/%s", owner, repo)
 	}
 
-	return result.TagName, result.URL, nil
+	tag = results[0].TagName
+	if tag == "" {
+		return "", "", fmt.Errorf("no releases found for %s/%s", owner, repo)
+	}
+	// Construct URL from tag name
+	url = "https://github.com/" + owner + "/" + repo + "/releases/tag/" + tag
+	return tag, url, nil
+}
+
+// LatestTag gets the latest tag name from GitHub (fallback when no releases exist).
+func (c *Client) LatestTag(owner, repo string) (string, error) {
+	// Use gh api to list tags sorted by date
+	output, err := c.gh(
+		"api",
+		"repos/"+owner+"/"+repo+"/tags?per_page=1&sort=updated",
+		"--jq", ".[0].name",
+	)
+	if err != nil {
+		return "", fmt.Errorf("gh api tags: %w", err)
+	}
+	tag := strings.TrimSpace(string(output))
+	if tag == "" {
+		return "", fmt.Errorf("no tags found for %s/%s", owner, repo)
+	}
+	return tag, nil
 }
 
 // EnsureRelease ensures a GitHub release exists for the given tag.

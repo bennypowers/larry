@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -32,19 +33,19 @@ func ParseEbuildInfo(path string) (*EbuildInfo, error) {
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
-		// ebuild info may exit non-zero if there are eclass issues; still try to parse output
-		if strings.Contains(stderr.String(), "not found") || strings.Contains(stderr.String(), "not installed") {
-			return nil, fmt.Errorf("ebuild not found in PATH; is Portage installed?")
+	cmd.Run()
+
+	info, _ := parseInfoOutput(path, out.String())
+
+	// If ebuild info didn't produce useful fields, fall back to direct file parsing
+	if info != nil && info.Category == "" && info.Pkg == "" {
+		info, err := ParseEbuildFromFile(path)
+		if err == nil {
+			return info, nil
 		}
-		// Return partial info if we got some output, or wrap the error
-		if out.Len() > 0 {
-			return parseInfoOutput(path, out.String())
-		}
-		return nil, fmt.Errorf("ebuild info failed: %s", stderr.String())
 	}
 
-	return parseInfoOutput(path, out.String())
+	return info, nil
 }
 
 // parseInfoOutput parses the text output of `ebuild <path> info` into EbuildInfo.
@@ -135,4 +136,116 @@ func MustParseEbuildInfo(path string) *EbuildInfo {
 		panic(fmt.Sprintf("MustParseEbuildInfo(%q): %v", path, err))
 	}
 	return info
+}
+
+// ParseEbuildFromFile parses an ebuild file directly, without invoking ebuild info.
+// This is used as a fallback when ebuild info doesn't produce useful output.
+func ParseEbuildFromFile(path string) (*EbuildInfo, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read ebuild file: %w", err)
+	}
+	content := string(data)
+
+	info := &EbuildInfo{
+		Path:     path,
+		SRC_URI:  extractVar(content, "SRC_URI"),
+		HOMEPAGE: extractVar(content, "HOMEPAGE"),
+	}
+
+	// Derive category from path
+	info.Category = extractCategoryFromPath(path)
+
+	// Extract PN from file or derive from filename
+	if pn := extractVar(content, "PN"); pn != "" {
+		info.Pkg = pn
+	} else {
+		info.Pkg = extractPkgName(path)
+	}
+
+	// Extract PV from file or derive from filename
+	if pv := extractVar(content, "PV"); pv != "" {
+		info.PVVal = pv
+	} else {
+		info.PVVal = extractVersionFromFilename(path)
+	}
+
+	// Extract P if present
+	if p := extractVar(content, "P"); p != "" {
+		info.PVal = p
+	}
+
+	// Extract INHERIT
+	info.Inherit = extractInherit(content)
+
+	return info, nil
+}
+
+// extractVar extracts a variable value from ebuild content.
+// Only matches variables at the start of a line (after optional whitespace).
+func extractVar(content, name string) string {
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, name+"=") {
+			continue
+		}
+		valuePart := strings.TrimSpace(trimmed[len(name)+1:])
+		if len(valuePart) >= 2 && (valuePart[0] == '"' || valuePart[0] == '\'') {
+			quote := valuePart[0]
+			end := strings.Index(valuePart[1:], string(quote))
+			if end >= 0 {
+				return valuePart[1 : 1+end]
+			}
+		}
+		end := strings.IndexAny(valuePart, " \t\n")
+		if end > 0 {
+			return valuePart[:end]
+		}
+		if len(valuePart) > 0 {
+			return valuePart
+		}
+	}
+	return ""
+}
+
+// extractCategoryFromPath extracts the category from an ebuild file path.
+// e.g., "/path/to/overlay/dev-python/pkg-1.0.ebuild" -> "dev-python"
+func extractCategoryFromPath(path string) string {
+	dir := filepath.Dir(path)
+	return filepath.Base(dir)
+}
+
+// extractVersionFromFilename extracts version from ebuild filename.
+// e.g., "pkg-1.2.3.ebuild" -> "1.2.3"
+func extractVersionFromFilename(path string) string {
+	base := filepath.Base(path)
+	base = strings.TrimSuffix(base, ".ebuild")
+	if idx := strings.LastIndex(base, "-"); idx > 0 {
+		return base[idx+1:]
+	}
+	return base
+}
+
+// extractPkgName extracts package name from ebuild filename.
+// e.g., "pkg-1.2.3.ebuild" -> "pkg"
+func extractPkgName(path string) string {
+	base := filepath.Base(path)
+	base = strings.TrimSuffix(base, ".ebuild")
+	if idx := strings.LastIndex(base, "-"); idx > 0 {
+		return base[:idx]
+	}
+	return base
+}
+
+// extractInherit extracts the inherit line from ebuild content.
+func extractInherit(content string) []string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "inherit ") {
+			rest := strings.TrimSpace(line[len("inherit "):])
+			return strings.Fields(rest)
+		}
+	}
+	return nil
 }

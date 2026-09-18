@@ -89,7 +89,7 @@ func buildDepNode(atom, ebuildCat, ebuildPkg string, registry *provider.Provider
 	}
 
 	if registry != nil {
-		providerType := detectProviderFromSRCURI(depEbuild.SRC_URI)
+		providerType := detectProviderFromSRCURI(depEbuild.SRC_URI, depEbuild.HOMEPAGE)
 		if providerType == "" {
 			providerType = string(providers.ResolveProviderFromURL(depEbuild.SRC_URI))
 		}

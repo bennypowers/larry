@@ -555,28 +555,28 @@ SLOT="0"
 // --- Helper function tests ---
 
 func TestDetectProviderFromSRCURI_PyPI(t *testing.T) {
-	tType := detectProviderFromSRCURI("mirror://pypi/requests/requests-1.0.0.tar.gz")
+	tType := detectProviderFromSRCURI("mirror://pypi/requests/requests-1.0.0.tar.gz", "")
 	if tType != "pypi" {
 		t.Fatalf("expected pypi, got %s", tType)
 	}
 }
 
 func TestDetectProviderFromSRCURI_NPM(t *testing.T) {
-	tType := detectProviderFromSRCURI("mirror://npm/myapp/myapp-1.0.0.tgz")
+	tType := detectProviderFromSRCURI("mirror://npm/myapp/myapp-1.0.0.tgz", "")
 	if tType != "npm" {
 		t.Fatalf("expected npm, got %s", tType)
 	}
 }
 
 func TestDetectProviderFromSRCURI_GitHub(t *testing.T) {
-	tType := detectProviderFromSRCURI("mirror://github/owner/repo/archive/v1.0.0.tar.gz")
+	tType := detectProviderFromSRCURI("mirror://github/owner/repo/archive/v1.0.0.tar.gz", "")
 	if tType != "github" {
 		t.Fatalf("expected github, got %s", tType)
 	}
 }
 
 func TestDetectProviderFromSRCURI_Generic(t *testing.T) {
-	tType := detectProviderFromSRCURI("https://example.com/pkg-1.0.0.tar.gz")
+	tType := detectProviderFromSRCURI("https://example.com/pkg-1.0.0.tar.gz", "")
 	if tType != "" {
 		t.Fatalf("expected empty for generic, got %s", tType)
 	}

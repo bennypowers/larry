@@ -12,15 +12,6 @@ GOFLAGS   := -trimpath -mod=readonly
 # Test coverage
 COVERAGE  := -coverprofile=coverage.out
 
-.PHONY: test
-test:
-	$(GO) test $(GOFLAGS) -v ./...
-
-.PHONY: test-coverage
-test-coverage:
-	$(GO) test $(GOFLAGS) -v $(COVERAGE) ./...
-	$(GO) tool cover -html=coverage.out -o coverage.html
-
 .PHONY: build
 build:
 	$(GO) build $(GOFLAGS) $(LDFLAGS) -o $(BINARY) ./cmd/larry
@@ -34,6 +25,15 @@ lint:
 	@command -v govet >/dev/null 2>&1 || { echo "go vet not found"; exit 1; }
 	$(GO) vet $(GOFLAGS) ./...
 	@command -v staticcheck >/dev/null 2>&1 && staticcheck ./... || echo "staticcheck not available, skipping"
+
+.PHONY: test
+test:
+	$(GO) test $(GOFLAGS) -v ./...
+
+.PHONY: test-coverage
+test-coverage:
+	$(GO) test $(GOFLAGS) -v $(COVERAGE) ./...
+	$(GO) tool cover -html=coverage.out -o coverage.html
 
 .PHONY: tidy
 tidy:
