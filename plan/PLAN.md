@@ -65,8 +65,8 @@
 | 8 | Import command | `08-PLAN-IMPORT.md` | ✅ |
 | 9 | Test: local mode | `09-PLAN-TEST.md#T20` | ✅ |
 | 9b | Test: podman container mode + Containerfile | `09-PLAN-TEST.md#T21` | ✅ |
-| 10 | TUI (bubbletea progress + results) | `10-PLAN-TUI.md` | 🔴 |
-| 11 | Polish (integration tests, docs, packaging) | `11-PLAN-POLISH.md` | 🔴 |
+| 10 | TUI (bubbletea progress + results) | `10-PLAN-TUI.md` | ✅ |
+| 11 | Polish (integration tests, docs, packaging) | `11-PLAN-POLISH.md` | ✅ |
 
 ## Key Dependencies
 

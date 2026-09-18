@@ -2,6 +2,7 @@ package git
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -132,6 +133,25 @@ func (r *Repo) ListTagsSorted() ([]TagInfo, error) {
 		result[i].Hash = t.hash
 	}
 	return result, nil
+}
+
+// ResolveOverlayDir finds the root of the git repository containing
+// the current working directory. Returns the absolute path, or an error
+// if not inside a git repository.
+func ResolveOverlayDir() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	repo, err := Open(cwd)
+	if err != nil {
+		return "", err
+	}
+	w, err := repo.Worktree()
+	if err != nil {
+		return "", err
+	}
+	return w.Filesystem.Root(), nil
 }
 
 // ResolveTag resolves a tag name to its commit hash.
@@ -294,6 +314,11 @@ func (r *Repo) CommitByTag(tag string) (string, error) {
 		return "", err
 	}
 	return hash.String(), nil
+}
+
+// Worktree returns the worktree for this repository.
+func (r *Repo) Worktree() (*git.Worktree, error) {
+	return r.repo.Worktree()
 }
 
 // HasRemote checks if the repository has a remote with the given name.

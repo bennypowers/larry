@@ -1,8 +1,13 @@
 package prepare
 
 import (
+	"bufio"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
 )
 
 // manifestRunner returns the manifest command path (pkgdev or ebuild).
@@ -32,7 +37,13 @@ func runManifest(path, distdir string) error {
 	if cmd.Stderr != nil {
 		cmd.Stderr = os.Stderr
 	}
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("manifest: %w", err)
+	}
+
+	// Verify manifest validity: check the Manifest file exists and has
+	// valid entries matching the ebuild's distfiles.
+	return verifyManifestValid(path)
 }
 
 // runManifestCmd is an internal helper that runs manifest without TUI piping.
@@ -58,4 +69,37 @@ func GetManifestArgs(path, distdir string) []string {
 // RunManifestCommand is the exported version of runManifest.
 func RunManifestCommand(path, distdir string) error {
 	return runManifest(path, distdir)
+}
+
+// verifyManifestValid checks that the Manifest file for the given ebuild
+// exists and contains valid entries for all declared distfiles.
+func verifyManifestValid(ebuildPath string) error {
+	manifestPath := filepath.Join(filepath.Dir(ebuildPath), "Manifest")
+
+	// Check Manifest file exists
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		return fmt.Errorf("manifest file not found: %s", manifestPath)
+	}
+
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return fmt.Errorf("read manifest: %w", err)
+	}
+
+	// Count valid DIST entries: DIST filename <32-char hash> ...
+	entryRe := regexp.MustCompile(`^DIST\s+\S+\s+[a-f0-9]{32,}`)
+	entries := 0
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		if entryRe.MatchString(scanner.Text()) {
+			entries++
+		}
+	}
+
+	// A valid Manifest must have at least one DIST entry
+	if entries == 0 {
+		return fmt.Errorf("manifest has no valid DIST entries")
+	}
+
+	return nil
 }

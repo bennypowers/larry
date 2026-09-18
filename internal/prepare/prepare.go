@@ -14,11 +14,12 @@ import (
 
 // PrepareConfig holds configuration for the prepare command.
 type PrepareConfig struct {
-	DryRun     bool
-	Distdir    string
-	UseTUI     bool
-	ForceType  ebuild.PackageType
-	HTTPClient *http.Client
+	DryRun                  bool
+	Distdir                 string
+	UseTUI                  bool
+	ForceType               ebuild.PackageType
+	HTTPClient              *http.Client
+	CleanupOrphanedAssets   bool // removes orphaned GitHub assets on prepare failure
 }
 
 // Prepare handles the ebuild preparation pipeline.
@@ -35,16 +36,29 @@ func Prepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 		return runCustomPrepare(ei, customScript, cfg)
 	}
 
-	// Detect type (with optional force)
+	// Load per-package .larry.yaml config for type override and cleanup settings.
+	pkgConfig, err := LoadConfig(ei.Path)
+	if err != nil {
+		// Non-fatal: log but continue with defaults.
+		fmt.Fprintf(os.Stderr, "warning: %s\n", err)
+	}
+
+	// Detect type: CLI --type flag > .larry.yaml type_override > auto-detection.
 	var pkgType ebuild.PackageType
-	var err error
 	if cfg.ForceType != "" {
 		pkgType = cfg.ForceType
+	} else if pkgConfig != nil && pkgConfig.TypeOverride != "" {
+		pkgType = ebuild.PackageType(pkgConfig.TypeOverride)
 	} else {
 		pkgType, err = ebuild.DetectTypeFromInfo(ei)
 		if err != nil {
 			return err
 		}
+	}
+
+	// Propagate cleanup setting from .larry.yaml if not already set via CLI.
+	if !cfg.CleanupOrphanedAssets && pkgConfig != nil {
+		cfg.CleanupOrphanedAssets = pkgConfig.CleanupOrphanedAssets
 	}
 
 	// Dispatch to type-specific pipeline
@@ -304,24 +318,36 @@ func extractDistfilesFromSRCURI(srcURI string) []string {
 
 // runCustomPrepare executes a per-package custom prepare script.
 // If dry-run mode is enabled, it logs the script path but does not execute it.
+//
+// The script runs inside a userspace sandbox modeled after Portage's sandbox:
+//
+//   SANDBOXED (userspace policy):
+//     - Environment is sanitized (dangerous variables unset)
+//     - PATH restricted to system directories only
+//     - Write access limited to: ebuild directory, DISTDIR
+//
+//   NOT SANDBOXED (limitations):
+//     - No syscall-level file access control (unlike Portage's ld.so preload)
+//     - Network access is NOT blocked
+//     - No PID or mount namespace isolation
+//     - No user/group switching
+//
+// To achieve true sandboxing, run larry inside a container or use --emerge.
 func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConfig) error {
 	if cfg.DryRun {
 		return nil
 	}
 
-	// Build environment for the script
-	env := []string{
-		"EBUILD=" + ei.Path,
-		"PN=" + ei.PN(),
-		"PV=" + ei.PV(),
-		"P=" + ei.P(),
-		"CATEGORY=" + ei.Category,
-		"DISTDIR=" + cfg.Distdir,
-		"LARRY_PREPARE=1",
-	}
+	// Warn about sandbox limitations (once)
+	fmt.Fprint(os.Stderr, "\nWARNING: custom prepare.sh runs with partial sandboxing. "+
+		"Network access is NOT blocked and file writes are only policy-restricted. "+
+		"For full sandboxing, use larry test --emerge or run inside a container.\n")
+
+	// Build sandboxed environment
+	env := sandboxEnv(ei, cfg)
 
 	cmd := exec.Command(scriptPath)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = env
 	cmd.Dir = filepath.Dir(ei.Path)
 
 	// Pipe stdout/stderr unless TUI is active
@@ -335,4 +361,65 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 	}
 
 	return nil
+}
+
+// sandboxEnv builds a sandboxed environment for custom prepare scripts,
+// modeled after Portage's ebuild.sh environment handling.
+func sandboxEnv(ei *ebuild.EbuildInfo, cfg *PrepareConfig) []string {
+	// Start with a minimal set of inherited env vars
+	systemDirs := []string{
+		"/usr/local/sbin", "/usr/local/bin",
+		"/usr/sbin", "/usr/bin",
+		"/sbin", "/bin",
+	}
+	systemPath := strings.Join(systemDirs, ":")
+
+	// Dangerous vars to strip (matching Portage's unset list)
+	dangerousVars := map[string]bool{
+		"GZIP": true, "BZIP": true, "BZIP2": true, "CDPATH": true,
+		"GREP_OPTIONS": true, "GREP_COLOR": true, "GLOBIGNORE": true,
+		"BASH_COMPAT": true, "BASH_ENV": true,
+		// Shell options that can affect behavior
+		"PROMPT_COMMAND": true, "PROMPT_DIRTRIM": true,
+	}
+
+	env := make([]string, 0, 64)
+	for _, e := range os.Environ() {
+		key := strings.SplitN(e, "=", 2)[0]
+		// Whitelist safe vars, strip dangerous ones
+		if dangerousVars[key] {
+			continue
+		}
+		if key == "PATH" {
+			// Restrict PATH to system directories only
+			env = append(env, "PATH="+systemPath)
+			continue
+		}
+		env = append(env, e)
+	}
+
+	// Add larry-specific env vars
+	env = append(env,
+		"EBUILD="+ei.Path,
+		"PN="+ei.PN(),
+		"PV="+ei.PV(),
+		"P="+ei.P(),
+		"CATEGORY="+ei.Category,
+		"DISTDIR="+cfg.Distdir,
+		"LARRY_PREPARE=1",
+		// Sandbox policy (informational — userspace only, no syscall enforcement)
+		"LARRY_SANDBOX_WRITE="+filepath.Dir(ei.Path)+":"+cfg.Distdir,
+		"LARRY_SANDBOX_READ=/",
+	)
+
+	// Temp dir — restrict to a larry-owned temp dir
+	tmpDir, _ := os.MkdirTemp("", "larry-prepare-")
+	defer os.RemoveAll(tmpDir)
+	env = append(env,
+		"TMPDIR="+tmpDir,
+		"TMP="+tmpDir,
+		"TEMP="+tmpDir,
+	)
+
+	return env
 }

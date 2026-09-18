@@ -1,11 +1,13 @@
-![Larry the Cow](https://wiki.gentoo.org/images/thumb/b/b8/Larry-nefarius-v2.svg/600px-Larry-nefarius-v2.svg.png)
-
-> [!important]
-> Install Gentoo. Do a Linux
-
 # larry
 
-CLI tool for managing a Gentoo overlay repository.
+> Gentoo overlay upstream tooling
+
+Larry helps Gentoo maintainers check for upstream version updates, prepare ebuild bumps,
+and manage the ebuild lifecycle with provider-specific pipelines.
+
+![Larry the Cow](https://wiki.gentoo.org/images/thumb/b/b8/Larry-nefarius-v2.svg/600px-Larry-nefarius-v2.svg.png)
+
+## Commands
 
 | Command | Description |
 |---------|-------------|
@@ -15,7 +17,88 @@ CLI tool for managing a Gentoo overlay repository.
 | `larry import` | Import an ebuild from another overlay |
 | `larry test` | Test-build an ebuild locally or in a podman container |
 
-### Custom prepare scripts
+## Installation
+
+```bash
+make install    # installs to $GOPATH/bin or /usr/local/bin
+```
+
+Or build from source:
+
+```bash
+go build -o larry ./cmd/larry
+```
+
+## Quick Start
+
+### Check upstream versions
+
+```bash
+# Check all categories in the default overlay
+larry upstream
+
+# Check specific categories
+larry upstream dev-python dev-lisp
+
+# Include pre-release versions
+larry upstream --prereleases
+
+# Use interactive TUI (requires TTY)
+larry upstream --tui
+
+# Check a specific overlay
+larry upstream /path/to/my-overlay
+```
+
+### Bump a package
+
+```bash
+# Auto-detect latest version and create new ebuild
+larry bump dev-python/requests
+
+# Bump to a specific version
+larry bump dev-python/requests --version 2.31.0
+
+# Dry run to see what would happen
+larry bump dev-python/requests --dry-run
+
+# Bump revision instead of version
+larry bump dev-python/requests --revision
+```
+
+### Prepare an ebuild
+
+```bash
+# Download distfiles and generate dependency tarballs
+larry prepare dev-python/requests
+
+# Dry run
+larry prepare dev-python/requests --dry-run
+
+# Force a specific package type
+larry prepare dev-python/requests --type npm
+```
+
+### Import from another overlay
+
+```bash
+larry import --from /var/db/repos/gentoo dev-python/requests
+```
+
+### Test an ebuild
+
+```bash
+# Local testing
+larry test dev-python/requests --compile
+
+# Container-based testing (requires podman)
+larry test dev-python/requests --container
+
+# Pretend mode
+larry test dev-python/requests --pretend
+```
+
+## Custom prepare scripts
 
 For packages with non-standard prepare logic, drop a `files/prepare.sh` script
 into the package directory. Larry executes it instead of any built-in pipeline.
@@ -24,7 +107,7 @@ into the package directory. Larry executes it instead of any built-in pipeline.
 # sys-kernel/raspberrypi-kernel/files/prepare.sh
 #!/bin/sh
 date=$(echo "$PV" | grep -oP '_p\K\d{8}$')
-date=$(echo $date | sed 's/^\(.\{4\}\)\(.\{2\}\)\(.\{2\}\)$/\1-\2-\3/')
+date=$(echo $date | sed 's/^\(\.{4}\)\(\.{2}\)\(\.{2}\)$/\1-\2-\3/')
 commit=$(curl -s "api.github.com/repos/raspberrypi/firmware/releases" \
          | jq -r ".[] | select(.created_at | startswith(\"$date\")) | .body" \
          | grep -oP '(?:commit|hash)\s*[:=]\s*\K[0-9a-f]{8,40}' | head -1)
@@ -33,20 +116,81 @@ sed -i "s/COMMIT=\"\([^\"]*\)\"/COMMIT=\"$commit\"/" "$EBUILD"
 
 **Environment variables:** `EBUILD`, `PN`, `PV`, `P`, `CATEGORY`, `DISTDIR`, `LARRY_PREPARE=1`
 
-**Working directory:** the ebuild's parent directory (`filepath.Dir(ebuildPath)`)
+**Working directory:** the ebuild's parent directory
 
 **Dry-run:** detected but script is NOT executed.
 
-### Dependencies
+## Configuration
 
-| Tool                       | Purpose                                |
-| -------------------------- | -------------------------------------- |
-| `ebuild` (Portage)         | Phase execution, manifest generation   |
-| `pkgdev` (Portage contrib) | `pkgdev manifest`                      |
-| `gh` (GitHub CLI)          | GitHub API auth + releases             |
-| `podman`                   | Container testing with GPU passthrough |
-| `npm`                      | npm dependency resolution              |
-| `go`                       | Go module vendoring                    |
-| `git`                      | Remote resolution, tag operations      |
-| `pycargoebuild`            | Cargo lockfile → CRATES parsing        |
+Larry reads configuration from `$XDG_CONFIG_HOME/larry/config.yaml`:
 
+```yaml
+color: auto        # auto, always, never
+dry-run: false     # default dry-run mode
+overlay:           # default overlay path
+verbose: 0         # 0=normal, 1=verbose, 2=debug
+cache-dir:         # version query cache directory
+jobs: 0            # parallel jobs (0 = auto)
+github-token:      # GitHub PAT for API rate limits
+remote: origin     # git remote for upstream resolution
+```
+
+Command-line flags override config values. Use `--config` to specify a custom path.
+
+## Provider Support
+
+Larry auto-detects upstream providers from `SRC_URI`:
+
+| URI Prefix | Provider | Resolution |
+|------------|----------|------------|
+| `mirror://pypi/` | PyPI | `pypi.org` JSON API |
+| `mirror://npm/` | npm | `registry.npmjs.org` |
+| `mirror://github/` | GitHub | GitHub API + tags |
+| `mirror://gitlab/` | GitLab | GitLab API |
+| `mirror://codeberg/` | Codeberg | Codeberg API |
+| `mirror://sourcehut/` | SourceHut | SourceHut API |
+
+## Ebuild Types
+
+| Type | INHERIT | Pipeline |
+|------|---------|----------|
+| `cargo` | `cargo` | Download `Cargo.lock`, parse deps, update `CRATES` |
+| `npm` | `npm` | Download `package-lock.json`, update `NPM_DEPS` |
+| `go` | `go-module` | `go mod vendor`, create vendor tarball |
+| `vendored` | `vendor` | Download vendor tarball from SRC_URI |
+| `generic` | (none) | Download from `SRC_URI`, manifest |
+
+## Dependencies
+
+| Tool | Purpose |
+|------|---------|
+| `ebuild` (Portage) | Phase execution, manifest generation |
+| `pkgdev` (Portage contrib) | `pkgdev manifest` |
+| `gh` (GitHub CLI) | GitHub API auth + releases |
+| `podman` | Container testing with GPU passthrough |
+| `npm` | npm dependency resolution |
+| `go` | Go module vendoring |
+| `git` | Remote resolution, tag operations |
+| `pycargoebuild` | Cargo lockfile → CRATES parsing |
+
+## Shell Completion
+
+Generate shell completion scripts:
+
+```bash
+# Bash
+generate-completion larry bash > /usr/share/bash-completion/completions/larry
+
+# Zsh
+generate-completion larry zsh > /usr/share/zsh/site-functions/_larry
+
+# Fish
+generate-completion larry fish > ~/.config/fish/completions/larry.fish
+```
+
+## Documentation
+
+- [Commands Reference](docs/commands.md)
+- [Architecture](docs/architecture.md)
+- [Contributing](docs/contributing.md)
+- [Man Pages](docs/man/)

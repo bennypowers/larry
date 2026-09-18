@@ -25,30 +25,44 @@ import (
 // 6. Check/create GitHub release for ${PN}
 // 7. Upload tarball (with SHA-256 collision check)
 // 8. Run pkgdev manifest
-func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
+// On failure: restore from backup and optionally clean up orphaned assets.
+func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 	if cfg.DryRun {
 		return nil
 	}
 
-	// 1. Resolve SRC_URI
-	resolvedURL := npmResolveSRCURI(ei.SRC_URI, ei)
-	if resolvedURL == "" {
-		return fmt.Errorf("npm: could not resolve SRC_URI to npm registry URL")
-	}
-
-	// 2. Download distfile
 	distDir := cfg.Distdir
 	if distDir == "" {
 		distDir = getEnv("PORTAGE_DISTDIR")
-	}
-	distfile := npmExtractDistfileName(resolvedURL)
-	if distfile == "" {
-		distfile = ei.P() + ".tgz"
 	}
 
 	// Backup before mutations
 	if err := Backup(ei.Path); err != nil {
 		return fmt.Errorf("backup: %w", err)
+	}
+
+	// Track uploaded assets for cleanup on failure.
+	var uploadedAssets []string
+	defer func() {
+		if retErr != nil && cfg.CleanupOrphanedAssets && len(uploadedAssets) > 0 {
+			cleanupOrphanedAssets(ei.Pkg, uploadedAssets)
+		}
+	}()
+
+	// GitHub client for release operations
+	clientGH := github.NewClient()
+
+	// 1. Resolve SRC_URI
+	resolvedURL := npmResolveSRCURI(ei.SRC_URI, ei)
+	if resolvedURL == "" {
+		Restore(ei.Path)
+		return fmt.Errorf("npm: could not resolve SRC_URI to npm registry URL")
+	}
+
+	// 2. Download distfile
+	distfile := npmExtractDistfileName(resolvedURL)
+	if distfile == "" {
+		distfile = ei.P() + ".tgz"
 	}
 
 	client := httpclient.NewClient()
@@ -65,30 +79,49 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	}
 
 	// 4. Create tarball of node_modules (if they exist)
-	// This is the key npm-specific step: package dependencies as a distfile
 	nodeModulesDir := findNodeModules(ei)
 	if nodeModulesDir != "" {
 		tarballName := fmt.Sprintf("%s-npm-deps.tar.xz", ei.PVVal)
-		_ = filepath.Join(distDir, tarballName) // path construction for future use
 
 		if err := npmCreateTarball(nodeModulesDir, ei.PVVal, "npm", tarballName); err != nil {
 			Restore(ei.Path)
 			return fmt.Errorf("create npm tarball: %w", err)
 		}
 
-		// Verify distfiles before manifest
 		if !verifyDistfiles(distDir, []string{tarballName}) {
 			Restore(ei.Path)
 			return fmt.Errorf("distfile verification failed after tarball creation")
 		}
-	}
 
-	// 5. GH Release upload
-	clientGH := github.NewClient()
-	releaseExists, err := npmCheckReleaseExists(clientGH, ei.Pkg, "", ei.Pkg)
-	if err == nil && !releaseExists {
-		// Release doesn't exist — create it (best effort, don't fail if gh not available)
-		_ = npmEnsureRelease(clientGH, ei.Pkg, "", ei.Pkg, clientGH.Runner())
+		// 5. GH Release upload (only if tarball was created)
+		if err := npmEnsureOrGetRelease(clientGH, ei.Pkg, "", ei.Pkg); err != nil {
+			Restore(ei.Path)
+			return fmt.Errorf("ensure release: %w", err)
+		}
+
+		tarballPath := filepath.Join(distDir, tarballName)
+		if _, err := os.Stat(tarballPath); err == nil {
+			if err := npmUploadAsset(clientGH, ei.Pkg, "", ei.Pkg, tarballPath, tarballName, clientGH.Runner()); err != nil {
+				Restore(ei.Path)
+				return fmt.Errorf("upload asset: %w", err)
+			}
+			uploadedAssets = append(uploadedAssets, tarballName)
+		}
+	} else {
+		// No node_modules: ensure release exists and upload distfile
+		if err := npmEnsureOrGetRelease(clientGH, ei.Pkg, "", ei.Pkg); err != nil {
+			Restore(ei.Path)
+			return fmt.Errorf("ensure release: %w", err)
+		}
+
+		// Upload the downloaded distfile
+		if _, err := os.Stat(downloaded); err == nil {
+			if err := npmUploadAsset(clientGH, ei.Pkg, "", ei.Pkg, downloaded, distfile, clientGH.Runner()); err != nil {
+				Restore(ei.Path)
+				return fmt.Errorf("upload asset: %w", err)
+			}
+			uploadedAssets = append(uploadedAssets, distfile)
+		}
 	}
 
 	// 6. Run pkgdev manifest
@@ -280,6 +313,17 @@ func npmCheckReleaseExists(client *github.Client, owner, repo, tag string) (bool
 	return false, nil
 }
 
+// npmEnsureOrGetRelease ensures a GitHub release exists, creating it if needed.
+// Returns an error if the release check/create fails, so callers can handle
+// rollback appropriately.
+func npmEnsureOrGetRelease(client *github.Client, owner, repo, tag string) error {
+	exists, err := npmCheckReleaseExists(client, owner, repo, tag)
+	if err != nil || exists {
+		return nil
+	}
+	return npmEnsureRelease(client, owner, repo, tag, client.Runner())
+}
+
 // npmEnsureRelease ensures a GitHub release exists.
 func npmEnsureRelease(client *github.Client, owner, repo, tag string, runner github.CmdRunner) error {
 	// Check if release exists
@@ -361,4 +405,16 @@ func findNodeModules(ei *ebuild.EbuildInfo) string {
 		}
 	}
 	return ""
+}
+
+// cleanupOrphanedAssets removes orphaned GitHub release assets.
+// Called on prepare failure when cfg.CleanupOrphanedAssets is true.
+func cleanupOrphanedAssets(pn string, assetNames []string) {
+	client := github.NewClient()
+	for _, name := range assetNames {
+		cmd := exec.Command("gh", "release", "delete-asset", pn, name)
+		if err := client.Runner().Run(cmd); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not remove orphaned asset %q: %v\n", name, err)
+		}
+	}
 }

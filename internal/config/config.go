@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"bennypowers.dev/larry/internal/git"
+
 	"github.com/spf13/viper"
 )
 
@@ -152,6 +154,39 @@ func applyEnvOverrides(c *Config) {
 	if v := os.Getenv("LARRY_QUIET"); v != "" {
 		c.Quiet = v == "true" || v == "1"
 	}
+}
+
+// ResolveOverlay determines the overlay directory using the following priority:
+//
+//	1. override — explicit value from --overlay flag or positional argument
+//	2. cfg.Overlay — from config file or $LARRY_OVERLAY env var
+//	3. git rev-parse --show-toplevel — current working directory's git root
+//	4. /var/db/repos/gentoo — fallback to the main tree
+//
+// This is the single source of truth for overlay directory resolution across
+// all larry commands. Since larry is designed for maintaining a local overlay
+// git repo, git detection is the natural default when no explicit path is set.
+func (c *Config) ResolveOverlay(override string) string {
+	if override != "" {
+		return override
+	}
+	if c.Overlay != "" {
+		return c.Overlay
+	}
+	if gitDir, err := git.ResolveOverlayDir(); err == nil && gitDir != "" {
+		return gitDir
+	}
+	return "/var/db/repos/gentoo"
+}
+
+// ResolveOverlayDir resolves the overlay directory with the same priority
+// as Config.ResolveOverlay but using DefaultConfig. This is the recommended
+// entry point for commands that need overlay resolution.
+//
+//	ResolveOverlay("")           — full resolution with env/git detection
+//	ResolveOverlay("/custom")    — force custom path
+func ResolveOverlay(override string) string {
+	return DefaultConfig().ResolveOverlay(override)
 }
 
 func defaultCacheDir() string {

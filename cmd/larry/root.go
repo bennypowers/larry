@@ -76,8 +76,6 @@ func Execute() error {
 		"GitHub personal access token")
 	rootCmd.Flags().StringVar(&cfg.Remote, "remote", cfg.Remote,
 		"git remote name for upstream resolution (default: origin)")
-	rootCmd.Flags().StringVar(&cfg.Overlay, "overlay", cfg.Overlay,
-		"overlay root path")
 	rootCmd.Flags().StringVar(&config.FilePath, "config", config.FilePath,
 		"config file path (default: $XDG_CONFIG_HOME/larry/config.yaml)")
 
