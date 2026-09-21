@@ -737,7 +737,7 @@ KEYWORDS="~amd64"
 		t.Fatal(err)
 	}
 
-	info, err := parseEbuildInfo(ebuildPath)
+	info, err := ParseEbuildInfo(ebuildPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -778,7 +778,7 @@ DESCRIPTION="Test"
 SRC_URI="mirror://pypi/requests/requests-1.0.0.tar.gz"
 `), 0644)
 
-	info, err := parseEbuildInfo(ebuildPath)
+	info, err := ParseEbuildInfo(ebuildPath)
 	if err != nil {
 		t.Fatalf("parseEbuildInfo error: %v", err)
 	}

@@ -66,7 +66,7 @@ func CheckUpstream(ei *ebuild.EbuildInfo, registry *provider.ProviderRegistry, a
 	}
 
 	// Build RemoteId from SRC_URI
-	rid, err := resolveRemoteId(ei, providerType)
+	rid, err := ResolveRemoteId(ei, providerType)
 	if err != nil {
 		return &UpstreamResult{
 			Package: fmt.Sprintf("%s/%s", ei.Category, ei.Pkg),
@@ -231,7 +231,7 @@ func walkAndCheck(dir string, registry *provider.ProviderRegistry, allowPrerelea
 			}
 
 			for _, ebuildPath := range ebuildFiles {
-				einfo, err := parseEbuildInfo(ebuildPath)
+				einfo, err := ParseEbuildInfo(ebuildPath)
 				if err != nil {
 					continue
 				}
@@ -249,7 +249,7 @@ func walkAndCheck(dir string, registry *provider.ProviderRegistry, allowPrerelea
 				}
 
 				// Detect provider from SRC_URI/HOMEPAGE + metadata
-				providerType := resolveProviderType(einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
+				providerType := ResolveProviderType(einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
 				if providerType == "" {
 					providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
 				}
@@ -267,7 +267,7 @@ func walkAndCheck(dir string, registry *provider.ProviderRegistry, allowPrerelea
 				}
 
 				// Build RemoteId
-				rid, err := resolveRemoteId(einfo, providerType)
+				rid, err := ResolveRemoteId(einfo, providerType)
 				if err != nil {
 					results = append(results, UpstreamResult{
 						Package:     fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg),
@@ -412,7 +412,9 @@ func findEbuilds(dir string) ([]string, error) {
 
 // parseEbuildInfo parses an ebuild file into EbuildInfo.
 // This is a simplified parser that extracts key fields.
-func parseEbuildInfo(path string) (*ebuild.EbuildInfo, error) {
+// ParseEbuildInfo parses an ebuild file and returns structured information.
+// It uses the shared ebuild parser for accurate multi-line value extraction.
+func ParseEbuildInfo(path string) (*ebuild.EbuildInfo, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -699,7 +701,9 @@ func detectProviderFromMetadata(inherit []string, content string) string {
 // (e.g., PYPI_* variables, Python eclasses) over URL detection. This handles
 // cases like PyPI packages hosted on GitHub where URL detection would
 // incorrectly return "github" instead of "pypi".
-func resolveProviderType(srcURI, homepage string, inherit []string, content string) string {
+// ResolveProviderType resolves the final provider type, preferring metadata
+// overrides (e.g., pypi eclass) over SRC_URI hints.
+func ResolveProviderType(srcURI, homepage string, inherit []string, content string) string {
 	// Primary: detect from SRC_URI/HOMEPAGE
 	provider := detectProviderFromSRCURI(srcURI, homepage)
 	if provider == "" {
@@ -738,7 +742,10 @@ func mapTypeToRemoteIdType(pkgType string) remoteid.RemoteIdType {
 }
 
 // resolveRemoteId extracts a RemoteId from ebuild SRC_URI/HOMEPAGE.
-func resolveRemoteId(ei *ebuild.EbuildInfo, providerType string) (*remoteid.RemoteId, error) {
+// ResolveRemoteId constructs a RemoteId from ebuild info and resolved provider type.
+// Handles all provider-specific extraction: GitHub owner/repo, PyPI PN expansion,
+// NPM scoped packages, etc.
+func ResolveRemoteId(ei *ebuild.EbuildInfo, providerType string) (*remoteid.RemoteId, error) {
 	switch providerType {
 	case "pypi":
 		// Use PYPI_PN if present, otherwise fall back to Gentoo PN
@@ -970,7 +977,7 @@ func walkAndCheckCategories(dir string, registry *provider.ProviderRegistry, cat
 		if len(ebuildFiles) > 0 {
 			// Ebuilds found directly in this directory
 			for _, ebuildPath := range ebuildFiles {
-			einfo, err := parseEbuildInfo(ebuildPath)
+			einfo, err := ParseEbuildInfo(ebuildPath)
 			if err != nil {
 				continue
 			}
@@ -988,7 +995,7 @@ func walkAndCheckCategories(dir string, registry *provider.ProviderRegistry, cat
 			}
 
 			// Detect provider from SRC_URI and HOMEPAGE
-			providerType := resolveProviderType(einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
+			providerType := ResolveProviderType(einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
 			if providerType == "" {
 				providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
 			}
@@ -1005,7 +1012,7 @@ func walkAndCheckCategories(dir string, registry *provider.ProviderRegistry, cat
 			}
 
 			// Build RemoteId
-			rid, err := resolveRemoteId(einfo, providerType)
+			rid, err := ResolveRemoteId(einfo, providerType)
 			if err != nil {
 				results = append(results, UpstreamResult{
 					Package: fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg),

@@ -10,12 +10,15 @@ import (
 	"strings"
 
 	"bennypowers.dev/larry/internal/ebuild"
+	"bennypowers.dev/larry/internal/logger"
+	"bennypowers.dev/larry/internal/upstream"
 )
 
 // PrepareConfig holds configuration for the prepare command.
 type PrepareConfig struct {
 	DryRun                  bool
 	Distdir                 string
+	Overlay                 string // overlay root path for manifest
 	UseTUI                  bool
 	ForceType               ebuild.PackageType
 	HTTPClient              *http.Client
@@ -56,6 +59,9 @@ func Prepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 		}
 	}
 
+	logger.Debug("detected type: " + string(pkgType))
+	logger.Debug("ebuild: " + ei.Path)
+
 	// Propagate cleanup setting from .larry.yaml if not already set via CLI.
 	if !cfg.CleanupOrphanedAssets && pkgConfig != nil {
 		cfg.CleanupOrphanedAssets = pkgConfig.CleanupOrphanedAssets
@@ -92,15 +98,14 @@ func PrepareAll(dir string, cfg *PrepareConfig) error {
 }
 
 // PrepareFromFile prepares a single ebuild from file path.
+// Uses the shared upstream parser for accurate multi-line value extraction.
 func PrepareFromFile(path string, cfg *PrepareConfig) error {
-	ebContent, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read ebuild: %w", err)
-	}
-
-	einfo, err := parseEbuildInfo(path, ebContent)
+	einfo, err := upstream.ParseEbuildInfo(path)
 	if err != nil {
 		return fmt.Errorf("parse ebuild info: %w", err)
+	}
+	if einfo == nil {
+		return fmt.Errorf("parse ebuild info: no info found for %s", path)
 	}
 	einfo.Path = path
 	return Prepare(einfo, cfg)
@@ -117,12 +122,13 @@ func prepareGeneric(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	if err := Backup(ei.Path); err != nil {
 		return fmt.Errorf("backup: %w", err)
 	}
+	defer os.Remove(ei.Path + ".bak")
 
 	// Run manifest
-	if err := runManifest(ei.Path, cfg.Distdir); err != nil {
+	if err := runManifest(cfg.Overlay, ei.Path, cfg.Distdir); err != nil {
 		// Rollback on failure
 		Restore(ei.Path)
-		return fmt.Errorf("manifest: %w", err)
+		return fmt.Errorf("generic: manifest: %w", err)
 	}
 
 	return nil
@@ -130,10 +136,7 @@ func prepareGeneric(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 
 // prepareNpm runs the npm-specific prepare pipeline.
 func prepareNpm(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
-	if cfg.DryRun {
-		return nil
-	}
-	return runManifest(ei.Path, cfg.Distdir)
+	return npmPrepare(ei, cfg)
 }
 
 // prepareCargo runs the cargo-specific prepare pipeline.
@@ -146,13 +149,12 @@ func prepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	return PrepareGo(ei, cfg)
 }
 
+
+
 // NewEbuildInfoFromPath creates an EbuildInfo from a file path.
+// Uses the shared upstream parser for accurate multi-line value extraction.
 func NewEbuildInfoFromPath(path string) (*ebuild.EbuildInfo, error) {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	return parseEbuildInfo(path, content)
+	return upstream.ParseEbuildInfo(path)
 }
 
 // parseEbuildInfo extracts basic info from ebuild content.
@@ -266,28 +268,21 @@ func getEnv(key string) string {
 	return os.Getenv(key)
 }
 
-// findManifestRunner finds the pkgdev manifest runner binary.
+// findManifestRunner finds the ebuild manifest runner binary.
 func findManifestRunner() (string, error) {
-	// Try pkgdev first (Gentoo tool)
-	if path, err := exec.LookPath("pkgdev"); err == nil {
-		return path, nil
-	}
-	// Try ebuild manifest runner
+	// Always use ebuild manifest — it processes only the specific ebuild
+	// instead of pkgdev which tries to verify ALL versions in the category.
 	if path, err := exec.LookPath("ebuild"); err == nil {
+		logger.Debug("using ebuild: " + path)
 		return path, nil
 	}
-	return "", fmt.Errorf("manifest runner not found: try installing pkgdev or ebuild")
+	return "", fmt.Errorf("manifest runner not found: try installing portage (ebuild)")
 }
 
 // manifestArgs returns the command-line arguments for running manifest.
+// ebuild manifest takes the full ebuild path.
 func manifestArgs(path, distdir string) []string {
-	args := []string{"manifest", path}
-	if distdir != "" {
-		// Insert --distdir before the path
-		newArgs := []string{"manifest", "--distdir=" + distdir, path}
-		return newArgs
-	}
-	return args
+	return []string{path, "manifest"}
 }
 
 // verifyDistfiles checks that all distfiles exist in the distdir.

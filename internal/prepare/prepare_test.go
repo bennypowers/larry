@@ -453,13 +453,13 @@ func TestManifestArgs(t *testing.T) {
 			name:     "no_distdir",
 			path:     "/path/to/pkg-1.0.0.ebuild",
 			distdir:  "",
-			expected: []string{"manifest", "/path/to/pkg-1.0.0.ebuild"},
+			expected: []string{"/path/to/pkg-1.0.0.ebuild", "manifest"},
 		},
 		{
 			name:     "with_distdir",
 			path:     "/path/to/pkg-1.0.0.ebuild",
 			distdir:  "/var/cache/distfiles",
-			expected: []string{"manifest", "--distdir=/var/cache/distfiles", "/path/to/pkg-1.0.0.ebuild"},
+			expected: []string{"/path/to/pkg-1.0.0.ebuild", "manifest"},
 		},
 	}
 

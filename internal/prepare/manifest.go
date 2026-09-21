@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"bennypowers.dev/larry/internal/logger"
 )
 
 // manifestRunner returns the manifest command path (pkgdev or ebuild).
@@ -21,24 +23,47 @@ var manifestRunnerArgs = func(path, distdir string) []string {
 }
 
 // runManifest executes pkgdev manifest on the given ebuild path.
-func runManifest(path, distdir string) error {
+func runManifest(overlay, path, distdir string) error {
 	binPath, err := manifestRunner()
 	if err != nil {
 		return err
 	}
+	logger.Debug("using runner: " + binPath)
 
 	args := manifestRunnerArgs(path, distdir)
-	cmd := exec.Command(binPath, args...)
+	logger.Debug("args: " + strings.Join(args, " "))
+	logger.Debug("ebuild: " + path)
+	logger.Debug("distdir: " + distdir)
+	logger.Debug("overlay: " + overlay)
 
-	// TUI stream isolation: pipe subprocess output to parent stdio
-	if cmd.Stdout != nil {
-		cmd.Stdout = os.Stdout
-	}
-	if cmd.Stderr != nil {
-		cmd.Stderr = os.Stderr
-	}
+	cmd := exec.Command(binPath, args...)
+	logger.Debug("running: " + strings.Join(cmd.Args, " "))
+
+	// Remove stale Manifest so ebuild generates fresh entries
+	manifestPath := filepath.Join(filepath.Dir(path), "Manifest")
+	_ = os.Remove(manifestPath)
+
+	// Capture both stderr and stdout for debugging on failure
+	var stdoutBuf, stderrBuf strings.Builder
+
+	// Run from overlay root so ebuild finds the ebuild
+	cmd.Dir = overlay
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	// Set DISTDIR and disable Gentoo mirrors (npm mirror doesn't need them)
+	cmd.Env = append(os.Environ(), "DISTDIR="+distdir, "GENTOO_MIRRORS=")
+
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("manifest: %w", err)
+		fmt.Fprint(os.Stderr, stdoutBuf.String())
+		fmt.Fprint(os.Stderr, stderrBuf.String())
+		return err
+	}
+	if stdoutBuf.Len() > 0 {
+		logger.Debug("stdout:\n" + stdoutBuf.String())
+	}
+	if stderrBuf.Len() > 0 {
+		logger.Debug("runner warnings:\n" + stderrBuf.String())
 	}
 
 	// Verify manifest validity: check the Manifest file exists and has
@@ -53,7 +78,11 @@ func runManifestCmd(args ...string) error {
 		return err
 	}
 	cmd := exec.Command(binPath, args...)
-	return cmd.Run()
+	logger.Debug("runManifestCmd: " + strings.Join(cmd.Args, " "))
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // FindManifestRunner is the exported version of findManifestRunner.
@@ -67,8 +96,8 @@ func GetManifestArgs(path, distdir string) []string {
 }
 
 // RunManifestCommand is the exported version of runManifest.
-func RunManifestCommand(path, distdir string) error {
-	return runManifest(path, distdir)
+func RunManifestCommand(overlay, path, distdir string) error {
+	return runManifest(overlay, path, distdir)
 }
 
 // verifyManifestValid checks that the Manifest file for the given ebuild
@@ -86,8 +115,8 @@ func verifyManifestValid(ebuildPath string) error {
 		return fmt.Errorf("read manifest: %w", err)
 	}
 
-	// Count valid DIST entries: DIST filename <32-char hash> ...
-	entryRe := regexp.MustCompile(`^DIST\s+\S+\s+[a-f0-9]{32,}`)
+	// Count valid DIST entries: DIST filename size ALGO hash or DIST filename size hash
+	entryRe := regexp.MustCompile(`^DIST\s+\S+\s+\d+\s+`)
 	entries := 0
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {

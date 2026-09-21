@@ -93,14 +93,19 @@ func DetectTypeFromInfoForce(info *EbuildInfo, force PackageType) (PackageType, 
 		return TypeGeneric, nil
 	}
 
+	// Check for npm: mirror://npm/ in SRC_URI (more specific than vendored)
+	if strings.Contains(info.SRC_URI, "mirror://npm/") {
+		return TypeNPM, nil
+	}
+
+	// Check for cargo: CRATES= variable definition
+	if strings.Contains(info.SRC_URI, "CRATES=") {
+		return TypeCargo, nil
+	}
+
 	// Check for vendored: releases/download/${PN}/ in SRC_URI
 	if strings.Contains(info.SRC_URI, "releases/download/") && strings.Contains(info.SRC_URI, "${PN}/") {
 		return TypeVendored, nil
-	}
-
-	// Check for npm: mirror://npm/ in SRC_URI
-	if strings.Contains(info.SRC_URI, "mirror://npm/") {
-		return TypeNPM, nil
 	}
 
 	// Check for cargo: CRATES=" variable definition

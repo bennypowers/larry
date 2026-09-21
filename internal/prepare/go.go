@@ -99,7 +99,7 @@ func PrepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	}
 
 	// 9. Run pkgdev manifest
-	if err := runManifest(ei.Path, distDir); err != nil {
+	if err := runManifest(cfg.Overlay, ei.Path, distDir); err != nil {
 		return fmt.Errorf("go: pkgdev manifest: %w", err)
 	}
 

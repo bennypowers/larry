@@ -9,9 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/provider"
-	"bennypowers.dev/larry/internal/remoteid"
+	"bennypowers.dev/larry/internal/upstream"
 	"bennypowers.dev/larry/internal/version"
 )
 
@@ -91,7 +90,7 @@ func Bump(cfg BumpConfig) (*BumpResult, error) {
 		return revisionBump(cfg, latestPath, content, pn, pv)
 
 	case BumpModeAuto:
-		newPV, err := getUpstreamVersion(cfg, pn, content)
+		newPV, err := getUpstreamVersion(cfg, pn, latestPath)
 		if err != nil {
 			return nil, fmt.Errorf("bump: getting upstream version: %w", err)
 		}
@@ -303,25 +302,29 @@ func incrementRevision(dir string) int {
 }
 
 // getUpstreamVersion queries the provider registry for the latest upstream version.
-func getUpstreamVersion(cfg BumpConfig, pn string, content []byte) (string, error) {
+// Uses the same provider resolution logic as the upstream command.
+func getUpstreamVersion(cfg BumpConfig, pn string, ebuildPath string) (string, error) {
 	if cfg.ProviderReg == nil {
 		return "", fmt.Errorf("no provider registry configured for auto-version")
 	}
 
-	// Parse ebuild info to determine the provider
-	ei := parseEbuildInfoForProvider(content, pn)
-	if ei == nil {
+	// Parse ebuild info using the shared upstream function
+	ebi, err := upstream.ParseEbuildInfo(ebuildPath)
+	if err != nil {
+		return "", fmt.Errorf("parsing ebuild: %w", err)
+	}
+	if ebi == nil {
 		return "", fmt.Errorf("unable to parse ebuild info for provider resolution")
 	}
 
-	// Detect provider from SRC_URI
-	providerType := detectProviderFromSRCURI(ei.SRC_URI)
+	// Use shared provider resolution logic
+	providerType := upstream.ResolveProviderType(ebi.SRC_URI, ebi.HOMEPAGE, ebi.Inherit, ebi.Raw)
 	if providerType == "" {
 		return "", fmt.Errorf("unable to detect provider type for auto-version bump")
 	}
 
-	// Build remote ID
-	rid, err := buildRemoteId(ei, providerType)
+	// Build remote ID using shared logic
+	rid, err := upstream.ResolveRemoteId(ebi, providerType)
 	if err != nil {
 		return "", fmt.Errorf("building remote id: %w", err)
 	}
@@ -338,80 +341,6 @@ func getUpstreamVersion(cfg BumpConfig, pn string, content []byte) (string, erro
 	}
 
 	return latest.String(), nil
-}
-
-// parseEbuildInfoForProvider extracts minimal ebuild info for provider resolution.
-func parseEbuildInfoForProvider(content []byte, pn string) *ebuild.EbuildInfo {
-	var srcURI string
-
-	for _, line := range strings.Split(string(content), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "SRC_URI=") {
-			val := strings.TrimPrefix(line, "SRC_URI=")
-			val = strings.Trim(val, `"' `)
-			srcURI = val
-		}
-	}
-
-	return &ebuild.EbuildInfo{
-		Pkg:     pn,
-		SRC_URI: srcURI,
-	}
-}
-
-// detectProviderFromSRCURI detects provider from SRC_URI content.
-func detectProviderFromSRCURI(content string) string {
-	if strings.Contains(content, "mirror://github/") {
-		return "github"
-	}
-	if strings.Contains(content, "mirror://gitlab/") {
-		return "gitlab"
-	}
-	if strings.Contains(content, "mirror://pypi/") {
-		return "pypi"
-	}
-	if strings.Contains(content, "mirror://npm/") {
-		return "npm"
-	}
-	if strings.Contains(content, "mirror://codeberg/") {
-		return "codeberg"
-	}
-	if strings.Contains(content, "mirror://sourcehut/") {
-		return "sourcehut"
-	}
-	return ""
-}
-
-// buildRemoteId constructs a RemoteId from ebuild info and provider type.
-func buildRemoteId(ei *ebuild.EbuildInfo, providerType string) (*remoteid.RemoteId, error) {
-	ridType, err := providerTypeToRemoteId(providerType)
-	if err != nil {
-		return nil, err
-	}
-	return &remoteid.RemoteId{
-		Type: ridType,
-		Name: ei.Pkg,
-	}, nil
-}
-
-// providerTypeToRemoteId maps a string provider type to RemoteIdType.
-func providerTypeToRemoteId(pt string) (remoteid.RemoteIdType, error) {
-	switch pt {
-	case "github":
-		return remoteid.TypeGitHub, nil
-	case "gitlab":
-		return remoteid.TypeGitLab, nil
-	case "pypi":
-		return remoteid.TypePyPI, nil
-	case "npm":
-		return remoteid.TypeNPM, nil
-	case "codeberg":
-		return remoteid.TypeCodeberg, nil
-	case "sourcehut":
-		return remoteid.TypeSourceHut, nil
-	default:
-		return "", fmt.Errorf("unknown provider type: %s", pt)
-	}
 }
 
 // generateBumpedEbuild creates a new ebuild file with the bumped version.
@@ -487,11 +416,7 @@ func updateSRCURI(line, oldPV, newPV string) string {
 		return line
 	}
 
-	// Replace hardcoded version strings in the SRC_URI value
-	val := trimmed[len("SRC_URI="):]
-
-	// Only replace version references, not variable references
-	val = strings.ReplaceAll(val, oldPV, newPV)
-
-	return "SRC_URI=" + val
+	// Ebuild SRC_URI typically uses variables (${PV}, ${P}, ${A}) that
+	// Portage handles automatically. No need to replace version strings.
+	return line
 }

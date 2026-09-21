@@ -332,7 +332,7 @@ func PrepareVendored(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	}
 
 	// 5. Run manifest
-	return runManifest(ei.Path, distdir)
+	return runManifest(cfg.Overlay, ei.Path, distdir)
 }
 
 // ---------------------------------------------------------------------------
