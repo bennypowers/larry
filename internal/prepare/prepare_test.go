@@ -446,26 +446,18 @@ func TestManifestArgs(t *testing.T) {
 	tests := []struct {
 		name     string
 		path     string
-		distdir  string
 		expected []string
 	}{
 		{
-			name:     "no_distdir",
+			name:     "simple",
 			path:     "/path/to/pkg-1.0.0.ebuild",
-			distdir:  "",
-			expected: []string{"/path/to/pkg-1.0.0.ebuild", "manifest"},
-		},
-		{
-			name:     "with_distdir",
-			path:     "/path/to/pkg-1.0.0.ebuild",
-			distdir:  "/var/cache/distfiles",
-			expected: []string{"/path/to/pkg-1.0.0.ebuild", "manifest"},
+			expected: []string{"/path/to/pkg-1.0.0.ebuild", "digest"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := manifestArgs(tt.path, tt.distdir)
+			result := manifestArgs(tt.path)
 			if len(result) != len(tt.expected) {
 				t.Fatalf("manifestArgs returned %d args, want %d: %v", len(result), len(tt.expected), result)
 			}

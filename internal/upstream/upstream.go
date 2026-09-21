@@ -181,6 +181,7 @@ func CheckUpstreamSimple(ei *ebuild.EbuildInfo, p provider.UpstreamProvider, all
 
 // Run walks the overlay directory and checks all ebuilds for upstream updates.
 // It returns results for all discoverable ebuilds, skipping acct-group/* and acct-user/*.
+// Deprecated and renamed packages (from profiles/package.deprecated and profiles/updates/*) are skipped.
 func Run(overlayDir string, allowPrereleases bool, fresh bool) ([]UpstreamResult, error) {
 	// Create cache
 	cacheDir := DefaultCachePath()
@@ -190,8 +191,11 @@ func Run(overlayDir string, allowPrereleases bool, fresh bool) ([]UpstreamResult
 		_ = cache.Clear() // Bypass cache by clearing on each run
 	}
 
+	// Load deprecated/renamed package list
+	deprecated := LoadDeprecatedPackages(overlayDir)
+
 	// Walk overlay directory
-	results, err := walkAndCheck(overlayDir, nil, allowPrereleases, cache)
+	results, err := walkAndCheck(overlayDir, deprecated, nil, allowPrereleases, cache)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +204,8 @@ func Run(overlayDir string, allowPrereleases bool, fresh bool) ([]UpstreamResult
 }
 
 // walkAndCheck recursively walks the overlay directory and checks ebuilds.
-func walkAndCheck(dir string, registry *provider.ProviderRegistry, allowPrereleases bool, cache *VersionCache) ([]UpstreamResult, error) {
+// The deprecated map contains deprecated/renamed package atoms to skip.
+func walkAndCheck(dir string, deprecated map[string]DeprecatedInfo, registry *provider.ProviderRegistry, allowPrereleases bool, cache *VersionCache) ([]UpstreamResult, error) {
 	var results []UpstreamResult
 
 	entries, err := os.ReadDir(dir)
@@ -233,6 +238,21 @@ func walkAndCheck(dir string, registry *provider.ProviderRegistry, allowPrerelea
 			for _, ebuildPath := range ebuildFiles {
 				einfo, err := ParseEbuildInfo(ebuildPath)
 				if err != nil {
+					continue
+				}
+
+				pkgAtom := fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg)
+
+				// Skip deprecated/renamed packages
+				if dep, ok := deprecated[pkgAtom]; ok {
+					results = append(results, UpstreamResult{
+						Package:     pkgAtom,
+						Current:     einfo.PVVal,
+						Latest:      "",
+						Status:      StatusDeprecated,
+						SourceLabel: dep.Source,
+						Target:      dep.Target,
+					})
 					continue
 				}
 
@@ -349,7 +369,7 @@ func walkAndCheck(dir string, registry *provider.ProviderRegistry, allowPrerelea
 			}
 		} else {
 			// Not a category directory — recurse
-			subResults, err := walkAndCheck(entryPath, registry, allowPrereleases, cache)
+			subResults, err := walkAndCheck(entryPath, deprecated, registry, allowPrereleases, cache)
 			if err == nil {
 				results = append(results, subResults...)
 			}
@@ -922,6 +942,7 @@ func resolveVersionFromSRCURI(ei *ebuild.EbuildInfo, providerType string, rid *r
 }
 
 // RunWithCategories walks the overlay and checks specific categories (or all if empty).
+// Deprecated and renamed packages from profiles/package.deprecated and profiles/updates/* are skipped.
 func RunWithCategories(overlayDir string, registry *provider.ProviderRegistry, categories []string, allowPrereleases bool, fresh bool) ([]UpstreamResult, error) {
 	cacheDir := DefaultCachePath()
 	cache := NewVersionCacheWithPath(cacheDir, 6*time.Hour)
@@ -930,11 +951,15 @@ func RunWithCategories(overlayDir string, registry *provider.ProviderRegistry, c
 		_ = cache.Clear()
 	}
 
-	return walkAndCheckCategories(overlayDir, registry, categories, allowPrereleases, cache)
+	// Load deprecated/renamed package list
+	deprecated := LoadDeprecatedPackages(overlayDir)
+
+	return walkAndCheckCategories(overlayDir, deprecated, registry, categories, allowPrereleases, cache)
 }
 
 // walkAndCheckCategories walks the overlay and checks only specified categories.
-func walkAndCheckCategories(dir string, registry *provider.ProviderRegistry, categories []string, allowPrereleases bool, cache *VersionCache) ([]UpstreamResult, error) {
+// Deprecated and renamed packages are skipped.
+func walkAndCheckCategories(dir string, deprecated map[string]DeprecatedInfo, registry *provider.ProviderRegistry, categories []string, allowPrereleases bool, cache *VersionCache) ([]UpstreamResult, error) {
 	var results []UpstreamResult
 
 	entries, err := os.ReadDir(dir)
@@ -979,6 +1004,21 @@ func walkAndCheckCategories(dir string, registry *provider.ProviderRegistry, cat
 			for _, ebuildPath := range ebuildFiles {
 			einfo, err := ParseEbuildInfo(ebuildPath)
 			if err != nil {
+				continue
+			}
+
+			pkgAtom := fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg)
+
+			// Skip deprecated/renamed packages
+			if dep, ok := deprecated[pkgAtom]; ok {
+				results = append(results, UpstreamResult{
+					Package:     pkgAtom,
+					Current:     einfo.PVVal,
+					Latest:      "",
+					Status:      StatusDeprecated,
+					SourceLabel: dep.Source,
+					Target:      dep.Target,
+				})
 				continue
 			}
 
@@ -1086,7 +1126,7 @@ func walkAndCheckCategories(dir string, registry *provider.ProviderRegistry, cat
 		}
 		} else {
 			// No ebuilds found directly — recurse into subdirectories
-			subResults, err := walkAndCheckCategories(categoryPath, registry, nil, allowPrereleases, cache)
+			subResults, err := walkAndCheckCategories(categoryPath, deprecated, registry, nil, allowPrereleases, cache)
 			if err == nil {
 				results = append(results, subResults...)
 			}

@@ -3,6 +3,7 @@ package git
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // Repo wraps a go-git repository.
@@ -188,6 +190,64 @@ func (r *Repo) ResolveTag(tag string) (plumbing.Hash, error) {
 	return plumbing.Hash{}, fmt.Errorf("tag %q is not a commit or tag object", tag)
 }
 
+// readGitAuthor reads user.name and user.email from git config.
+// Checks repo config first, then XDG global (~/.config/git/config),
+// then falls back to empty string.
+func readGitAuthor(repo *git.Repository) (name, email string) {
+	// Try repo config
+	if cfg, err := repo.Config(); err == nil && cfg != nil {
+		name = cfg.User.Name
+		email = cfg.User.Email
+	}
+
+	// Try XDG global git config (~/.config/git/config)
+	if name == "" || email == "" {
+		xdgName, xdgEmail := readXDGGitConfig()
+		if name == "" {
+			name = xdgName
+		}
+		if email == "" {
+			email = xdgEmail
+		}
+	}
+	return
+}
+
+// readXDGGitConfig parses the XDG git config file for user.name and user.email.
+func readXDGGitConfig() (name, email string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	path := filepath.Join(home, ".config", "git", "config")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+
+	// Simple INI parser for [user] section
+	inUser := false
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			inUser = line == "[user]"
+			continue
+		}
+		if !inUser {
+			continue
+		}
+		if name == "" && strings.HasPrefix(line, "name") {
+			name = strings.TrimSpace(strings.TrimPrefix(line, "name"))
+			name = strings.Trim(name, " =")
+		}
+		if email == "" && strings.HasPrefix(line, "email") {
+			email = strings.TrimSpace(strings.TrimPrefix(line, "email"))
+			email = strings.Trim(email, " =")
+		}
+	}
+	return
+}
+
 // ParseRemoteURL parses a GitHub remote URL into owner and repo.
 // Supports formats:
 //
@@ -330,4 +390,76 @@ func (r *Repo) HasRemote(name string) bool {
 // GetRemote returns the *git.Remote for the given name.
 func (r *Repo) GetRemote(name string) (*git.Remote, error) {
 	return r.repo.Remote(name)
+}
+
+// Commit stages all tracked changes and creates a commit with the given message.
+// Uses git config (user.name / user.email) for author; falls back to "larry" / "larry@localhost"
+// if git config is not set.
+// Returns the new commit hash, or an error if nothing to commit or the commit fails.
+func (r *Repo) Commit(msg string) (string, error) {
+	return r.CommitWithDir(msg, "")
+}
+
+// CommitWithDir stages all changes in the given directory (or "." if empty) and creates a commit.
+// Only files within the specified directory are staged, preventing stale files
+// from previous failed bumps from being included.
+func (r *Repo) CommitWithDir(msg, dir string) (string, error) {
+	if dir == "" {
+		dir = "."
+	}
+	w, err := r.Worktree()
+	if err != nil {
+		return "", err
+	}
+
+	// Add only files within the specified directory
+	_, err = w.Add(dir)
+	if err != nil {
+		return "", err
+	}
+
+	// Check if there are actually changes
+	status, err := w.Status()
+	if err != nil {
+		return "", err
+	}
+	if status.IsClean() {
+		return "", fmt.Errorf("nothing to commit (working tree clean)")
+	}
+
+	// Read author from git config — try repo config first, then XDG global, then fall back.
+	cfgName, cfgEmail := readGitAuthor(r.repo)
+	if cfgName == "" {
+		cfgName = "larry"
+	}
+	if cfgEmail == "" {
+		cfgEmail = "larry@localhost"
+	}
+
+	h, err := w.Commit(msg, &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  cfgName,
+			Email: cfgEmail,
+			When:  time.Now(),
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return h.String(), nil
+}
+
+// DebugReadAuthor is a test helper.
+func DebugReadAuthor(repoPath string) (name, email string) {
+	repo, err := Open(repoPath)
+	if err != nil {
+		fmt.Println("Open error:", err)
+		return
+	}
+	cfg, _ := repo.repo.Config()
+	fmt.Printf("repo.User.Name: %q\n", cfg.User.Name)
+	fmt.Printf("repo.User.Email: %q\n", cfg.User.Email)
+	name, email = readGitAuthor(repo.repo)
+	fmt.Printf("readGitAuthor -> name: %q, email: %q\n", name, email)
+	return
 }

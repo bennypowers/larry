@@ -42,8 +42,8 @@ func Prepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	// Load per-package .larry.yaml config for type override and cleanup settings.
 	pkgConfig, err := LoadConfig(ei.Path)
 	if err != nil {
-		// Non-fatal: log but continue with defaults.
-		fmt.Fprintf(os.Stderr, "warning: %s\n", err)
+		// Non-fatal: only log in verbose mode, continue with defaults.
+		logger.Debugf("read config: %v", err)
 	}
 
 	// Detect type: CLI --type flag > .larry.yaml type_override > auto-detection.
@@ -280,9 +280,9 @@ func findManifestRunner() (string, error) {
 }
 
 // manifestArgs returns the command-line arguments for running manifest.
-// ebuild manifest takes the full ebuild path.
-func manifestArgs(path, distdir string) []string {
-	return []string{path, "manifest"}
+// ebuild digest takes the full ebuild path and generates the Manifest.
+func manifestArgs(path string) []string {
+	return []string{path, "digest"}
 }
 
 // verifyDistfiles checks that all distfiles exist in the distdir.

@@ -21,6 +21,7 @@ const (
 	StatusAhead                  // Current version is newer than latest upstream
 	StatusNewerTag               // A newer tag exists but current is not outdated
 	StatusLive                   // Live version (9999)
+	StatusDeprecated             // Package is deprecated/renamed
 	StatusUnknown                // Could not determine upstream status
 )
 
@@ -37,6 +38,8 @@ func (s Status) String() string {
 		return "NEWER-TAG"
 	case StatusLive:
 		return "LIVE"
+	case StatusDeprecated:
+		return "DEPRECATED"
 	case StatusUnknown:
 		return "UNKNOWN"
 	default:
@@ -45,10 +48,10 @@ func (s Status) String() string {
 }
 
 // IsSignificant returns true for statuses that should be shown by default
-// (i.e., everything except UP-TO-DATE and LIVE). Matches fish script behavior
-// of filtering with 'grep -v UP-TO-DATE'.
+// (i.e., everything except UP-TO-DATE, LIVE, and DEPRECATED).
+// Use -v to show DEPRECATED packages.
 func (s Status) IsSignificant() bool {
-	return s != StatusUpToDate && s != StatusLive
+	return s != StatusUpToDate && s != StatusLive && s != StatusDeprecated
 }
 
 // SourceGlyph returns the Nerd Font icon for a source label.
@@ -103,6 +106,13 @@ func SourceCell(r UpstreamResult) string {
 	var sourceCell string
 
 	switch {
+	case r.Status == StatusDeprecated:
+		// Show deprecated/renamed status
+		if r.Target != "" {
+			sourceCell = r.SourceLabel + " → " + r.Target
+		} else {
+			sourceCell = r.SourceLabel
+		}
 	case r.SourceLabel != "":
 		glyph := SourceGlyph(r.SourceLabel)
 		url := SourceURL(r.SourceLabel)
@@ -130,6 +140,7 @@ type UpstreamResult struct {
 	Status      Status
 	Source      string
 	SourceLabel string
+	Target      string // target package atom (for deprecated/renamed)
 	Error       string
 }
 

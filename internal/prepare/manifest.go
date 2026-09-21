@@ -18,8 +18,8 @@ var manifestRunner = func() (string, error) {
 }
 
 // manifestRunnerArgs builds the command arguments for manifest.
-var manifestRunnerArgs = func(path, distdir string) []string {
-	return manifestArgs(path, distdir)
+var manifestRunnerArgs = func(path string) []string {
+	return manifestArgs(path)
 }
 
 // runManifest executes pkgdev manifest on the given ebuild path.
@@ -30,16 +30,24 @@ func runManifest(overlay, path, distdir string) error {
 	}
 	logger.Debug("using runner: " + binPath)
 
-	args := manifestRunnerArgs(path, distdir)
+	args := manifestArgs(path)
 	logger.Debug("args: " + strings.Join(args, " "))
 	logger.Debug("ebuild: " + path)
 	logger.Debug("distdir: " + distdir)
 	logger.Debug("overlay: " + overlay)
 
+	// Build env: use /var/cache/distfiles since ebuild digest re-verifies ALL
+	// versions in the category. The larry distdir only has new distfiles, so
+	// we use the system distdir which already has all existing ones.
+	env := os.Environ()
+	env = append(env, "DISTDIR=/var/cache/distfiles")
+	env = append(env, "GENTOO_MIRRORS=")
+
 	cmd := exec.Command(binPath, args...)
+	cmd.Env = env
 	logger.Debug("running: " + strings.Join(cmd.Args, " "))
 
-	// Remove stale Manifest so ebuild generates fresh entries
+	// Remove stale Manifest so ebuild digest generates fresh entries
 	manifestPath := filepath.Join(filepath.Dir(path), "Manifest")
 	_ = os.Remove(manifestPath)
 
@@ -50,9 +58,6 @@ func runManifest(overlay, path, distdir string) error {
 	cmd.Dir = overlay
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
-
-	// Set DISTDIR and disable Gentoo mirrors (npm mirror doesn't need them)
-	cmd.Env = append(os.Environ(), "DISTDIR="+distdir, "GENTOO_MIRRORS=")
 
 	if err := cmd.Run(); err != nil {
 		fmt.Fprint(os.Stderr, stdoutBuf.String())
@@ -91,8 +96,8 @@ func FindManifestRunner() (string, error) {
 }
 
 // GetManifestArgs is the exported version of manifestArgs.
-func GetManifestArgs(path, distdir string) []string {
-	return manifestArgs(path, distdir)
+func GetManifestArgs(path string) []string {
+	return manifestArgs(path)
 }
 
 // RunManifestCommand is the exported version of runManifest.
