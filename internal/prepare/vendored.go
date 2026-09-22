@@ -176,6 +176,79 @@ func createVendorTarball(baseDir, contentDir, outputPath string) error {
 	return cmd.Run()
 }
 
+// createNPMDepsTarball creates a tarball that includes both node_modules
+// and package-lock.json at the root. The lockfile is required for npm
+// to resolve dependencies in offline mode.
+func createNPMDepsTarball(baseDir, outputPath string) error {
+	// Create a staging dir with both files at root
+	tmpDir, err := os.MkdirTemp("", "larry-npm-tarball-*")
+	if err != nil {
+		return fmt.Errorf("create staging dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Copy package-lock.json if it exists
+	lockSrc := filepath.Join(baseDir, "package-lock.json")
+	if _, err := os.Stat(lockSrc); err == nil {
+		if err := copyFile(lockSrc, filepath.Join(tmpDir, "package-lock.json")); err != nil {
+			return fmt.Errorf("copy package-lock.json: %w", err)
+		}
+	}
+
+	// Copy node_modules
+	nmSrc := filepath.Join(baseDir, "node_modules")
+	if _, err := os.Stat(nmSrc); err != nil {
+		return fmt.Errorf("node_modules not found: %w", err)
+	}
+	if err := copyDir(nmSrc, filepath.Join(tmpDir, "node_modules")); err != nil {
+		return fmt.Errorf("copy node_modules: %w", err)
+	}
+
+	// Create tarball from staging dir
+	cmd := exec.Command("tar", "cf", outputPath, "-C", tmpDir, ".")
+	if strings.HasSuffix(outputPath, ".gz") || strings.HasSuffix(outputPath, ".tgz") {
+		cmd = exec.Command("tar", "czf", outputPath, "-C", tmpDir, ".")
+	} else if strings.HasSuffix(outputPath, ".xz") {
+		cmd = exec.Command("tar", "cJf", outputPath, "-C", tmpDir, ".")
+	} else if strings.HasSuffix(outputPath, ".zst") {
+		cmd = exec.Command("tar", "cIf", outputPath, "-C", tmpDir, ".")
+	}
+
+	return cmd.Run()
+}
+
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0644)
+}
+
+func copyDir(src, dst string) error {
+	if err := os.MkdirAll(dst, 0755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // copyTarballToDistdir — copy a tarball to DISTDIR
 // ---------------------------------------------------------------------------
@@ -202,9 +275,12 @@ func copyTarballToDistdir(srcTarball, distdir string) error {
 // ---------------------------------------------------------------------------
 
 // ghReleaseViewExists checks if a GitHub release tag exists.
-func ghReleaseViewExists(tag string, runner github.CmdRunner) (bool, error) {
+func ghReleaseViewExists(tag, repo string, runner github.CmdRunner) (bool, error) {
 	cmd := exec.Command("gh", "release", "view", tag, "--json", "tagName,url")
-	cmd.Env = append(os.Environ(), "GH_TOKEN=") // ensure token is set by caller
+	if repo != "" {
+		cmd.Args = append(cmd.Args, "--repo", repo)
+	}
+	// Don't override cmd.Env — let it inherit from os.Environ() so auth tokens work
 
 	out, err := runner.Output(cmd)
 	if err != nil {
@@ -227,18 +303,24 @@ func ghReleaseViewExists(tag string, runner github.CmdRunner) (bool, error) {
 }
 
 // ghReleaseCreate creates a GitHub release for the given tag.
-func ghReleaseCreate(tag string, runner github.CmdRunner) error {
+func ghReleaseCreate(tag, repo string, runner github.CmdRunner) error {
 	cmd := exec.Command("gh", "release", "create", tag)
+	if repo != "" {
+		cmd.Args = append(cmd.Args, "--repo", repo)
+	}
 	return runner.Run(cmd)
 }
 
 // ghUploadAsset uploads a tarball asset to a GitHub release.
-func ghUploadAsset(tag, tarballPath string, runner github.CmdRunner) error {
+func ghUploadAsset(tag, tarballPath, repo string, runner github.CmdRunner) error {
 	if _, err := os.Stat(tarballPath); err != nil {
 		return fmt.Errorf("asset file not found: %w", err)
 	}
 
 	cmd := exec.Command("gh", "release", "upload", tag, tarballPath, "--clobber")
+	if repo != "" {
+		cmd.Args = append(cmd.Args, "--repo", repo)
+	}
 	return runner.Run(cmd)
 }
 
@@ -317,16 +399,16 @@ func PrepareVendored(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 		}
 
 		// Upload to GitHub release
-		exists, err := ghReleaseViewExists(ei.Pkg, gh.Runner())
+		exists, err := ghReleaseViewExists(ei.Pkg, cfg.GitHubRepo, gh.Runner())
 		if err != nil {
 			return fmt.Errorf("check release %s: %w", ei.Pkg, err)
 		}
 		if !exists {
-			if err := ghReleaseCreate(ei.Pkg, gh.Runner()); err != nil {
+			if err := ghReleaseCreate(ei.Pkg, cfg.GitHubRepo, gh.Runner()); err != nil {
 				return fmt.Errorf("create release %s: %w", ei.Pkg, err)
 			}
 		}
-		if err := ghUploadAsset(ei.Pkg, outputTarball, gh.Runner()); err != nil {
+		if err := ghUploadAsset(ei.Pkg, outputTarball, cfg.GitHubRepo, gh.Runner()); err != nil {
 			return fmt.Errorf("upload asset %s: %w", ds.DistName, err)
 		}
 	}

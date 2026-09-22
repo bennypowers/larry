@@ -19,10 +19,12 @@ type PrepareConfig struct {
 	DryRun                  bool
 	Distdir                 string
 	Overlay                 string // overlay root path for manifest
+	GitHubRepo              string // GitHub repo (owner/repo) for release operations
 	UseTUI                  bool
 	ForceType               ebuild.PackageType
 	HTTPClient              *http.Client
 	CleanupOrphanedAssets   bool // removes orphaned GitHub assets on prepare failure
+	RevisionBump            bool // skip source download, only run manifest
 }
 
 // Prepare handles the ebuild preparation pipeline.

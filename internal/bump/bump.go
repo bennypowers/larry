@@ -273,7 +273,13 @@ func extractPNPV(path string) (pn, pv string) {
 		return matches[1], matches[2]
 	}
 
-	// Fallback
+	// Fallback: find last hyphen before a digit
+	for i := len(base) - 1; i >= 0; i-- {
+		if base[i] == '-' && i+1 < len(base) && base[i+1] >= '0' && base[i+1] <= '9' {
+			return base[:i], base[i+1:]
+		}
+	}
+
 	return base, ""
 }
 

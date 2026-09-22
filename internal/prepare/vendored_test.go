@@ -258,7 +258,7 @@ func TestVendored_GhReleaseView_Exists(t *testing.T) {
 	runner := github.NewStubRunner()
 	runner.Outputs["gh release view pkg --json tagName,url"] = []byte(`{"tagName":"pkg","url":"https://github.com/owner/pkg/releases/tag/pkg"}`)
 
-	exists, err := ghReleaseViewExists("pkg", runner)
+	exists, err := ghReleaseViewExists("pkg", "", runner)
 	if err != nil {
 		t.Fatalf("ghReleaseViewExists failed: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestVendored_GhReleaseView_NotExists(t *testing.T) {
 	runner := github.NewStubRunner()
 	runner.Errors["gh release view pkg --json tagName,url"] = fmt.Errorf("release not found")
 
-	exists, err := ghReleaseViewExists("pkg", runner)
+	exists, err := ghReleaseViewExists("pkg", "", runner)
 	if err != nil {
 		t.Fatalf("ghReleaseViewExists failed: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestVendored_GhReleaseView_NotExists(t *testing.T) {
 func TestVendored_GhReleaseCreate(t *testing.T) {
 	runner := github.NewStubRunner()
 
-	err := ghReleaseCreate("pkg", runner)
+	err := ghReleaseCreate("pkg", "", runner)
 	if err != nil {
 		t.Fatalf("ghReleaseCreate failed: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestVendored_GhReleaseCreate_Failure(t *testing.T) {
 	runner := github.NewStubRunner()
 	runner.Errors["gh release create pkg"] = fmt.Errorf("gh error")
 
-	err := ghReleaseCreate("pkg", runner)
+	err := ghReleaseCreate("pkg", "", runner)
 	if err == nil {
 		t.Fatal("expected error from gh release create")
 	}
@@ -319,7 +319,7 @@ func TestVendored_GhUpload(t *testing.T) {
 	tarballPath := filepath.Join(tmpDir, "deps.tar.xz")
 	os.WriteFile(tarballPath, []byte("fake-tarball"), 0644)
 
-	err := ghUploadAsset("pkg", tarballPath, runner)
+	err := ghUploadAsset("pkg", tarballPath, "", runner)
 	if err != nil {
 		t.Fatalf("ghUploadAsset failed: %v", err)
 	}
@@ -328,7 +328,7 @@ func TestVendored_GhUpload(t *testing.T) {
 func TestVendored_GhUpload_MissingFile(t *testing.T) {
 	runner := github.NewStubRunner()
 
-	err := ghUploadAsset("pkg", "/nonexistent/file.tar.gz", runner)
+	err := ghUploadAsset("pkg", "/nonexistent/file.tar.gz", "", runner)
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}

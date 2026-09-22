@@ -254,10 +254,14 @@ func extractCategoryFromPath(path string) string {
 }
 
 // extractVersionFromFilename extracts version from ebuild filename.
-// e.g., "pkg-1.2.3.ebuild" -> "1.2.3"
+// Strips revision suffix (-rN) first. e.g., "pkg-1.2.3-r1.ebuild" -> "1.2.3"
 func extractVersionFromFilename(path string) string {
 	base := filepath.Base(path)
 	base = strings.TrimSuffix(base, ".ebuild")
+	// Strip revision suffix: -rN
+	if idx := strings.LastIndex(base, "-r"); idx > 0 {
+		base = base[:idx]
+	}
 	if idx := strings.LastIndex(base, "-"); idx > 0 {
 		return base[idx+1:]
 	}
@@ -265,10 +269,14 @@ func extractVersionFromFilename(path string) string {
 }
 
 // extractPkgName extracts package name from ebuild filename.
-// e.g., "pkg-1.2.3.ebuild" -> "pkg"
+// Strips revision suffix (-rN) first. e.g., "pkg-1.2.3-r1.ebuild" -> "pkg"
 func extractPkgName(path string) string {
 	base := filepath.Base(path)
 	base = strings.TrimSuffix(base, ".ebuild")
+	// Strip revision suffix: -rN
+	if idx := strings.LastIndex(base, "-r"); idx > 0 {
+		base = base[:idx]
+	}
 	if idx := strings.LastIndex(base, "-"); idx > 0 {
 		return base[:idx]
 	}

@@ -75,21 +75,21 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 		logger.Debug("release tag: " + tag + " asset: " + assetName)
 		if tag != "" && assetName != "" {
 			assetPath := filepath.Join(distDir, assetName)
+			gh := github.NewClient()
 			if _, err := os.Stat(assetPath); err == nil {
 				logger.Debug("uploading asset: " + assetPath)
-				gh := github.NewClient()
-				exists, err := ghReleaseViewExists(tag, gh.Runner())
+				exists, err := ghReleaseViewExists(tag, cfg.GitHubRepo, gh.Runner())
 				if err != nil {
 					Restore(ei.Path)
 					return fmt.Errorf("npm: check release %s: %w", tag, err)
 				}
 				if !exists {
-					if err := ghReleaseCreate(tag, gh.Runner()); err != nil {
+					if err := ghReleaseCreate(tag, cfg.GitHubRepo, gh.Runner()); err != nil {
 						Restore(ei.Path)
 						return fmt.Errorf("npm: create release %s: %w", tag, err)
 					}
 				}
-				if err := ghUploadAsset(tag, assetPath, gh.Runner()); err != nil {
+				if err := ghUploadAsset(tag, assetPath, cfg.GitHubRepo, gh.Runner()); err != nil {
 					Restore(ei.Path)
 					return fmt.Errorf("npm: upload asset %s: %w", assetName, err)
 				}
@@ -101,7 +101,7 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 					return fmt.Errorf("npm: create deps tarball: %w", err)
 				}
 				logger.Debug("asset created, uploading...")
-				if err := npmUploadAsset(tag, assetName, distDir); err != nil {
+				if err := npmUploadAsset(tag, assetName, distDir, cfg.GitHubRepo, gh.Runner()); err != nil {
 					Restore(ei.Path)
 					return fmt.Errorf("npm: upload asset: %w", err)
 				}
@@ -228,14 +228,18 @@ func npmDownloadDistfile(url, destDir string, client *httpclient.Client) (string
 		distName = "downloaded.tgz"
 	}
 
-	destPath := filepath.Join(destDir, distName)
-
 	// Create destDir if it doesn't exist
 	if destDir != "" {
 		if err := os.MkdirAll(destDir, 0755); err != nil {
 			return "", fmt.Errorf("npm: create distdir: %w", err)
 		}
+	} else {
+		// Use absolute path so tar works when cmd.Dir changes
+		cwd, _ := os.Getwd()
+		destDir = cwd
 	}
+
+	destPath := filepath.Join(destDir, distName)
 
 	out, err := os.Create(destPath)
 	if err != nil {
@@ -293,22 +297,20 @@ func npmCopyToDistdir(srcPath, distDir string) error {
 }
 
 // npmUploadAsset uploads a deps tarball to the GitHub release.
-func npmUploadAsset(tag, assetName, distDir string) error {
-	gh := github.NewClient()
-
+func npmUploadAsset(tag, assetName, distDir, repo string, runner github.CmdRunner) error {
 	// Check if release exists
-	exists, err := ghReleaseViewExists(tag, gh.Runner())
+	exists, err := ghReleaseViewExists(tag, repo, runner)
 	if err != nil {
 		return fmt.Errorf("check release %s: %w", tag, err)
 	}
 	if !exists {
-		if err := ghReleaseCreate(tag, gh.Runner()); err != nil {
+		if err := ghReleaseCreate(tag, repo, runner); err != nil {
 			return fmt.Errorf("create release %s: %w", tag, err)
 		}
 	}
 
 	assetPath := filepath.Join(distDir, assetName)
-	if err := ghUploadAsset(tag, assetPath, gh.Runner()); err != nil {
+	if err := ghUploadAsset(tag, assetPath, repo, runner); err != nil {
 		return fmt.Errorf("upload asset %s: %w", assetName, err)
 	}
 	fmt.Fprintln(os.Stderr, "[larry] npm: asset uploaded to GitHub release")
@@ -398,19 +400,21 @@ func npmCreateDepsTarball(npmTarball, distDir, assetName string) error {
 		return fmt.Errorf("create deps tarball: %w", err)
 	}
 
-	// Copy to distdir
-	if distDir != "" {
-		if err := os.MkdirAll(distDir, 0755); err != nil {
-			return fmt.Errorf("create distdir: %w", err)
-		}
-		destPath := filepath.Join(distDir, assetName)
-		data, err := os.ReadFile(outputTarball)
-		if err != nil {
-			return fmt.Errorf("read tarball: %w", err)
-		}
-		if err := os.WriteFile(destPath, data, 0644); err != nil {
-			return fmt.Errorf("write distfile: %w", err)
-		}
+	// Copy to distdir (or CWD if distdir is empty)
+	destDir := distDir
+	if destDir == "" {
+		destDir = "."
+	}
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return fmt.Errorf("create dest dir: %w", err)
+	}
+	destPath := filepath.Join(destDir, assetName)
+	data, err := os.ReadFile(outputTarball)
+	if err != nil {
+		return fmt.Errorf("read tarball: %w", err)
+	}
+	if err := os.WriteFile(destPath, data, 0644); err != nil {
+		return fmt.Errorf("write distfile: %w", err)
 	}
 
 	return nil
