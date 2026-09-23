@@ -36,11 +36,10 @@ func runManifest(overlay, path, distdir string) error {
 	logger.Debug("distdir: " + distdir)
 	logger.Debug("overlay: " + overlay)
 
-	// Build env: use /var/cache/distfiles since ebuild digest re-verifies ALL
-	// versions in the category. The larry distdir only has new distfiles, so
-	// we use the system distdir which already has all existing ones.
+	// Build env: use the larry distdir consistently (same as the fish script).
+	// All distfiles — old and new — are expected to be in DISTDIR.
 	env := os.Environ()
-	env = append(env, "DISTDIR=/var/cache/distfiles")
+	env = append(env, "DISTDIR="+distdir)
 	env = append(env, "GENTOO_MIRRORS=")
 
 	cmd := exec.Command(binPath, args...)

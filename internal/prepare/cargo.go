@@ -54,7 +54,7 @@ func PrepareCargo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 
 	// 4. Generate CRATES variable and update ebuild
 	cratesStr := formatCRATES(crates)
-	err = updateCargoEbuild(ei, cratesStr, cfg)
+	err = updateCargoEbuild(ei, cratesStr, crates, cfg)
 	if err != nil {
 		return fmt.Errorf("cargo: update ebuild: %w", err)
 	}
@@ -69,7 +69,7 @@ func findCargoRepo(ei *ebuild.EbuildInfo) (owner, repo string) {
 		re := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)`)
 		matches := re.FindStringSubmatch(ei.HOMEPAGE)
 		if len(matches) == 3 {
-			return matches[1], matches[2]
+			return strings.TrimSpace(matches[1]), strings.TrimSpace(matches[2])
 		}
 	}
 
@@ -79,7 +79,7 @@ func findCargoRepo(ei *ebuild.EbuildInfo) (owner, repo string) {
 		re := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)`)
 		matches := re.FindStringSubmatch(ei.SRC_URI)
 		if len(matches) == 3 {
-			return matches[1], matches[2]
+			return strings.TrimSpace(matches[1]), strings.TrimSpace(matches[2])
 		}
 	}
 
@@ -97,6 +97,9 @@ func findCargoLockAndDownload(client *github.Client, owner, repo, tag string) (l
 }
 
 // findCargoLockFromTreeAPI tries to find Cargo.lock in the GitHub tree API.
+// The tag parameter is used as the ref when querying the GitHub API to ensure
+// the correct version's Cargo.lock is fetched (critical for version bumps and revisions).
+// It handles common tag naming conventions: with or without the "v" prefix (e.g., "0.3.3" → "v0.3.3").
 func findCargoLockFromTreeAPI(client *github.Client, owner, repo, tag string) (string, error) {
 	// Common paths to try
 	fallbackPaths := []string{
@@ -107,32 +110,78 @@ func findCargoLockFromTreeAPI(client *github.Client, owner, repo, tag string) (s
 		"crates/Cargo.lock",
 	}
 
-	for _, path := range fallbackPaths {
-		output, err := client.Gh("api", owner+"/"+repo+"/contents/"+path)
-		if err != nil {
-			continue
+	// Determine the ref to try, with common tag naming conventions.
+	var refs []string
+	if tag != "" {
+		refs = append(refs, tag)
+		// Try with "v" prefix if the tag doesn't already have it
+		if !strings.HasPrefix(tag, "v") && !strings.HasPrefix(tag, "V") {
+			refs = append(refs, "v"+tag)
 		}
+		// Also try without "v" prefix (in case tag has it)
+		if strings.HasPrefix(tag, "v") || strings.HasPrefix(tag, "V") {
+			refs = append(refs, tag[1:])
+		}
+	}
+	refs = append(refs, "") // empty string = default branch (no ?ref= param)
 
-		// Parse JSON to get download URL
-		var result struct {
-			Name        string `json:"name"`
-			DownloadURL string `json:"download_url"`
-		}
-		if err := json.Unmarshal(output, &result); err != nil {
-			continue
-		}
+	for _, ref := range refs {
+		for _, path := range fallbackPaths {
+			// Build the API call
+			refParam := ""
+			if ref != "" {
+				refParam = "?ref=" + ref
+			}
+			apiCall := "repos/" + owner + "/" + repo + "/contents/" + path + refParam
 
-		// Download the Cargo.lock
-		tmpDir, err := os.MkdirTemp("", "larry-cargo-*")
-		if err != nil {
-			continue
+			// Use "repos/" prefix required by gh api for the contents endpoint.
+			output, err := client.Gh("api", apiCall)
+			if err != nil {
+				continue
+			}
+
+			// Parse JSON to get download URL
+			var result struct {
+				Name        string `json:"name"`
+				DownloadURL string `json:"download_url"`
+			}
+			if err := json.Unmarshal(output, &result); err != nil {
+				continue
+			}
+
+			// If download_url is empty, the response may be a base64-encoded blob.
+			// In that case, decode the "content" field as fallback.
+			if result.DownloadURL == "" {
+				var blobResult struct {
+					Content  string `json:"content"`
+					Encoding string `json:"encoding"`
+				}
+				if json.Unmarshal(output, &blobResult) == nil && blobResult.Content != "" {
+					tmpDir, err := os.MkdirTemp("", "larry-cargo-*")
+					if err != nil {
+						continue
+					}
+					destPath := filepath.Join(tmpDir, "Cargo.lock")
+					if err := os.WriteFile(destPath, []byte(blobResult.Content), 0644); err != nil {
+						continue
+					}
+					return destPath, nil
+				}
+				continue
+			}
+
+			// Download the Cargo.lock
+			tmpDir, err := os.MkdirTemp("", "larry-cargo-*")
+			if err != nil {
+				continue
+			}
+			destPath := filepath.Join(tmpDir, "Cargo.lock")
+			clientHTTP := httpclient.NewClient()
+			if err := downloadCargoLock(result.DownloadURL, destPath, clientHTTP); err != nil {
+				continue
+			}
+			return destPath, nil
 		}
-		destPath := filepath.Join(tmpDir, "Cargo.lock")
-		clientHTTP := httpclient.NewClient()
-		if err := downloadCargoLock(result.DownloadURL, destPath, clientHTTP); err != nil {
-			continue
-		}
-		return destPath, nil
 	}
 
 	return "", fmt.Errorf("cargo: Cargo.lock not found in %s/%s", owner, repo)
@@ -233,7 +282,7 @@ func formatCRATES(crates []CargoCrate) string {
 }
 
 // updateCargoEbuild updates the CRATES variable in an ebuild file.
-func updateCargoEbuild(ei *ebuild.EbuildInfo, cratesStr string, cfg *PrepareConfig) error {
+func updateCargoEbuild(ei *ebuild.EbuildInfo, cratesStr string, crates []CargoCrate, cfg *PrepareConfig) error {
 	ebuildPath := ei.Path
 
 	if cfg.DryRun {
@@ -255,23 +304,25 @@ edition = "2021"
 		if err := os.WriteFile(cargoTomlPath, []byte(cargoToml), 0644); err != nil {
 			// Fall through to native parsing
 		} else {
-			// Copy Cargo.lock if available
+			defer os.Remove(cargoTomlPath)
+
+			// pycargoebuild requires Cargo.lock in the working directory.
+			// If it's not present, fall through to native parsing.
 			cargoLockPath := filepath.Join(tmpDir, "Cargo.lock")
-			if _, err := os.Stat(cargoLockPath); err == nil {
+			if _, err := os.Stat(cargoLockPath); err != nil {
+				// No Cargo.lock — native parsing will handle it
+			} else {
 				runner := github.NewClient().Runner()
 				if err := runPycargoebuild(tmpDir, ebuildPath, runner); err != nil {
 					// pycargoebuild failed, fall through to native
-					os.Remove(cargoTomlPath)
-				} else {
-					os.Remove(cargoTomlPath)
-					return nil
+					return updateCargoEbuildNative(ebuildPath, crates)
 				}
+				return nil
 			}
 		}
 	}
 
 	// Native parsing fallback
-	crates := parseCargoLock(cratesStr)
 	return updateCargoEbuildNative(ebuildPath, crates)
 }
 

@@ -1,6 +1,8 @@
 package prepare
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +11,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/ulikunitz/xz"
 
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
@@ -77,7 +81,19 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 			assetPath := filepath.Join(distDir, assetName)
 			gh := github.NewClient()
 			if _, err := os.Stat(assetPath); err == nil {
-				logger.Debug("uploading asset: " + assetPath)
+				// Check if the existing tarball has the correct npm-cache/ format.
+				// Old tarballs created by larry had node_modules/ which is incompatible
+				// with `npm --offline --cache` in the ebuild. Regenerate if needed.
+				if !npmDepsTarballHasCache(assetPath) {
+					logger.Debug("asset has wrong format (node_modules instead of npm-cache), regenerating...")
+					if err := npmCreateDepsTarball(downloaded, distDir, assetName); err != nil {
+						Restore(ei.Path)
+						return fmt.Errorf("npm: create deps tarball: %w", err)
+					}
+					logger.Debug("asset regenerated, uploading...")
+				} else {
+					logger.Debug("uploading asset: " + assetPath)
+				}
 				exists, err := ghReleaseViewExists(tag, cfg.GitHubRepo, gh.Runner())
 				if err != nil {
 					Restore(ei.Path)
@@ -319,6 +335,50 @@ func npmUploadAsset(tag, assetName, distDir, repo string, runner github.CmdRunne
 
 // npmCreateDepsTarball extracts an npm package, runs npm ci, and packages
 // node_modules into a tarball for the DISTDIR.
+// npmDepsTarballHasCache checks if a deps tarball has the correct npm-cache/
+// format (required for `npm --offline --cache` in ebuilds). Returns false if
+// the tarball has the old node_modules/ format or can't be read.
+func npmDepsTarballHasCache(tarballPath string) bool {
+	f, err := os.Open(tarballPath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	var reader io.Reader
+	switch {
+	case strings.HasSuffix(tarballPath, ".xz"):
+		xr, err2 := xz.NewReader(f)
+		if err2 != nil {
+			return false
+		}
+		reader = xr
+	case strings.HasSuffix(tarballPath, ".gz") || strings.HasSuffix(tarballPath, ".tgz"):
+		gr, err2 := gzip.NewReader(f)
+		if err2 != nil {
+			return false
+		}
+		defer gr.Close()
+		reader = gr
+	default:
+		return false
+	}
+
+	tr := tar.NewReader(reader)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return false
+		}
+		if err != nil {
+			return false
+		}
+		if hdr.Name == "npm-cache/" || strings.HasPrefix(hdr.Name, "npm-cache/") {
+			return true
+		}
+	}
+}
+
 func npmCreateDepsTarball(npmTarball, distDir, assetName string) error {
 	tmpDir, err := os.MkdirTemp("", "larry-npm-*")
 	if err != nil {
@@ -362,41 +422,29 @@ func npmCreateDepsTarball(npmTarball, distDir, assetName string) error {
 		return fmt.Errorf("write .npmrc: %w", err)
 	}
 
-	// Check for lockfile — prefer npm-shrinkwrap.json, then package-lock.json
-	lockfile := ""
-	for _, name := range []string{"npm-shrinkwrap.json", "package-lock.json"} {
-		if _, err := os.Stat(filepath.Join(pkgDir, name)); err == nil {
-			lockfile = name
-			break
-		}
+	// Create a dedicated npm cache directory
+	npmCacheDir := filepath.Join(tmpDir, "npm-cache")
+	if err := os.MkdirAll(npmCacheDir, 0755); err != nil {
+		return fmt.Errorf("create npm cache dir: %w", err)
 	}
 
-	// Run npm ci (with lockfile) or npm install (without)
+	// Run npm install with --cache to populate the cache (NOT --offline).
+	// We intentionally do NOT use --offline here because we need npm to
+	// actually fetch all transitive dependencies and cache them.
 	var cmd *exec.Cmd
-	if lockfile != "" {
-		cmd = exec.Command("npm", "ci", "--ignore-scripts")
-	} else {
-		cmd = exec.Command("npm", "install", "--ignore-scripts")
-	}
+	cmd = exec.Command("npm", "install", "--ignore-scripts", "--cache", npmCacheDir)
 	cmd.Dir = pkgDir
 	logger.Debug("running: " + strings.Join(cmd.Args, " "))
-	if output, err := cmd.CombinedOutput(); err != nil {
-		// If npm ci failed (lockfile out of sync), fall back to npm install
-		if cmd.Args[1] == "ci" {
-			logger.Debug("npm ci failed, falling back to npm install...")
-			cmd = exec.Command("npm", "install", "--ignore-scripts")
-			cmd.Dir = pkgDir
-			output, err = cmd.CombinedOutput()
-		}
-		if err != nil {
-			fmt.Fprint(os.Stderr, string(output))
-			return fmt.Errorf("npm %s: %w", cmd.Args[1], err)
-		}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprint(os.Stderr, string(output))
+		return fmt.Errorf("npm install: %w", err)
 	}
 
-	// Create deps tarball
+	// Create deps tarball from the npm cache directory
 	outputTarball := filepath.Join(tmpDir, assetName)
-	if err := createVendorTarball(pkgDir, "node_modules", outputTarball); err != nil {
+	cmd = exec.Command("tar", "cJf", outputTarball, "-C", tmpDir, "npm-cache")
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("create deps tarball: %w", err)
 	}
 

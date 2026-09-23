@@ -10,6 +10,7 @@ require (
 	github.com/muesli/termenv v0.16.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
+	github.com/ulikunitz/xz v0.5.17
 	golang.org/x/term v0.44.0
 )
 

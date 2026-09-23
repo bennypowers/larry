@@ -113,10 +113,17 @@ func DetectTypeFromInfoForce(info *EbuildInfo, force PackageType) (PackageType, 
 		return TypeCargo, nil
 	}
 
-	// Check for go: inherits go-module
+	// Check for go: inherits go-module (must come before cargo check in Inherit loop)
 	for _, inherited := range info.Inherit {
 		if inherited == "go-module" {
 			return TypeGo, nil
+		}
+	}
+
+	// Check for cargo: inherits cargo (covers ebuilds that use ${CARGO_CRATE_URIS} instead of literal CRATES=)
+	for _, inherited := range info.Inherit {
+		if inherited == "cargo" {
+			return TypeCargo, nil
 		}
 	}
 
