@@ -1109,3 +1109,36 @@ func mustVersion(s string) *version.Version {
 	v, _ := version.Parse(s)
 	return v
 }
+
+// TestParseEbuildInfo_InheritAccumulatesAllLines verifies that ParseEbuildInfo
+// accumulates inherit lines from multiple `inherit` declarations.
+func TestParseEbuildInfo_InheritAccumulatesAllLines(t *testing.T) {
+	raw := `EAPI=8
+inherit pam python-single-r1
+DESCRIPTION="x"
+inherit systemd tmpfiles
+`
+	dir := t.TempDir()
+	ebuildPath := filepath.Join(dir, "test-pkg", "my-pkg-1.0.0.ebuild")
+	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ebuildPath, []byte(raw), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := ParseEbuildInfo(ebuildPath)
+	if err != nil {
+		t.Fatalf("ParseEbuildInfo(%q) error: %v", ebuildPath, err)
+	}
+	want := []string{"pam", "python-single-r1", "systemd", "tmpfiles"}
+	if len(info.Inherit) != len(want) {
+		t.Errorf("Inherit = %v, want %v", info.Inherit, want)
+		return
+	}
+	for i, w := range want {
+		if info.Inherit[i] != w {
+			t.Errorf("Inherit[%d] = %q, want %q", i, info.Inherit[i], w)
+		}
+	}
+}

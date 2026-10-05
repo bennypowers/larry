@@ -15,69 +15,6 @@ import (
 
 // ---------------------------------------------------------------------------
 // npmResolveSRCURI tests
-// ---------------------------------------------------------------------------
-
-func TestNpm_ResolveSRCURI(t *testing.T) {
-	tests := []struct {
-		name    string
-		srcURI  string
-		raw     string
-		info    *ebuild.EbuildInfo
-		wantURL string
-	}{
-		{
-			name:    "basic_mirror",
-			srcURI:  "mirror://npm/my-pkg/my-pkg-1.0.0.tgz",
-			info:    &ebuild.EbuildInfo{Pkg: "my-pkg", PVVal: "1.0.0", PVal: "my-pkg-1.0.0"},
-			wantURL: "https://registry.npmjs.org/my-pkg/my-pkg-1.0.0.tgz",
-		},
-		{
-			name:    "with_vars",
-			srcURI:  "mirror://npm/${PN}/${P}.tgz",
-			info:    &ebuild.EbuildInfo{Pkg: "my-pkg", PVVal: "1.0.0", PVal: "my-pkg-1.0.0"},
-			wantURL: "https://registry.npmjs.org/my-pkg/my-pkg-1.0.0.tgz",
-		},
-		{
-			name: "scoped_package",
-			srcURI: "mirror://npm/${MY_NPM_SCOPE}/${PN}/-/${P}.tgz -> ${P}.tgz",
-			raw:    "MY_NPM_SCOPE=\"@earendil-works\"",
-			info:   &ebuild.EbuildInfo{Pkg: "pi-coding-agent", PVVal: "0.86.0", PVal: "pi-coding-agent-0.86.0", Raw: "MY_NPM_SCOPE=\"@earendil-works\""},
-			wantURL: "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-0.86.0.tgz",
-		},
-		{
-			name:    "not_npm_mirror",
-			srcURI:  "mirror://gentoo/pkg-1.0.0.tar.gz",
-			info:    &ebuild.EbuildInfo{Pkg: "pkg", PVVal: "1.0.0", PVal: "pkg-1.0.0"},
-			wantURL: "",
-		},
-		{
-			name: "multi_line_src_uri",
-			srcURI: "\n\tmirror://npm/${PN}/${P}.tgz -> ${P}.tgz\n\thttps://other.example.com/file.tar.gz\n",
-			info: &ebuild.EbuildInfo{Pkg: "my-pkg", PVVal: "1.0.0", PVal: "my-pkg-1.0.0"},
-			wantURL: "https://registry.npmjs.org/my-pkg/my-pkg-1.0.0.tgz",
-		},
-		{
-			name: "rename_syntax_stripped",
-			srcURI: "mirror://npm/${PN}/${P}.tgz -> renamed.tgz",
-			info: &ebuild.EbuildInfo{Pkg: "my-pkg", PVVal: "1.0.0", PVal: "my-pkg-1.0.0"},
-			wantURL: "https://registry.npmjs.org/my-pkg/my-pkg-1.0.0.tgz",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.raw != "" {
-				tt.info.Raw = tt.raw
-			}
-			result := npmResolveSRCURI(tt.srcURI, tt.info)
-			if result != tt.wantURL {
-				t.Errorf("npmResolveSRCURI(%q) = %q, want %q", tt.srcURI, result, tt.wantURL)
-			}
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
 // npmDownloadDistfile tests
 // ---------------------------------------------------------------------------
 
@@ -206,47 +143,6 @@ func TestNpm_CopyToDistdir_EmptyDistdir(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // extractVar tests
-// ---------------------------------------------------------------------------
-
-func TestExtractVar(t *testing.T) {
-	tests := []struct {
-		name     string
-		content  string
-		varName  string
-		want     string
-	}{
-		{
-			name:    "single_line",
-			content: `MY_NPM_SCOPE="@earendil-works"
-PV=1.0.0`,
-			varName: "MY_NPM_SCOPE",
-			want:    "@earendil-works",
-		},
-		{
-			name:    "multi_line",
-			content: "SRC_URI=\"\n\tmirror://npm/pkg/pkg-1.0.0.tgz\n\"",
-			varName: "SRC_URI",
-			want:    "\n\tmirror://npm/pkg/pkg-1.0.0.tgz\n",
-		},
-		{
-			name:    "not_found",
-			content: `PV=1.0.0`,
-			varName: "PN",
-			want:    "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := extractVar(tt.content, tt.varName)
-			if result != tt.want {
-				t.Errorf("extractVar(%q, %q) = %q, want %q", tt.content, tt.varName, result, tt.want)
-			}
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
 // npmExtractDistfileName tests
 // ---------------------------------------------------------------------------
 
@@ -328,7 +224,7 @@ func TestNpm_Pipeline_DownloadAndCopy(t *testing.T) {
 		SRC_URI: "mirror://npm/${PN}/${P}.tgz",
 	}
 
-	resolvedURL := npmResolveSRCURI(info.SRC_URI, info)
+	resolvedURL := npmFirstRegistryURL(info)
 	resolvedURL = strings.Replace(resolvedURL, "https://registry.npmjs.org", server.URL, 1)
 
 	client := httpclient.NewClientWithTransport(server.Client().Transport)
@@ -372,7 +268,7 @@ func TestNpm_Pipeline_DownloadToDistdir(t *testing.T) {
 		SRC_URI: "mirror://npm/${PN}/${P}.tgz",
 	}
 
-	resolvedURL := npmResolveSRCURI(info.SRC_URI, info)
+	resolvedURL := npmFirstRegistryURL(info)
 	resolvedURL = strings.Replace(resolvedURL, "https://registry.npmjs.org", server.URL, 1)
 
 	client := httpclient.NewClientWithTransport(server.Client().Transport)

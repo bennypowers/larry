@@ -2,6 +2,9 @@ package ebuild
 
 import (
 	"testing"
+	"time"
+
+	"bennypowers.dev/larry/internal/atom"
 )
 
 // ---- TestSRC_URI_Resolve_Npm: mirror://npm/ → https://registry.npmjs.org/... ----
@@ -48,7 +51,8 @@ func TestSRC_URI_Resolve_CustomVars(t *testing.T) {
 		PVVal:   "1.0.0",
 		SRC_URI: "mirror://npm/${PN}/${PN}-${PV}.tgz",
 	}
-	vars := BuildVariableMap(info)
+	pe := &atom.ParsedEbuild{PN: "my-tool", PV: "1.0.0", P: "my-tool-1.0.0", PF: "my-tool-1.0.0", Category: "cat"}
+	vars := BuildVariableMap(info.SRC_URI, pe)
 	entries, err := ResolveSRCURIWithVars(info.SRC_URI, vars)
 	if err != nil {
 		t.Fatalf("ResolveSRCURIWithVars() error: %v", err)
@@ -209,7 +213,8 @@ func TestSRC_URI_Resolve_NpmWithVars(t *testing.T) {
 		PVVal:   "0.75.3",
 		SRC_URI: `MY_PN="my-web-tool" mirror://npm/${MY_PN}/${MY_PN}-${PV}.tgz`,
 	}
-	vars := BuildVariableMap(info)
+	pe := &atom.ParsedEbuild{PN: "my-web-tool", PV: "0.75.3", P: "my-web-tool-0.75.3", PF: "my-web-tool-0.75.3", Category: "cat"}
+	vars := BuildVariableMap(info.SRC_URI, pe)
 
 	entries, err := ResolveSRCURIWithVars(info.SRC_URI, vars)
 	if err != nil {
@@ -233,7 +238,8 @@ func TestSRC_URI_Resolve_NpmWithVarsAndCustomVar(t *testing.T) {
 		PVVal:   "1.2.3",
 		SRC_URI: `MY_PN="my-tool" mirror://npm/${MY_PN}/${MY_PN}-${PV}.tgz`,
 	}
-	vars := BuildVariableMap(info)
+	pe := &atom.ParsedEbuild{PN: "my-tool", PV: "1.2.3", P: "my-tool-1.2.3", PF: "my-tool-1.2.3", Category: "cat"}
+	vars := BuildVariableMap(info.SRC_URI, pe)
 
 	entries, err := ResolveSRCURIWithVars(info.SRC_URI, vars)
 	if err != nil {
@@ -256,7 +262,8 @@ func TestSRC_URI_Resolve_NpmDistfile(t *testing.T) {
 		PVVal:   "4.18.0",
 		SRC_URI: "mirror://npm/express/express-4.18.0.tgz",
 	}
-	vars := BuildVariableMap(info)
+	pe := &atom.ParsedEbuild{PN: "express", PV: "4.18.0", P: "express-4.18.0", PF: "express-4.18.0", Category: "cat"}
+	vars := BuildVariableMap(info.SRC_URI, pe)
 
 	resolved, err := ResolveNpmDistfile(info.SRC_URI, vars)
 	if err != nil {
@@ -328,7 +335,8 @@ func TestSRCURIVars(t *testing.T) {
 		PVVal:   "1.0",
 		SRC_URI: "mirror://npm/${PN}/${PN}-${PV}.tgz",
 	}
-	vars := BuildVariableMap(info)
+	pe := &atom.ParsedEbuild{PN: "pkg", PV: "1.0", P: "pkg-1.0", PF: "pkg-1.0", Category: "cat"}
+	vars := BuildVariableMap(info.SRC_URI, pe)
 
 	result, err := SRCURIVars(info.SRC_URI, vars)
 	if err != nil {
@@ -375,7 +383,8 @@ func TestVariableResolution_Nested(t *testing.T) {
 		SRC_URI: `MY_PN="my-${PV}"
 SRC_URI="mirror://npm/${MY_PN}/${MY_PN}-${PV}.tgz"`,
 	}
-	vars = BuildVariableMap(info)
+	pe := &atom.ParsedEbuild{PN: "my-tool", PV: "1.0", P: "my-tool-1.0", PF: "my-tool-1.0", Category: "cat"}
+	vars = BuildVariableMap(info.SRC_URI, pe)
 	result, err := SRCURIVars(info.SRC_URI, vars)
 	if err != nil {
 		t.Fatalf("SRCURIVars() error: %v", err)
@@ -407,7 +416,8 @@ func TestVariableResolution_BashManip(t *testing.T) {
 		PVVal:   "1.2.3",
 		SRC_URI: `mirror://npm/${PN////-/_}/${PN////-/_}-${PV//./_}.tgz`,
 	}
-	vars = BuildVariableMap(info)
+	pe := &atom.ParsedEbuild{PN: "my-pkg", PV: "1.2.3", P: "my-pkg-1.2.3", PF: "my-pkg-1.2.3", Category: "cat"}
+	vars = BuildVariableMap(info.SRC_URI, pe)
 	result2, err := SRCURIVars(info.SRC_URI, vars)
 	if err != nil {
 		t.Fatalf("SRCURIVars() error: %v", err)
@@ -428,7 +438,8 @@ func TestVariableResolution_Expansion(t *testing.T) {
 		PVVal:   "1.2.3",
 		SRC_URI: "mirror://npm/${PN}/${P}.tgz",
 	}
-	vars := BuildVariableMap(info)
+	pe := &atom.ParsedEbuild{PN: "my-tool", PV: "1.2.3", P: "my-tool-1.2.3", PF: "my-tool-1.2.3", Category: "cat"}
+	vars := BuildVariableMap(info.SRC_URI, pe)
 
 	// Test PN expansion
 	if got := ExpandVariables("${PN}", vars); got != "my-tool" {
@@ -479,14 +490,11 @@ func TestVariableResolution_MultiExpand(t *testing.T) {
 // ---- TestBuildVariableMap: builds vars from EbuildInfo ----
 
 func TestBuildVariableMap(t *testing.T) {
-	info := &EbuildInfo{
-		Pkg:     "my-tool",
-		PVVal:   "1.2.3",
-		PVal:    "my-tool-1.2.3",
-		SRC_URI: `MY_P="${PN}-${PV}"
-SRC_URI="mirror://npm/${MY_P}/${MY_P}.tgz"`,
-	}
-	vars := BuildVariableMap(info)
+	raw := `MY_P="${PN}-${PV}"
+SRC_URI="mirror://npm/${MY_P}/${MY_P}.tgz"
+EAPI=8`
+	pe := &atom.ParsedEbuild{PN: "my-tool", PV: "1.2.3", P: "my-tool-1.2.3", PF: "my-tool-1.2.3", Category: "cat"}
+	vars := BuildVariableMap(raw, pe)
 
 	// Core vars
 	if vars["PN"] != "my-tool" {
@@ -664,5 +672,233 @@ func TestExpandVariables_NoVars(t *testing.T) {
 	result := ExpandVariables("plain text without vars", nil)
 	if result != "plain text without vars" {
 		t.Errorf("ExpandVariables() = %q, want unchanged", result)
+	}
+}
+
+// ---- TestExpandVariables_NestedFixpoint (E1–E4) ----
+
+func TestExpandVariables_NestedFixpoint(t *testing.T) {
+	vars := VariableMap{
+		"MY_NPM_NAME":    "widget",
+		"MY_WEBUI_P":     "${MY_NPM_NAME}-0.75.3",
+	}
+	result := ExpandVariables("mirror://npm/${MY_WEBUI_P}.tgz", vars)
+	want := "mirror://npm/widget-0.75.3.tgz"
+	if result != want {
+		t.Errorf("= %q, want %q", result, want)
+	}
+}
+
+// ---- TestExpandVariables_NoInfiniteLoop ----
+
+func TestExpandVariables_NoInfiniteLoop(t *testing.T) {
+	vars := VariableMap{
+		"A": "${B}",
+		"B": "${A}",
+	}
+	// Must not hang — cap at 10 iterations
+	done := make(chan struct{})
+	go func() {
+		ExpandVariables("${A}", vars)
+		close(done)
+	}()
+	select {
+	case <-done:
+		// OK
+	case <-time.After(5 * time.Second):
+		t.Fatal("ExpandVariables hung — infinite loop")
+	}
+}
+
+// ---- TestExpandVariables_UnknownVarLeftAlone ----
+
+func TestExpandVariables_UnknownVarLeftAlone(t *testing.T) {
+	vars := VariableMap{"PN": "foo"}
+	result := ExpandVariables("${NOPE}/${PN}", vars)
+	want := "${NOPE}/foo"
+	if result != want {
+		t.Errorf("= %q, want %q", result, want)
+	}
+}
+
+// ---- TestExpandVariables_BashManipulation (E6) ----
+
+func TestExpandVariables_BashManipulation(t *testing.T) {
+	tests := []struct {
+		input       string
+		want        string
+	}{
+		{"${PN//-/_}", "fish_lsp"},
+		{"${PN//s/S}", "fiSh-lSp"},
+		{"${PN/s/S}", "fiSh-lsp"},
+		{"${PN/-/_}", "fish_lsp"},
+		{"${MY_PN::1}", "k"},
+		{"${MY_PN::6}", "kornia"},
+		{"${MY_PN:7:2}", "rs"},
+		{"${MY_PN::99}", "kornia-rs"},
+		{"${MY_PN::x}", "kornia-rs"},
+	}
+	vars := VariableMap{
+		"PN":     "fish-lsp",
+		"MY_PN":  "kornia-rs",
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := ExpandVariables(tt.input, vars)
+			if result != tt.want {
+				t.Errorf("ExpandVariables(%q) = %q, want %q", tt.input, result, tt.want)
+			}
+		})
+	}
+}
+
+// ---- TestParseInherit_SingleLine (E7) ----
+
+func TestParseInherit_SingleLine(t *testing.T) {
+	result := ParseInherit("inherit cargo\n")
+	want := []string{"cargo"}
+	if len(result) != len(want) || result[0] != want[0] {
+		t.Errorf("ParseInherit(%q) = %v, want %v", "inherit cargo\n", result, want)
+	}
+}
+
+// ---- TestParseInherit_MultipleLines ----
+
+func TestParseInherit_MultipleLines(t *testing.T) {
+	raw := `inherit pam python-single-r1
+DESCRIPTION="x"
+inherit systemd tmpfiles
+`
+	result := ParseInherit(raw)
+	want := []string{"pam", "python-single-r1", "systemd", "tmpfiles"}
+	if len(result) != len(want) {
+		t.Errorf("ParseInherit() = %v, want %v", result, want)
+		return
+	}
+	for i, w := range want {
+		if result[i] != w {
+			t.Errorf("result[%d] = %q, want %q", i, result[i], w)
+		}
+	}
+}
+
+// ---- TestParseInherit_Continuation ----
+
+func TestParseInherit_Continuation(t *testing.T) {
+	raw := `inherit foo \
+	go-module bar
+`
+	result := ParseInherit(raw)
+	want := []string{"foo", "go-module", "bar"}
+	if len(result) != len(want) {
+		t.Errorf("ParseInherit() = %v, want %v", result, want)
+		return
+	}
+	for i, w := range want {
+		if result[i] != w {
+			t.Errorf("result[%d] = %q, want %q", i, result[i], w)
+		}
+	}
+}
+
+// ---- TestParseInherit_SkipsComments ----
+
+func TestParseInherit_SkipsComments(t *testing.T) {
+	result := ParseInherit("# inherit go-module\ninherit cargo\n")
+	want := []string{"cargo"}
+	if len(result) != len(want) || result[0] != want[0] {
+		t.Errorf("ParseInherit() = %v, want %v", result, want)
+	}
+}
+
+// ---- TestParseInherit_Dedup ----
+
+func TestParseInherit_Dedup(t *testing.T) {
+	raw := "inherit cargo\ninherit cargo systemd\n"
+	result := ParseInherit(raw)
+	want := []string{"cargo", "systemd"}
+	if len(result) != len(want) {
+		t.Errorf("ParseInherit() = %v, want %v", result, want)
+		return
+	}
+	for i, w := range want {
+		if result[i] != w {
+			t.Errorf("result[%d] = %q, want %q", i, result[i], w)
+		}
+	}
+}
+
+// ---- TestParseInherit_None ----
+
+func TestParseInherit_None(t *testing.T) {
+	result := ParseInherit("EAPI=8\n")
+	if result != nil {
+		t.Errorf("ParseInherit() = %v, want nil", result)
+	}
+}
+
+// ---- TestBuildVariableMap_WholeFile (E5) ----
+
+func TestBuildVariableMap_WholeFile(t *testing.T) {
+	raw := `EAPI=8
+MY_NPM_NAME="language-server"
+DESCRIPTION="x"
+SRC_URI="
+	mirror://npm/@vtsls/${MY_NPM_NAME}/-/${MY_NPM_NAME}-${PV}.tgz
+"
+`
+	pe := &atom.ParsedEbuild{Category: "dev-util", PN: "vtsls", PV: "0.3.0", P: "vtsls-0.3.0", PF: "vtsls-0.3.0"}
+	vars := BuildVariableMap(raw, pe)
+
+	if vars["MY_NPM_NAME"] != "language-server" {
+		t.Errorf("vars[MY_NPM_NAME] = %q, want %q", vars["MY_NPM_NAME"], "language-server")
+	}
+	if vars["PN"] != "vtsls" {
+		t.Errorf("vars[PN] = %q, want %q", vars["PN"], "vtsls")
+	}
+	if vars["PV"] != "0.3.0" {
+		t.Errorf("vars[PV] = %q, want %q", vars["PV"], "0.3.0")
+	}
+	if vars["P"] != "vtsls-0.3.0" {
+		t.Errorf("vars[P] = %q, want %q", vars["P"], "vtsls-0.3.0")
+	}
+	if vars["PF"] != "vtsls-0.3.0" {
+		t.Errorf("vars[PF] = %q, want %q", vars["PF"], "vtsls-0.3.0")
+	}
+	if vars["CATEGORY"] != "dev-util" {
+		t.Errorf("vars[CATEGORY] = %q, want %q", vars["CATEGORY"], "dev-util")
+	}
+	if _, ok := vars["SRC_URI"]; ok {
+		t.Error("vars should not contain SRC_URI key")
+	}
+}
+
+// ---- TestBuildVariableMap_NilParsedEbuild ----
+
+func TestBuildVariableMap_NilParsedEbuild(t *testing.T) {
+	raw := `EAPI=8
+MY_NPM_NAME="language-server"
+SRC_URI="mirror://npm/${MY_NPM_NAME}.tgz"
+`
+	vars := BuildVariableMap(raw, nil)
+
+	if vars["MY_NPM_NAME"] != "language-server" {
+		t.Errorf("vars[MY_NPM_NAME] = %q, want %q", vars["MY_NPM_NAME"], "language-server")
+	}
+	if _, ok := vars["PN"]; ok {
+		t.Error("vars should not contain PN when pe is nil")
+	}
+}
+
+// ---- TestBuildVariableMap_IgnoresComments ----
+
+func TestBuildVariableMap_IgnoresComments(t *testing.T) {
+	raw := `# MY_NPM_NAME="wrong"
+MY_NPM_NAME="right"
+`
+	vars := BuildVariableMap(raw, nil)
+
+	if vars["MY_NPM_NAME"] != "right" {
+		t.Errorf("vars[MY_NPM_NAME] = %q, want %q", vars["MY_NPM_NAME"], "right")
 	}
 }

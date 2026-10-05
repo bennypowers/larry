@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"bennypowers.dev/larry/internal/ebuild"
+	"bennypowers.dev/larry/internal/upstream"
 )
 
 // ---------------------------------------------------------------------------
@@ -96,141 +97,10 @@ func TestDetectTypeFromInfo(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// parseEbuildInfo tests
-// ---------------------------------------------------------------------------
 
-func TestParseEbuildInfo(t *testing.T) {
-	// Structure: <temp>/test/test/test-1.0.0.ebuild → category=test, PN=test
-	catDir := t.TempDir()
-	dir := filepath.Join(catDir, "test", "test")
-	os.MkdirAll(dir, 0755)
-	path := filepath.Join(dir, "test-1.0.0.ebuild")
-	content := `EAPI=8
-PV=1.0.0
-SRC_URI="mirror://test/${P}.tar.gz"
-HOMEPAGE="https://example.com"
-INHERITED="stdenv"
-`
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
 
-	info, err := parseEbuildInfo(path, []byte(content))
-	if err != nil {
-		t.Fatalf("parseEbuildInfo returned error: %v", err)
-	}
 
-	if info.Category != "test" {
-		t.Errorf("Category = %q, want %q", info.Category, "test")
-	}
-	if info.Pkg != "test" {
-		t.Errorf("Pkg = %q, want %q", info.Pkg, "test")
-	}
-	if info.PVVal != "1.0.0" {
-		t.Errorf("PVVal = %q, want %q", info.PVVal, "1.0.0")
-	}
-	if info.PVal != "test-1.0.0" {
-		t.Errorf("PVal = %q, want %q", info.PVal, "test-1.0.0")
-	}
-	if info.SRC_URI != "mirror://test/test-1.0.0.tar.gz" {
-		t.Errorf("SRC_URI = %q, want %q", info.SRC_URI, "mirror://test/test-1.0.0.tar.gz")
-	}
-	if info.HOMEPAGE != "https://example.com" {
-		t.Errorf("HOMEPAGE = %q, want %q", info.HOMEPAGE, "https://example.com")
-	}
-	if len(info.Inherit) != 1 || info.Inherit[0] != "stdenv" {
-		t.Errorf("Inherit = %v, want [stdenv]", info.Inherit)
-	}
-	_ = catDir // used to create the directory structure
-}
 
-func TestParseEbuildInfo_Revision(t *testing.T) {
-	// Structure: <temp>/test/test/test-1.0.0-r2.ebuild
-	catDir := t.TempDir()
-	dir := filepath.Join(catDir, "test", "test")
-	os.MkdirAll(dir, 0755)
-	path := filepath.Join(dir, "test-1.0.0-r2.ebuild")
-	content := `EAPI=8
-PV=1.0.0
-SRC_URI="mirror://test/${P}.tar.gz"
-`
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	info, err := parseEbuildInfo(path, []byte(content))
-	if err != nil {
-		t.Fatalf("parseEbuildInfo returned error: %v", err)
-	}
-	if info.Pkg != "test" {
-		t.Errorf("Pkg = %q, want %q", info.Pkg, "test")
-	}
-	if info.PVVal != "1.0.0" {
-		t.Errorf("PVVal = %q, want %q", info.PVVal, "1.0.0")
-	}
-	_ = catDir // used to create the directory structure
-}
-
-// ---------------------------------------------------------------------------
-// resolveVariables tests
-// ---------------------------------------------------------------------------
-
-func TestResolveVariables(t *testing.T) {
-	tests := []struct {
-		name     string
-		vars     map[string]string
-		input    string
-		expected string
-	}{
-		{
-			name:     "PN",
-			vars:     map[string]string{"${PN}": "my-pkg"},
-			input:    "${PN}",
-			expected: "my-pkg",
-		},
-		{
-			name:     "PV",
-			vars:     map[string]string{"${PV}": "1.0.0"},
-			input:    "${PV}",
-			expected: "1.0.0",
-		},
-		{
-			name:     "P",
-			vars:     map[string]string{"${P}": "my-pkg-1.0.0"},
-			input:    "${P}",
-			expected: "my-pkg-1.0.0",
-		},
-		{
-			name:     "multiple_vars",
-			vars:     map[string]string{"${PN}": "pkg", "${PV}": "1.0", "${P}": "pkg-1.0"},
-			input:    "mirror://test/${P}.tar.gz",
-			expected: "mirror://test/pkg-1.0.tar.gz",
-		},
-		{
-			name:     "no_vars",
-			vars:     map[string]string{},
-			input:    "mirror://test/file.tar.gz",
-			expected: "mirror://test/file.tar.gz",
-		},
-		{
-			name:     "missing_var_unchanged",
-			vars:     map[string]string{"${PN}": "pkg"},
-			input:    "mirror://test/${P}.tar.gz",
-			expected: "mirror://test/${P}.tar.gz",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := resolveVariables(tt.input, tt.vars)
-			if result != tt.expected {
-				t.Errorf("resolveVariables(%q, %v) = %q, want %q", tt.input, tt.vars, result, tt.expected)
-			}
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
 // parsePVRaw tests
 // ---------------------------------------------------------------------------
 
@@ -649,9 +519,9 @@ SRC_URI="mirror://test/my-pkg-1.0.0.tar.gz"
 		t.Fatal(err)
 	}
 
-	info, err := parseEbuildInfo(ebuildPath, []byte(content))
+	info, err := upstream.ParseEbuildInfo(ebuildPath)
 	if err != nil {
-		t.Fatalf("parseEbuildInfo returned error: %v", err)
+		t.Fatalf("ParseEbuildInfo returned error: %v", err)
 	}
 
 	// Dry-run should NOT call manifest runner (it returns nil immediately)

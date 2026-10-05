@@ -14,6 +14,7 @@ import (
 
 	"github.com/ulikunitz/xz"
 
+	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
 	"bennypowers.dev/larry/internal/httpclient"
@@ -43,7 +44,7 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 	defer os.Remove(ei.Path + ".bak")
 
 	// 1. Resolve SRC_URI
-	resolvedURL := npmResolveSRCURI(ei.SRC_URI, ei)
+	resolvedURL := npmFirstRegistryURL(ei)
 	if resolvedURL == "" {
 		Restore(ei.Path)
 		return fmt.Errorf("npm: could not resolve SRC_URI to npm registry URL")
@@ -74,8 +75,9 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 	if releasesURL != "" {
 		logger.Debug("found release URL: " + releasesURL)
 		rawTag, rawAssetName := parseReleaseURL(releasesURL)
-		tag := expandEbuildVars(rawTag, ei)
-		assetName := expandEbuildVars(rawAssetName, ei)
+		vars := npmVars(ei)
+		tag := ebuild.ExpandVariables(rawTag, vars)
+		assetName := ebuild.ExpandVariables(rawAssetName, vars)
 		logger.Debug("release tag: " + tag + " asset: " + assetName)
 		if tag != "" && assetName != "" {
 			assetPath := filepath.Join(distDir, assetName)
@@ -164,46 +166,46 @@ func parseReleaseURL(url string) (tag, assetName string) {
 	return matches[3], matches[4]
 }
 
-// npmResolveSRCURI converts a mirror://npm/ SRC_URI to an npm registry URL.
-// Handles ${MY_NPM_SCOPE} for scoped packages like @scope/pkg.
-// Strips Gentoo's -> rename syntax (e.g., "pkg.tgz -> renamename.tgz" -> "pkg.tgz").
-func npmResolveSRCURI(srcURI string, ei *ebuild.EbuildInfo) string {
-	vars := map[string]string{
-		"${PN}":           ei.PN(),
-		"${PV}":           ei.PV(),
-		"${P}":            ei.P(),
-		"${MY_NPM_SCOPE}": extractVar(ei.Raw, "MY_NPM_SCOPE"),
-		"${MY_NPM_NAME}":  extractVar(ei.Raw, "MY_NPM_NAME"),
+// npmVars builds a VariableMap from the ebuild info using the shared expander.
+func npmVars(ei *ebuild.EbuildInfo) ebuild.VariableMap {
+	pe, err := atom.ParseEbuildPath(ei.Path)
+	if err != nil {
+		pe = nil
 	}
-
-	resolved := srcURI
-	for k, v := range vars {
-		if v != "" {
-			resolved = strings.ReplaceAll(resolved, k, v)
+	vars := ebuild.BuildVariableMap(ei.Raw, pe)
+	// Fallback: when pe is nil (e.g. test fixtures without a real path),
+	// set core vars from EbuildInfo fields so expansion still works.
+	if pe == nil {
+		if _, ok := vars["PN"]; !ok {
+			vars["PN"] = ei.PN()
+		}
+		if _, ok := vars["PV"]; !ok {
+			vars["PV"] = ei.PV()
+		}
+		if _, ok := vars["P"]; !ok {
+			vars["P"] = ei.P()
 		}
 	}
+	return vars
+}
 
-	// Strip leading/trailing whitespace and newlines from multi-line SRC_URI
-	resolved = strings.TrimSpace(resolved)
-
-	// Take only the first URL line (in case of multi-line SRC_URI)
-	if idx := strings.Index(resolved, "\n"); idx >= 0 {
-		resolved = strings.TrimSpace(resolved[:idx])
+// npmFirstRegistryURL reproduces the observable behaviour of the old
+// npmResolveSRCURI on top of the shared expander. Plan 22a replaces
+// this with ParseSrcUri.
+func npmFirstRegistryURL(ei *ebuild.EbuildInfo) string {
+	vars := npmVars(ei)
+	expanded := strings.TrimSpace(ebuild.ExpandVariables(ei.SRC_URI, vars))
+	if idx := strings.Index(expanded, "\n"); idx >= 0 {
+		expanded = strings.TrimSpace(expanded[:idx])
 	}
-
-	// Check for mirror://npm/ pattern
 	const prefix = "mirror://npm/"
-	if !strings.HasPrefix(resolved, prefix) {
+	if !strings.HasPrefix(expanded, prefix) {
 		return ""
 	}
-
-	path := strings.TrimPrefix(resolved, prefix)
-
-	// Strip Gentoo's -> rename syntax
+	path := strings.TrimPrefix(expanded, prefix)
 	if idx := strings.Index(path, " -> "); idx >= 0 {
 		path = path[:idx]
 	}
-
 	return "https://registry.npmjs.org/" + path
 }
 
@@ -439,34 +441,6 @@ func npmCreateDepsTarball(npmTarball, distDir, assetName string) error {
 	}
 
 	return nil
-}
-
-// extractVar extracts a variable value from ebuild content.
-// Handles both single-line and multi-line quoted values.
-func extractVar(content, name string) string {
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, name+"=") {
-			val := strings.TrimPrefix(line, name+"=")
-			val = strings.Trim(val, `"' `)
-			return val
-		}
-	}
-	return ""
-}
-
-// expandEbuildVars expands common ebuild variables in a string.
-// Handles ${P}, ${PV}, ${PN}, ${CATEGORY}.
-func expandEbuildVars(s string, ei *ebuild.EbuildInfo) string {
-	if strings.Contains(s, "${") {
-		s = strings.NewReplacer(
-			"${P}",      ei.P(),
-			"${PV}",     ei.PV(),
-			"${PN}",     ei.PN(),
-			"${CATEGORY}", ei.Category,
-		).Replace(s)
-	}
-	return s
 }
 
 // ---------------------------------------------------------------------------

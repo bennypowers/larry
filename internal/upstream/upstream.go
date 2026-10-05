@@ -183,7 +183,7 @@ func ParseEbuildInfo(path string) (*ebuild.EbuildInfo, error) {
 	}
 
 	// Extract INHERIT
-	info.Inherit = extractInherit(content)
+	info.Inherit = ebuild.ParseInherit(content)
 
 	// Store raw inherit line for metadata detection
 	for _, line := range strings.Split(content, "\n") {
@@ -261,18 +261,6 @@ func expandVar(raw, pn string) string {
 	}
 	// Return raw value as-is if no known pattern
 	return raw
-}
-
-// extractInherit extracts the inherit line from ebuild content.
-func extractInherit(content string) []string {
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "inherit ") {
-			rest := strings.TrimSpace(line[len("inherit "):])
-			return strings.Fields(rest)
-		}
-	}
-	return nil
 }
 
 // shouldSkip checks if a category should be skipped.

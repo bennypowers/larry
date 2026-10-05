@@ -3,7 +3,10 @@ package ebuild
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
+
+	"bennypowers.dev/larry/internal/atom"
 )
 
 var (
@@ -82,6 +85,11 @@ func ExpandVariables(input string, vars VariableMap) string {
 
 				if hasManip && sepIdx >= 0 {
 					manip := inner[sepIdx:]
+					// ${VAR::N} — sepIdx points to second colon, manip = ":N".
+					// Prepend ":" so applyBashManip sees "::N".
+					if sepIdx > 0 && inner[sepIdx-1] == ':' {
+						manip = ":" + manip
+					}
 					val = applyBashManip(val, manip)
 				}
 				result.WriteString(val)
@@ -123,17 +131,35 @@ func ExpandVariables(input string, vars VariableMap) string {
 	return input
 }
 
-// extractVarName extracts the variable name from ${VAR}, ${VAR//pattern}, or ${VAR="value"} syntax.
+// extractVarName extracts the variable name and any bash manipulation from an
+// inner ${...} expression. Order matters: // before /, ::/? before /.
 // Returns (varName, hasManipulation, separatorIndex).
 func extractVarName(inner string) (varName string, hasManip bool, sepIdx int) {
-	// Check for bash manipulation: ${VAR//pattern/replacement}
+	// Check for // replacement (all occurrences)
 	if idx := strings.Index(inner, "//"); idx > 0 {
 		return inner[:idx], true, idx
 	}
-	// Check for simple variable separator or assignment
-	if idx := strings.Index(inner, "/"); idx > 0 {
-		return inner[:idx], false, idx
+	// Check for :: (first N bytes) or : (offset) — before plain /
+	if idx := strings.Index(inner, ":"); idx > 0 {
+		// Could be ::N (first N bytes) or :N:M (slice from offset)
+		// Verify the : is followed by another : or a digit
+		if idx+1 < len(inner) && (inner[idx+1] == ':' || (inner[idx+1] >= '0' && inner[idx+1] <= '9')) {
+			// For ::N, return sepIdx pointing to the SECOND colon so
+			// inner[sepIdx:] = ":N", and the caller will prepend ":" to get "::N".
+			// For :N:M, return sepIdx pointing to the FIRST colon so
+			// inner[sepIdx:] = ":N:M" (no prepend needed).
+			sep := idx
+			if inner[idx+1] == ':' {
+				sep = idx + 1
+			}
+			return inner[:idx], true, sep
+		}
 	}
+	// Check for single / replacement (first occurrence only)
+	if idx := strings.Index(inner, "/"); idx > 0 {
+		return inner[:idx], true, idx
+	}
+	// Check for assignment: ${VAR="value"}
 	if idx := strings.Index(inner, "="); idx > 0 {
 		return inner[:idx], false, idx
 	}
@@ -141,63 +167,121 @@ func extractVarName(inner string) (varName string, hasManip bool, sepIdx int) {
 	return inner, false, -1
 }
 
-// applyBashManip applies bash-style string manipulation: ${VAR//pattern/replacement}
-// e.g., ${PV//./_} replaces all dots with underscores
-func applyBashManip(value, manip string) string {
-	// Strip the leading // for substitution
-	if !strings.HasPrefix(manip, "//") {
-		return value
+// parseIntOrDefault parses a decimal string as an int, returning 0 if non-numeric.
+func parseIntOrDefault(s string) int {
+	if s == "" {
+		return 0
 	}
-
-	// After stripping "//$", parse pattern/replacement from the rest.
-	// In bash, ${var//pattern/repl}: after the operator "//",
-	// pattern extends from the start up to (but not including) the first "/"
-	// that is NOT at position 0 (position 0 is part of the pattern).
-	// The first "/" at position 0 could be the pattern itself (e.g., pattern = "/").
-	// The separator between pattern and replacement is the next "/" after position 0.
-	sub := manip[2:] // everything after the "//$" operator
-
-	// Find the separator: first "/" in sub[1:] + 1
-	idx := strings.Index(sub[1:], "/")
-	var pattern, replacement string
-	if idx >= 0 {
-		sepPos := idx + 1
-		pattern = sub[:sepPos]
-		replacement = sub[sepPos+1:]
-	} else {
-		// No replacement part, just remove pattern
-		pattern = sub
-		replacement = ""
+	var n int
+	_, err := fmt.Sscanf(s, "%d", &n)
+	if err != nil {
+		return 0
 	}
-
-	return strings.ReplaceAll(value, pattern, replacement)
+	return n
 }
 
-// BuildVariableMap builds a VariableMap from SRC_URI lines, extracting all variable
-// assignments (${VAR="value"} or ${VAR}=value) and core variables (PN, PV, P).
-func BuildVariableMap(info *EbuildInfo) VariableMap {
+// applyBashManip applies bash-style string manipulation from a ${VAR} inner expression.
+// The manip string is everything after the operator (/, //, :, or ::) inside ${...}.
+func applyBashManip(value, manip string) string {
+	// Check for :: (byte slice from start): ${VAR::N}
+	if strings.HasPrefix(manip, "::") {
+		n := parseIntOrDefault(manip[2:])
+		if n <= 0 {
+			return value
+		}
+		if n >= len(value) {
+			return value
+		}
+		return value[:n]
+	}
+	if strings.HasPrefix(manip, ":") {
+		// ${VAR:N:M} or ${VAR:N}
+		parts := strings.SplitN(manip[1:], ":", 2)
+		offset := parseIntOrDefault(parts[0])
+		if offset >= len(value) {
+			return ""
+		}
+		if len(parts) == 1 {
+			return value[offset:]
+		}
+		length := parseIntOrDefault(parts[1])
+		if length == 0 {
+			return ""
+		}
+		end := offset + length
+		if end > len(value) {
+			end = len(value)
+		}
+		return value[offset:end]
+	}
+	// Check for // replacement (all occurrences): ${VAR//pat/repl}
+	if strings.HasPrefix(manip, "//") {
+		sub := manip[2:]
+		idx := strings.Index(sub[1:], "/")
+		var pattern, replacement string
+		if idx >= 0 {
+			sepPos := idx + 1
+			pattern = sub[:sepPos]
+			replacement = sub[sepPos+1:]
+		} else {
+			pattern = sub
+			replacement = ""
+		}
+		return strings.ReplaceAll(value, pattern, replacement)
+	}
+	// Single / replacement (first occurrence): ${VAR/pat/repl}
+	if len(manip) >= 1 && manip[0] == '/' {
+		sub := manip[1:]
+		idx := strings.Index(sub, "/")
+		var pattern, replacement string
+		if idx >= 0 {
+			pattern = sub[:idx]
+			replacement = sub[idx+1:]
+		} else {
+			pattern = sub
+			replacement = ""
+		}
+		return strings.Replace(value, pattern, replacement, 1)
+	}
+	return value
+}
+
+// BuildVariableMap collects every simple top-level assignment in the raw ebuild text
+// and adds the Portage core variables derived from pe.
+// pe may be nil, in which case only the scanned assignments are returned.
+func BuildVariableMap(raw string, pe *atom.ParsedEbuild) VariableMap {
 	vars := make(VariableMap)
 
-	// Always set core Portage variables
-	vars["PN"] = info.PN()
-	vars["PV"] = info.PV()
-	if info.PVal != "" {
-		vars["P"] = info.PVal
-	} else {
-		vars["P"] = info.PN() + "-" + info.PV()
+	// Set core Portage variables from parsed ebuild path
+	if pe != nil {
+		vars["PN"] = pe.PN
+		vars["PV"] = pe.PV
+		vars["PR"] = "r" + strconv.Itoa(pe.Revision)
+		vars["P"] = pe.P
+		vars["PF"] = pe.PF
+		vars["CATEGORY"] = pe.Category
 	}
 
-	// Parse SRC_URI for custom variable assignments like MY_P="${PN}-0.75.3"
-	srcURI := info.SRC_URI
-
-	matches := assignRe.FindAllStringSubmatch(srcURI, -1)
-	for _, m := range matches {
-		vars[m[1]] = m[2]
-	}
-
-	matches2 := singleQuoteAssignRe.FindAllStringSubmatch(srcURI, -1)
-	for _, m := range matches2 {
-		vars[m[1]] = m[2]
+	// Scan raw text for simple top-level assignments: VAR="value" or VAR='value'
+	// Only collect lines where the closing quote is on the same line.
+	// Skip comment lines.
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		// Skip comments
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Match VAR="..." or VAR='...'
+		if m := assignRe.FindStringSubmatch(line); len(m) == 3 {
+			// Only set if not already in vars (core vars take priority)
+			if _, ok := vars[m[1]]; !ok {
+				vars[m[1]] = m[2]
+			}
+		} else if m := singleQuoteAssignRe.FindStringSubmatch(line); len(m) == 3 {
+			if _, ok := vars[m[1]]; !ok {
+				vars[m[1]] = m[2]
+			}
+		}
 	}
 
 	return vars

@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strings"
 
-	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/logger"
 	"bennypowers.dev/larry/internal/upstream"
@@ -160,74 +159,7 @@ func NewEbuildInfoFromPath(path string) (*ebuild.EbuildInfo, error) {
 	return upstream.ParseEbuildInfo(path)
 }
 
-// parseEbuildInfo extracts basic info from ebuild content.
-func parseEbuildInfo(path string, content []byte) (*ebuild.EbuildInfo, error) {
-	var ei ebuild.EbuildInfo
-	ebContent := string(content)
 
-	// Parse ebuild path via atom package (one parser)
-	pe, err := atom.ParseEbuildPath(path)
-	if err != nil {
-		// Fallback: parse category from directory
-		ei.Category = filepath.Base(filepath.Dir(path))
-	} else {
-		ei.Category = pe.Category
-	}
-
-	// Parse PN/PV from filename via atom
-	if pe != nil {
-		ei.Pkg = pe.PN
-		ei.PVVal = pe.PV
-		ei.PVal = pe.P
-	} else {
-		// Fallback: parse from directory
-		dir := filepath.Dir(path)
-		ebName := filepath.Base(path)
-		ei.Category = filepath.Base(dir)
-		name := strings.TrimSuffix(ebName, ".ebuild")
-		if idx := strings.LastIndex(name, "-"); idx > 0 {
-			ei.Pkg = name[:idx]
-			ei.PVVal = name[idx+1:]
-			if ei.Pkg != "" && ei.PVVal != "" {
-				ei.PVal = ei.Pkg + "-" + ei.PVVal
-			}
-		}
-	}
-
-	// Parse SRC_URI
-	for _, line := range strings.Split(ebContent, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "SRC_URI=") {
-			ebURI := strings.TrimPrefix(line, "SRC_URI=")
-			ebURI = strings.Trim(ebURI, `"'`)
-			ei.SRC_URI = resolveVariables(ebURI, map[string]string{
-				"${PN}": ei.Pkg,
-				"${PV}": ei.PVVal,
-				"${P}":  ei.PVal,
-			})
-		}
-		if strings.HasPrefix(line, "HOMEPAGE=") {
-			ebHomepage := strings.TrimPrefix(line, "HOMEPAGE=")
-			ebHomepage = strings.Trim(ebHomepage, `"'`)
-			ei.HOMEPAGE = ebHomepage
-		}
-		if strings.HasPrefix(line, "INHERITED=") {
-			ebInherited := strings.TrimPrefix(line, "INHERITED=")
-			ebInherited = strings.Trim(ebInherited, `"'`)
-			ei.Inherit = strings.Fields(ebInherited)
-		}
-	}
-
-	return &ei, nil
-}
-
-// resolveVariables replaces ${VAR} references with values from the map.
-func resolveVariables(s string, vars map[string]string) string {
-	for k, v := range vars {
-		s = strings.ReplaceAll(s, k, v)
-	}
-	return s
-}
 
 // parsePVRaw parses a PV string and returns (basePV, revision).
 func parsePVRaw(pv string) (string, int) {
