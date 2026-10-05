@@ -26,88 +26,117 @@ func TestNewClientWithRunner(t *testing.T) {
 
 func TestLatestRelease(t *testing.T) {
 	stub := NewStubRunner()
-	releaseOutput := []struct {
-		TagName string `json:"tagName"`
-		Name    string `json:"name"`
-	}{{
-		TagName: "v1.2.3",
-		Name:    "Release v1.2.3",
-	}}
-
-	outJSON, _ := json.Marshal(releaseOutput)
-	// The command is: gh release list --limit 1 --json tagName,name --repo owner/repo
-	stub.Outputs["gh release list --limit 1 --json tagName,name --repo owner/repo"] = outJSON
+	releaseOutput := `{"tag_name":"v1.2.3","prerelease":false,"draft":false}`
+	stub.Outputs["gh api repos/owner/repo/releases/latest"] = []byte(releaseOutput)
 
 	c := NewClientWithRunner(stub)
-	tag, url, err := c.LatestRelease("owner", "repo")
+	tag, prerelease, draft, err := c.LatestRelease("owner", "repo")
 	if err != nil {
 		t.Fatalf("LatestRelease(): %v", err)
 	}
 	if tag != "v1.2.3" {
 		t.Errorf("tag = %q, want v1.2.3", tag)
 	}
-	if url != "https://github.com/owner/repo/releases/tag/v1.2.3" {
-		t.Errorf("url = %q, want https://github.com/owner/repo/releases/tag/v1.2.3", url)
+	if prerelease {
+		t.Error("prerelease should be false")
+	}
+	if draft {
+		t.Error("draft should be false")
+	}
+}
+
+func TestLatestRelease_ParsesPrereleaseAndDraft(t *testing.T) {
+	// Plan 17b test: assert the three returned values for prerelease+draft.
+	stub := NewStubRunner()
+	releaseOutput := `{"tag_name":"v1","prerelease":true,"draft":true}`
+	stub.Outputs["gh api repos/o/r/releases/latest"] = []byte(releaseOutput)
+
+	c := NewClientWithRunner(stub)
+	tag, prerelease, draft, err := c.LatestRelease("o", "r")
+	if err != nil {
+		t.Fatalf("LatestRelease(): %v", err)
+	}
+	if tag != "v1" {
+		t.Errorf("tag = %q, want v1", tag)
+	}
+	if !prerelease {
+		t.Error("prerelease should be true")
+	}
+	if !draft {
+		t.Error("draft should be true")
 	}
 }
 
 func TestLatestRelease_NoOutput(t *testing.T) {
 	stub := NewStubRunner()
-	stub.Outputs["gh release list --limit 1 --json tagName,name --repo owner/repo"] = []byte("[]")
+	stub.Outputs["gh api repos/owner/repo/releases/latest"] = []byte(`{}`)
 
 	c := NewClientWithRunner(stub)
-	_, _, err := c.LatestRelease("owner", "repo")
+	_, _, _, err := c.LatestRelease("owner", "repo")
 	if err == nil {
-		t.Error("LatestRelease() should return error for empty output")
+		t.Error("LatestRelease() should return error for empty tag_name")
 	}
 }
 
 func TestLatestRelease_GHError(t *testing.T) {
 	stub := NewStubRunner()
-	stub.Errors["gh release list --limit 1 --json tagName,name --repo owner/repo"] = &exec.ExitError{}
+	stub.Errors["gh api repos/owner/repo/releases/latest"] = &exec.ExitError{}
 
 	c := NewClientWithRunner(stub)
-	_, _, err := c.LatestRelease("owner", "repo")
+	_, _, _, err := c.LatestRelease("owner", "repo")
 	if err == nil {
 		t.Error("LatestRelease() should return error when gh fails")
 	}
 }
 
-func TestLatestRelease_ParsesJSON(t *testing.T) {
+func TestLatestRelease_MalformedJSON(t *testing.T) {
 	stub := NewStubRunner()
-	releaseOutput := []struct {
-		TagName string `json:"tagName"`
-		Name    string `json:"name"`
-	}{{
-		TagName: "v2.0.0",
-		Name:    "Release v2.0.0",
-	}}
-
-	outJSON, _ := json.Marshal(releaseOutput)
-	stub.Outputs["gh release list --limit 1 --json tagName,name --repo test-owner/test-repo"] = outJSON
+	stub.Outputs["gh api repos/owner/repo/releases/latest"] = []byte("not valid json")
 
 	c := NewClientWithRunner(stub)
-	tag, url, err := c.LatestRelease("test-owner", "test-repo")
-	if err != nil {
-		t.Fatalf("LatestRelease(): %v", err)
-	}
-	if tag != "v2.0.0" {
-		t.Errorf("tag = %q, want v2.0.0", tag)
-	}
-	if url != "https://github.com/test-owner/test-repo/releases/tag/v2.0.0" {
-		t.Errorf("url = %q, want https://github.com/test-owner/test-repo/releases/tag/v2.0.0", url)
+	_, _, _, err := c.LatestRelease("owner", "repo")
+	if err == nil {
+		t.Error("LatestRelease() should return error for malformed JSON")
 	}
 }
 
-func TestLatestRelease_MalformedJSON(t *testing.T) {
+func TestLatestReleaseTag_ExcludesPrereleases(t *testing.T) {
+	// Plan 17b test: assert --exclude-pre-releases is in argv when allowPrereleases == false.
 	stub := NewStubRunner()
-	// Invalid JSON
-	stub.Outputs["gh release list --limit 1 --json tagName,name --repo owner/repo"] = []byte("not valid json")
+	stub.Outputs["gh release list -R o/r --limit 100 --exclude-pre-releases --json tagName -q .[0].tagName"] = []byte("1.0.0\n")
 
 	c := NewClientWithRunner(stub)
-	_, _, err := c.LatestRelease("owner", "repo")
+	tag, err := c.LatestReleaseTag("o", "r", false)
+	if err != nil {
+		t.Fatalf("LatestReleaseTag(): %v", err)
+	}
+	if tag != "1.0.0" {
+		t.Errorf("tag = %q, want 1.0.0", tag)
+	}
+}
+
+func TestLatestReleaseTag_AllowsPrereleases(t *testing.T) {
+	stub := NewStubRunner()
+	stub.Outputs["gh release list -R o/r --limit 100 --json tagName -q .[0].tagName"] = []byte("2.0.0-rc1\n")
+
+	c := NewClientWithRunner(stub)
+	tag, err := c.LatestReleaseTag("o", "r", true)
+	if err != nil {
+		t.Fatalf("LatestReleaseTag(): %v", err)
+	}
+	if tag != "2.0.0-rc1" {
+		t.Errorf("tag = %q, want 2.0.0-rc1", tag)
+	}
+}
+
+func TestLatestReleaseTag_EmptyOutput(t *testing.T) {
+	stub := NewStubRunner()
+	stub.Outputs["gh release list -R o/r --limit 100 --exclude-pre-releases --json tagName -q .[0].tagName"] = []byte("\n")
+
+	c := NewClientWithRunner(stub)
+	_, err := c.LatestReleaseTag("o", "r", false)
 	if err == nil {
-		t.Error("LatestRelease() should return error for malformed JSON")
+		t.Error("LatestReleaseTag() should return error for empty output")
 	}
 }
 

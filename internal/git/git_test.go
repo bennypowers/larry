@@ -3,6 +3,7 @@ package git
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -570,5 +571,98 @@ func TestListTagsSorted_NilHashForUnknownTags(t *testing.T) {
 
 	if infos[0].Name != "v1.0.0" {
 		t.Errorf("Tag name = %q, want v1.0.0", infos[0].Name)
+	}
+}
+
+// TestListRemoteTags_DropsPeels creates a bare repo with a lightweight and
+// an annotated tag, then verifies ListRemoteTags returns only unpeeled tags.
+func TestListRemoteTags_DropsPeels(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a normal repo, commit, and tag, then clone as bare.
+	repoDir := filepath.Join(dir, "work")
+	repo, err := git.PlainInit(repoDir, false)
+	if err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	readmePath := filepath.Join(repoDir, "README.md")
+	if err := os.WriteFile(readmePath, []byte("# test\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, err = wt.Add("README.md")
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	_, err = wt.Commit("init", &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "Test",
+			Email: "test@test.com",
+			When:  time.Now(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+
+	// Lightweight tag.
+	_, err = repo.CreateTag("v1.0", head.Hash(), nil)
+	if err != nil {
+		t.Fatalf("CreateTag v1.0: %v", err)
+	}
+
+	// Annotated tag.
+	_, err = repo.CreateTag("v2.0", head.Hash(), &git.CreateTagOptions{
+		Tagger: &object.Signature{
+			Name:  "Test",
+			Email: "test@test.com",
+			When:  time.Now(),
+		},
+		Message: "annotated",
+	})
+	if err != nil {
+		t.Fatalf("CreateTag v2.0: %v", err)
+	}
+
+	// Clone as bare repo.
+	bareDir := filepath.Join(dir, "bare")
+	bareRepo, err := git.PlainClone(bareDir, false, &git.CloneOptions{
+		URL: repoDir,
+	})
+	if err != nil {
+		t.Fatalf("PlainClone: %v", err)
+	}
+	_ = bareRepo // ensure used
+
+	// ListRemoteTags on the bare repo path.
+	tags, err := ListRemoteTags(bareDir)
+	if err != nil {
+		t.Fatalf("ListRemoteTags: %v", err)
+	}
+
+	if len(tags) != 2 {
+		t.Errorf("ListRemoteTags() returned %d tags, want 2: %v", len(tags), tags)
+	}
+
+	tagSet := make(map[string]bool)
+	for _, tag := range tags {
+		tagSet[tag] = true
+		if strings.HasSuffix(tag, "^{}") {
+			t.Errorf("tag %q should not end with ^{}", tag)
+		}
+	}
+	if !tagSet["v1.0"] {
+		t.Error("expected tag v1.0")
+	}
+	if !tagSet["v2.0"] {
+		t.Error("expected tag v2.0")
 	}
 }

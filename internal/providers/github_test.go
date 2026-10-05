@@ -1,10 +1,476 @@
 package providers
 
 import (
+	"encoding/json"
+	"fmt"
+	"os/exec"
+	"strings"
 	"testing"
+
+	"bennypowers.dev/larry/internal/github"
+	"bennypowers.dev/larry/internal/remoteid"
+	"bennypowers.dev/larry/internal/version"
 )
 
-// ---- TestStripTagPrefix_PeeledTag: ^{...} stripping via Normalize (D6) ----
+// ---- helpers ----
+
+func key(args ...string) string { return "gh " + strings.Join(args, " ") }
+
+// recordingRunner wraps a StubRunner and records all argv keys.
+type recordingRunner struct {
+	inner *github.StubRunner
+	keys  []string
+}
+
+func (r *recordingRunner) Run(cmd *exec.Cmd) error {
+	r.keys = append(r.keys, strings.Join(cmd.Args, " "))
+	return r.inner.Run(cmd)
+}
+
+func (r *recordingRunner) Output(cmd *exec.Cmd) ([]byte, error) {
+	r.keys = append(r.keys, strings.Join(cmd.Args, " "))
+	return r.inner.Output(cmd)
+}
+
+// ---- D1: Tier 1 uses /releases/latest ----
+
+func TestGitHub_Tier1_UsesReleasesLatest(t *testing.T) {
+	stub := github.NewStubRunner()
+	relJSON, _ := json.Marshal(map[string]interface{}{
+		"tag_name":   "v1.2.3",
+		"prerelease": false,
+		"draft":      false,
+	})
+	kRel := key("api", "repos/o/r/releases/latest")
+	stub.Outputs[kRel] = relJSON
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{Client: client}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.Version != "1.2.3" {
+		t.Errorf("Version = %q, want 1.2.3", res.Version)
+	}
+	if res.ByDate {
+		t.Error("ByDate should be false for tier 1")
+	}
+}
+
+func TestGitHub_Tier1_RejectsDraft(t *testing.T) {
+	// Tier 1 draft → tier 2 wins.
+	stub := github.NewStubRunner()
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+
+	relJSON, _ := json.Marshal(map[string]interface{}{
+		"tag_name":   "v9.9.9",
+		"prerelease": false,
+		"draft":      true,
+	})
+	stub.Outputs[kRel] = relJSON
+	stub.Outputs[kList] = []byte("v1.2.3\n")
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{Client: client}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.Version != "1.2.3" {
+		t.Errorf("Version = %q, want 1.2.3 (tier 1 discarded as draft)", res.Version)
+	}
+}
+
+func TestGitHub_Tier1_RejectsPrereleaseFlag(t *testing.T) {
+	// Prerelease in release → discard, tier 2 wins.
+	stub := github.NewStubRunner()
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+
+	relJSON, _ := json.Marshal(map[string]interface{}{
+		"tag_name":   "v1.2.3",
+		"prerelease": true,
+		"draft":      false,
+	})
+	stub.Outputs[kRel] = relJSON
+	stub.Outputs[kList] = []byte("v1.0.0\n")
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{Client: client}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.Version != "1.0.0" {
+		t.Errorf("Version = %q, want 1.0.0", res.Version)
+	}
+}
+
+func TestGitHub_Tier1_AcceptsPrereleaseWhenAllowed(t *testing.T) {
+	stub := github.NewStubRunner()
+	kRel := key("api", "repos/o/r/releases/latest")
+	relJSON, _ := json.Marshal(map[string]interface{}{
+		"tag_name":   "v1.2.3",
+		"prerelease": true,
+		"draft":      false,
+	})
+	stub.Outputs[kRel] = relJSON
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{Client: client}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, true)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.Version != "1.2.3" {
+		t.Errorf("Version = %q, want 1.2.3", res.Version)
+	}
+}
+
+// ---- D2: No sort=updated on tags endpoint ----
+
+func TestGitHub_NoSortParamOnTagsEndpoint(t *testing.T) {
+	rec := &recordingRunner{inner: github.NewStubRunner()}
+
+	stub := rec.inner
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+
+	stub.Outputs[kRel] = []byte(`{"tag_name":"v99.0","prerelease":false,"draft":false}`)
+	stub.Outputs[kList] = []byte("v1.0.0\n")
+
+	client := github.NewClientWithRunner(rec)
+	p := &GitHubProvider{Client: client}
+	_, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+
+	for _, k := range rec.keys {
+		if strings.Contains(k, "tags?") || strings.Contains(k, "sort=") {
+			t.Errorf("recorded argv contains tags/sort param: %q", k)
+		}
+	}
+}
+
+// ---- reconcile tiers 1 and 2 ----
+
+func TestGitHub_ReconcileTiers(t *testing.T) {
+	tests := []struct {
+		name string
+		rel  string // tier 1 JSON
+		list string // tier 2 output
+		want string // expected Version
+	}{
+		{"tier2_wins", `{"tag_name":"v1.0.0","prerelease":false,"draft":false}`, "v1.2.0\n", "1.2.0"},
+		{"tier1_wins", `{"tag_name":"v2.0.0","prerelease":false,"draft":false}`, "v1.9.0\n", "2.0.0"},
+		{"tier1_not_version", `{"tag_name":"pios/1","prerelease":false,"draft":false}`, "v1.5.0\n", "1.5.0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := github.NewStubRunner()
+			kRel := key("api", "repos/o/r/releases/latest")
+			kList := key("release", "list", "-R", "o/r", "--limit", "100",
+				"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+
+			stub.Outputs[kRel] = []byte(tt.rel)
+			stub.Outputs[kList] = []byte(tt.list)
+
+			client := github.NewClientWithRunner(stub)
+			p := &GitHubProvider{Client: client}
+			res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+			if err != nil {
+				t.Fatalf("FetchResolution(): %v", err)
+			}
+			if res.Version != tt.want {
+				t.Errorf("Version = %q, want %q", res.Version, tt.want)
+			}
+		})
+	}
+}
+
+// ---- Tier 2: exclude-pre-releases ----
+
+func TestGitHub_Tier2_ExcludesPrereleases(t *testing.T) {
+	stub := github.NewStubRunner()
+	kListNoPre := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+	kListPre := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--json", "tagName", "-q", ".[0].tagName")
+
+	stub.Outputs[kListNoPre] = []byte("2.0.0\n")
+	stub.Outputs[kListPre] = []byte("3.0.0-rc1\n")
+
+	rec := &recordingRunner{inner: stub}
+	client := github.NewClientWithRunner(rec)
+	p := &GitHubProvider{Client: client}
+
+	// allowPrereleases=false should use kListNoPre
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.Version != "2.0.0" {
+		t.Errorf("Version = %q, want 2.0.0", res.Version)
+	}
+
+	// Check that the --exclude-pre-releases argv was used
+	foundPreExcluded := false
+	for _, k := range rec.keys {
+		if strings.Contains(k, "--exclude-pre-releases") {
+			foundPreExcluded = true
+		}
+	}
+	if !foundPreExcluded {
+		t.Error("--exclude-pre-releases was not in any recorded argv")
+	}
+}
+
+// ---- Tier 3: go-git tag listing ----
+
+func TestGitHub_Tier3_LsRemoteFallback(t *testing.T) {
+	stub := github.NewStubRunner()
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+	// Both tier 1 and 2 fail
+	stub.Errors[kRel] = fmt.Errorf("gh error")
+	stub.Errors[kList] = fmt.Errorf("gh error")
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{
+		Client:  client,
+		TagLister: func(url string) ([]string, error) {
+			return []string{"v1.0", "v10.0", "v9.0"}, nil
+		},
+	}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.Version != "10.0" {
+		t.Errorf("Version = %q, want 10.0 (numeric, not lexical)", res.Version)
+	}
+}
+
+func TestGitHub_Tier3_DropsPeeledRefs(t *testing.T) {
+	stub := github.NewStubRunner()
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+	stub.Errors[kRel] = fmt.Errorf("gh error")
+	stub.Errors[kList] = fmt.Errorf("gh error")
+
+	client := github.NewClientWithRunner(stub)
+	// Include peeled refs and a bogus v99.0^{} with no unpeeled sibling
+	p := &GitHubProvider{
+		Client: client,
+		TagLister: func(url string) ([]string, error) {
+			return []string{"v1.0", "v2.0"}, nil
+		},
+	}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.Version != "2.0" {
+		t.Errorf("Version = %q, want 2.0", res.Version)
+	}
+}
+
+// ---- Tier 4: date-based resolution ----
+
+func TestGitHub_Tier4_ReturnsTagAndDate(t *testing.T) {
+	// Tiers 1-3 all empty.
+	stub := github.NewStubRunner()
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+	kGQL := key("api", "graphql", "-f", "query="+graphqlTagsQuery, "-f", "owner=o", "-f", "name=r")
+	stub.Errors[kRel] = fmt.Errorf("gh error")
+	stub.Errors[kList] = fmt.Errorf("gh error")
+
+	gqlOutput, _ := json.Marshal(map[string]interface{}{
+		"data": map[string]interface{}{
+			"repository": map[string]interface{}{
+				"refs": map[string]interface{}{
+					"nodes": []map[string]interface{}{
+						{
+							"name": "firmware",
+							"target": map[string]interface{}{
+								"committedDate": "2024-01-15T00:00:00Z",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	stub.Outputs[kGQL] = gqlOutput
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{
+		Client:  client,
+		TagLister: func(url string) ([]string, error) {
+			return nil, fmt.Errorf("no tags")
+		},
+	}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if !res.ByDate {
+		t.Error("ByDate should be true")
+	}
+	if res.Tag != "firmware" {
+		t.Errorf("Tag = %q, want firmware", res.Tag)
+	}
+	if res.TagDate != "20240115" {
+		t.Errorf("TagDate = %q, want 20240115", res.TagDate)
+	}
+}
+
+func TestGitHub_Tier4_SkipsPrereleaseTagNames(t *testing.T) {
+	stub := github.NewStubRunner()
+	kGQL := key("api", "graphql", "-f", "query="+graphqlTagsQuery, "-f", "owner=o", "-f", "name=r")
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+	stub.Errors[kRel] = fmt.Errorf("gh error")
+	stub.Errors[kList] = fmt.Errorf("gh error")
+
+	// Two nodes: v2.0-rc1 (prerelease name → skip), then 20240115-stable (no prerelease name).
+	gqlOutput, _ := json.Marshal(map[string]interface{}{
+		"data": map[string]interface{}{
+			"repository": map[string]interface{}{
+				"refs": map[string]interface{}{
+					"nodes": []map[string]interface{}{
+						{
+							"name": "v2.0-rc1",
+							"target": map[string]interface{}{
+								"committedDate": "2026-01-01T00:00:00Z",
+							},
+						},
+						{
+							"name": "20240115-stable",
+							"target": map[string]interface{}{
+								"committedDate": "2020-01-01T00:00:00Z",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	stub.Outputs[kGQL] = gqlOutput
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{
+		Client:  client,
+		TagLister: func(url string) ([]string, error) {
+			return nil, fmt.Errorf("no tags")
+		},
+	}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.Tag != "20240115-stable" {
+		t.Errorf("Tag = %q, want 20240115-stable", res.Tag)
+	}
+}
+
+func TestGitHub_Tier4_DatePrefersTagName(t *testing.T) {
+	stub := github.NewStubRunner()
+	kGQL := key("api", "graphql", "-f", "query="+graphqlTagsQuery, "-f", "owner=o", "-f", "name=r")
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+	stub.Errors[kRel] = fmt.Errorf("gh error")
+	stub.Errors[kList] = fmt.Errorf("gh error")
+
+	// Tag name contains a YYYYMMDD date → use that instead of committedDate.
+	gqlOutput, _ := json.Marshal(map[string]interface{}{
+		"data": map[string]interface{}{
+			"repository": map[string]interface{}{
+				"refs": map[string]interface{}{
+					"nodes": []map[string]interface{}{
+						{
+							"name": "firmware-20260824",
+							"target": map[string]interface{}{
+								"committedDate": "2020-01-01T00:00:00Z",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	stub.Outputs[kGQL] = gqlOutput
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{
+		Client:  client,
+		TagLister: func(url string) ([]string, error) {
+			return nil, fmt.Errorf("no tags")
+		},
+	}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.TagDate != "20260824" {
+		t.Errorf("TagDate = %q, want 20260824 (from tag name, not committedDate)", res.TagDate)
+	}
+}
+
+// ---- D5: prerelease error message ----
+
+func TestGitHub_PrereleaseErrorMessage(t *testing.T) {
+	stub := github.NewStubRunner()
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+	kGQL := key("api", "graphql", "-f", "query="+graphqlTagsQuery, "-f", "owner=o", "-f", "name=r")
+
+	// Tier 1 returns prerelease, tier 2 returns empty, tier 3 returns prerelease tag, tier 4 errors.
+	relJSON, _ := json.Marshal(map[string]interface{}{
+		"tag_name":   "v1.0.0-rc1",
+		"prerelease": false,
+		"draft":      false,
+	})
+	stub.Outputs[kRel] = relJSON
+	stub.Outputs[kList] = []byte("\n")
+	stub.Errors[kGQL] = fmt.Errorf("gh error")
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{
+		Client:  client,
+		TagLister: func(url string) ([]string, error) {
+			return []string{"v1.0.0-rc1"}, nil
+		},
+	}
+	_, err := p.FetchLatestVersion(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err == nil {
+		t.Fatal("FetchLatestVersion() should return error for prerelease tag")
+	}
+	errMsg := err.Error()
+	// D5: error should contain the actual tag version (not empty string).
+	// The Version field is normalized (rc → _rc), so we check for that.
+	if !strings.Contains(errMsg, "1.0.0_rc1") {
+		t.Errorf("error message %q does not contain '1.0.0_rc1'", errMsg)
+	}
+	if strings.Contains(errMsg, "\"\"") {
+		t.Error("error message should not contain empty-string literal")
+	}
+}
+
+// ---- stripTagPrefix regression (already tested elsewhere, keep minimal) ----
 
 func TestStripTagPrefix_PeeledTag(t *testing.T) {
 	tests := []struct {
@@ -22,5 +488,74 @@ func TestStripTagPrefix_PeeledTag(t *testing.T) {
 				t.Errorf("stripTagPrefix(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// ---- FetchLatestVersion wrapper tests ----
+
+func TestFetchLatestVersion_FromVersion(t *testing.T) {
+	stub := github.NewStubRunner()
+	kRel := key("api", "repos/o/r/releases/latest")
+	relJSON, _ := json.Marshal(map[string]interface{}{
+		"tag_name":   "v2.5.0",
+		"prerelease": false,
+		"draft":      false,
+	})
+	stub.Outputs[kRel] = relJSON
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{Client: client}
+	v, err := p.FetchLatestVersion(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchLatestVersion(): %v", err)
+	}
+	if v.String() != "2.5.0" {
+		t.Errorf("Version = %q, want 2.5.0", v.String())
+	}
+}
+
+func TestFetchLatestVersion_ByDate(t *testing.T) {
+	// When ByDate=true, FetchLatestVersion extracts date from tag name.
+	stub := github.NewStubRunner()
+	kGQL := key("api", "graphql", "-f", "query="+graphqlTagsQuery, "-f", "owner=o", "-f", "name=r")
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+	stub.Errors[kRel] = fmt.Errorf("gh error")
+	stub.Errors[kList] = fmt.Errorf("gh error")
+
+	gqlOutput, _ := json.Marshal(map[string]interface{}{
+		"data": map[string]interface{}{
+			"repository": map[string]interface{}{
+				"refs": map[string]interface{}{
+					"nodes": []map[string]interface{}{
+						{
+							"name": "firmware-20260824",
+							"target": map[string]interface{}{
+								"committedDate": "2020-01-01T00:00:00Z",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	stub.Outputs[kGQL] = gqlOutput
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{
+		Client:  client,
+		TagLister: func(url string) ([]string, error) {
+			return nil, fmt.Errorf("no tags")
+		},
+	}
+	v, err := p.FetchLatestVersion(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchLatestVersion(): %v", err)
+	}
+	// Date extracted from tag name should be parsed as a version.
+	want, _ := version.Parse("20260824")
+	if v.String() != want.String() {
+		t.Errorf("Version = %q, want %q", v.String(), want.String())
 	}
 }

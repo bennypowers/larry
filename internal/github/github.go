@@ -87,51 +87,50 @@ func (c *Client) Runner() CmdRunner {
 	return c.runner
 }
 
-// LatestRelease gets the latest release tag name and URL from GitHub.
-// Returns the tag name and the release URL (e.g., https://github.com/owner/repo/releases/tag/v1.0.0).
-func (c *Client) LatestRelease(owner, repo string) (tag, url string, err error) {
-	output, err := c.gh(
-		"release",
-		"list",
-		"--limit", "1",
-		"--json", "tagName,name",
-		"--repo", owner+"/"+repo,
-	)
-	if err != nil {
-		return "", "", fmt.Errorf("gh release list: %w", err)
-	}
-
-	// gh release list returns a JSON array
-	var results []struct {
-		TagName string `json:"tagName"`
-		Name    string `json:"name"`
-	}
-	if err := json.Unmarshal(output, &results); err != nil {
-		return "", "", fmt.Errorf("parse gh release list output: %w", err)
-	}
-	if len(results) == 0 {
-		return "", "", fmt.Errorf("no releases found for %s/%s", owner, repo)
-	}
-
-	tag = results[0].TagName
-	if tag == "" {
-		return "", "", fmt.Errorf("no releases found for %s/%s", owner, repo)
-	}
-	// Construct URL from tag name
-	url = "https://github.com/" + owner + "/" + repo + "/releases/tag/" + tag
-	return tag, url, nil
-}
-
-// LatestTag gets the latest tag name from GitHub (fallback when no releases exist).
-func (c *Client) LatestTag(owner, repo string) (string, error) {
-	// Use gh api to list tags sorted by date
+// LatestRelease gets the latest release from the GitHub API.
+// Uses the /releases/latest endpoint and returns the tag name along with
+// prerelease and draft flags for filtering.
+func (c *Client) LatestRelease(owner, repo string) (tag string, prerelease, draft bool, err error) {
 	output, err := c.gh(
 		"api",
-		"repos/"+owner+"/"+repo+"/tags?per_page=1&sort=updated",
-		"--jq", ".[0].name",
+		"repos/"+owner+"/"+repo+"/releases/latest",
 	)
 	if err != nil {
-		return "", fmt.Errorf("gh api tags: %w", err)
+		return "", false, false, fmt.Errorf("gh api releases/latest: %w", err)
+	}
+
+	var rel struct {
+		TagName    string `json:"tag_name"`
+		Prerelease bool   `json:"prerelease"`
+		Draft      bool   `json:"draft"`
+	}
+	if err := json.Unmarshal(output, &rel); err != nil {
+		return "", false, false, fmt.Errorf("parse releases/latest output: %w", err)
+	}
+
+	tag = rel.TagName
+	if tag == "" {
+		return "", false, false, fmt.Errorf("no latest release found for %s/%s", owner, repo)
+	}
+	return tag, rel.Prerelease, rel.Draft, nil
+}
+
+// LatestReleaseTag gets the most recent release tag name using
+// `gh release list`. When !allowPrereleases the --exclude-pre-releases
+// flag is added (D2).
+func (c *Client) LatestReleaseTag(owner, repo string, allowPrereleases bool) (string, error) {
+	args := []string{
+		"release", "list", "-R", owner + "/" + repo,
+		"--limit", "100",
+	}
+	if !allowPrereleases {
+		args = append(args, "--exclude-pre-releases")
+	}
+	args = append(args, "--json", "tagName", "-q", ".[0].tagName")
+
+	output, err := c.gh(args...)
+	if err != nil {
+		return "", fmt.Errorf("gh release list: %w", err)
 	}
 	tag := strings.TrimSpace(string(output))
 	if tag == "" {

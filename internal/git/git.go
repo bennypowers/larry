@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/storage/memory"
 )
 
 // Repo wraps a go-git repository.
@@ -462,4 +464,30 @@ func DebugReadAuthor(repoPath string) (name, email string) {
 	name, email = readGitAuthor(repo.repo)
 	fmt.Printf("readGitAuthor -> name: %q, email: %q\n", name, email)
 	return
+}
+
+// ListRemoteTags lists tag ref short names on a remote repository without cloning.
+// Peeled refs (".../x^{}") are dropped; the unpeeled ref is always present
+// alongside it, so nothing is lost.
+func ListRemoteTags(url string) ([]string, error) {
+	remote := git.NewRemote(memory.NewStorage(), &config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{url},
+	})
+	refs, err := remote.List(&git.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list remote tags for %s: %w", url, err)
+	}
+	var tags []string
+	for _, ref := range refs {
+		if !ref.Name().IsTag() {
+			continue
+		}
+		name := ref.Name().Short()
+		if strings.HasSuffix(name, "^{}") {
+			continue
+		}
+		tags = append(tags, name)
+	}
+	return tags, nil
 }
