@@ -1,5 +1,9 @@
 # Test Command (T20–T21)
 
+> **Phase 1 (historical).** The ✅ marks below mean "code and tests exist",
+> not "behaviour matches the reference script". A 2026-10-05 audit found defects
+> in this area. See `plan/PLAN.md` for the corrected status and `26-PLAN-TEST-LOCAL.md`, `27a-PLAN-TEST-CONTAINERFILE.md`, `27b-PLAN-TEST-CONTAINER-ARGS.md`.
+
 **Why:** Self-contained; depends on ebuild helpers + output/color.
 **TUI stream isolation:** Subprocess stdout/stderr piped via `StdoutPipe()`/`StderrPipe()` when `useTUI` is true.
 

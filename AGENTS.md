@@ -1,90 +1,120 @@
 # `larry` — Agent Development Guide
 
-This file documents the project structure, development workflow, and constraints for coding agents.
+Project structure, workflow, and hard constraints for coding agents.
 
-## Prerequisites (Workstation-Verified)
+## Reference implementation
 
-All required tools are installed and verified on the build workstation: `ebuild`, `pkgdev`, `gh`, `podman`, `npm`, `go`, `git`, `pycargoebuild`, GPU devices (`/dev/kfd`, `/dev/dri/card0`, `/dev/dri/renderD128`)
+`~/Developer/gentoo-overlay/scripts/larry` (fish, ~1860 lines) is the **behavioural
+spec**. When Go and the script disagree, the script is right unless a plan file says
+otherwise. Read the relevant script function before changing a pipeline.
 
-> Git operations use `go-git` (`github.com/go-git/go-git/v5`) — no `git` CLI subprocess. `gh` CLI is available but GitHub auth is handled natively via `GITHUB_TOKEN`.
+`~/Developer/gentoo-overlay/` is the reference overlay — use it for manual verification.
+Its `Containerfile` (gentoo/stage3) is the reference test image.
 
-> `pycargoebuild` is the preferred Cargo.lock parser.
+## Prerequisites (workstation-verified)
 
-## Project Structure
+`ebuild`, `pkgdev`, `gh`, `podman`, `npm`, `go`, `git`, `pycargoebuild`, `golangci-lint`,
+`staticcheck`, GPU devices (`/dev/kfd`, `/dev/dri/card0`, `/dev/dri/renderD128`).
+
+## Project structure
 
 ```
-plan/PLAN.md    — Master plan index, module layout, task list
-plan/01-PLAN-FOUNDATION.md — T1-T3: scaffold, config, logging/color, CLI
-plan/02-PLAN-CORE-DOMAIN.md  — T4-T6: Version, RemoteId, provider registry
-plan/03-PLAN-INFRA.md        - T7-T8: rate limiter, retry, go-git, gh CLI wrapper
-plan/03-PLAN-INFRA.md (T8b)   - Provider implementations (github, gitlab, pypi, npm, codeberg, sourcehut)
-plan/04-PLAN-EBUILD.md       — T9: portageq wrapper, variable resolution, type detection
-plan/05-PLAN-UPSTREAM.md     — T10-T11: upstream command, cache, dep scanning
-plan/06-PLAN-BUMP.md         - T12a: bump file creation; T12b: bump + prepare invocation
-plan/07-PLAN-PREPARE.md      — T13-T18: prepare command (all 5 type pipelines)
-plan/08-PLAN-IMPORT.md       — T19: import command
-plan/09-PLAN-TEST.md         — T20-T21: test command (local + podman)
-plan/10-PLAN-TUI.md          — T22: bubbletea TUI
-plan/11-PLAN-POLISH.md       — T23: integration tests, docs, packaging
-plan/SPEC.md                 — Full specification
-README.md               — End-user: commands, dependencies
-AGENTS.md               — This file
+plan/PLAN.md    — Master index, current status, task list.  READ FIRST.
+plan/SPEC.md    — Full specification
+plan/01..11-*   — Phase 1 build-out (historical; statuses corrected in PLAN.md)
+plan/12..29-*   — Phase 2 parity & correctness (active work)
+README.md       — End-user docs
+AGENTS.md       — This file
 ```
 
-Each plan file is scoped to a single coding agent session. Execute tasks in numbered order.
+One plan file = one agent session. Execute in numbered order; respect `Precondition:`.
 
-## Build & Test
+## Build & test
 
 ```bash
-make test          # unit tests (go test ./...)
-make build         # compile binary
-make install       # install to /usr/local/bin/larry
-make lint          # go vet + staticcheck if available
+make test                     # go test ./...
+make build                    # compile
+make lint                     # go vet + staticcheck
+golangci-lint run ./...       # full lint — must be clean before any push
+go test ./... -count=1        # no cached results before a push
 ```
 
-## TDD Discipline
+## TDD discipline
 
-Every task requires tests defined *before* implementation. Each plan file lists the specific tests to write. Golden file fixtures live in `testdata/`.
+Every change starts with a **failing** test. Each plan file names the tests to write.
+Golden fixtures live in `testdata/`. Never implement before the red test exists.
 
-## Task Execution Order
+## Hard rules
 
-| Phase         | Tasks   | File                     |
-| ------------- | ------- | ------------------------ |
-| Foundation    | T1–T3   | `01-PLAN-FOUNDATION.md`  |
-| Core domain   | T4–T6   | `02-PLAN-CORE-DOMAIN.md` |
-| HTTP/infra    | T7–T8   | `03-PLAN-INFRA.md`       |
-| Provider impl | T8b     | `03-PLAN-INFRA.md`       |
-| Ebuild helper | T9      | `04-PLAN-EBUILD.md`      |
-| Upstream cmd  | T10–T11 | `05-PLAN-UPSTREAM.md`    |
-| Bump cmd (a)  | T12a    | `06-PLAN-BUMP.md`        |
-| Bump cmd (b)  | T12b    | `06-PLAN-BUMP.md`        |
-| Prepare cmd   | T13–T18 | `07-PLAN-PREPARE.md`     |
-| Import cmd    | T19     | `08-PLAN-IMPORT.md`      |
-| Test cmd      | T20–T21 | `09-PLAN-TEST.md`        |
-| TUI           | T22     | `10-PLAN-TUI.md`         |
-| Polish        | T23     | `11-PLAN-POLISH.md`      |
+### Parse ebuild filenames with the shared helper, never ad hoc
+`-r` revision suffixes are anchored: `-r\d+$`. `strings.LastIndex(name, "-r")` corrupts
+every package whose name contains `-r` (`kornia-rs`, `python-requests`, `foo-runtime`).
+PN comes from the **package directory name**, not from splitting the filename on hyphens.
+One parser, in `internal/atom`. Do not add a fourth copy.
 
-## External Tool Delegation Policy
+### One variable expander
+Ebuild `${VAR}` expansion is fixpoint iteration over **every** `^[A-Z_]+="..."`
+assignment in the file, plus `${PN}/${PV}/${P}`. Hardcoded var maps (`${MY_NPM_NAME}`,
+etc.) silently leak literal `${...}` into URLs. Use `internal/ebuild.ExpandVariables`.
 
-**Delegate to external tools:**
-- `ebuild` — full Portage environment required
-- `pkgdev manifest` — deep Portage digest integration
-- `podman` — GPU passthrough, cgroup management
-- `npm`, `go` — language-specific dependency resolution
-- `pycargoebuild` — preferred Cargo.lock → CRATES parser
-- `portageq` — variable resolution within Portage environment
+### One type detector
+`internal/ebuild.DetectType*` is the sole owner of package-type detection. Detection
+order is npm → cargo → go → vendored → generic, matching the script. Two detectors that
+disagree on the same file is a bug, not a feature.
 
-**Native implementations (no subprocess):**
-- `go-git` — remote resolution, tag enumeration, commit lookup (replaces `git` CLI)
-- `net/http` — HTTP requests (not curl)
-- `encoding/json` — JSON parsing (not jq)
-- stdlib regex/string ops — text processing (not sed/grep/awk)
-- `archive/tar`, `compress/gzip` — archiving (not tar)
-- `os.MkdirTemp` — temp directories (not mktemp)
-- `filepath.Walk` — file finding (not find)
-- native comparison — version sorting (not sort -V)
+### Single DISTDIR through the whole call chain
+`$XDG_CACHE_HOME/larry/distfiles` (fallback `~/.cache/larry/distfiles`). Resolve once in
+`internal/config`, pass as a parameter. Never hardcode `/var/cache/distfiles` or
+`/usr/portage/distfiles`; never let it default to `""`.
 
-## Key Go Dependencies
+### Manifest pipeline order
+fetch **all** distfiles for **all** ebuilds in the package → verify → `rm -f Manifest` →
+`pkgdev manifest -d $DISTDIR <category/package>` from the overlay root → verify.
+Target `category/package`, never a single ebuild path: `rm Manifest` plus a single-file
+target destroys sibling versions' entries.
+
+### Prefer `pkgdev` over `ebuild digest`
+`pkgdev manifest` handles eclass expansion (`${CARGO_CRATE_URIS}`) and category-level
+operations that `ebuild digest` misses. If you change the runner, change the arg builder
+in the same commit.
+
+### `mirror://npm/` is invisible to Portage
+pkgdev cannot resolve it. Pre-populate DISTDIR by hand before manifesting.
+
+### Replicate external invocations exactly
+Argument order, working directory, and input form (extracted dir vs. `.tgz` passed
+directly) change behaviour in ways unit tests cannot catch. Replay the script's exact
+command when in doubt.
+
+### Cache format compatibility
+npm v11 writes `_cacache` with `index-v5`/`content-v2`. A mismatched format fails
+silently at build time. Verify by running the consumer against the extracted tarball.
+
+### Verify with a real build
+Unit tests prove logic; only Portage proves the pipeline. After touching manifest or deps
+tarballs: `ebuild <path> digest` (no empty entries), then the install phase (offline
+`npm --cache` / cargo fetch must succeed).
+
+### Reuse what exists
+`internal/version` is the Gentoo version comparator. `internal/git` wraps go-git.
+`internal/ebuild/srcuri.go` expands variables. Do not hand-roll parallel implementations
+in `internal/importcmd` or `cmd/larry`.
+
+### CLI invariants
+Global flags go on `rootCmd.PersistentFlags()`. `config.Load()` must actually run.
+Subprocess exit codes propagate to `os.Exit`. No subcommand prints with bare `fmt.Printf`
+when `--quiet`/`--color` are supposed to apply.
+
+## External tool delegation policy
+
+**Delegate:** `ebuild`, `pkgdev manifest`, `podman`, `npm`, `go`, `pycargoebuild`,
+`portageq`, `gh` (releases/uploads — auth via `GITHUB_TOKEN`).
+
+**Native (no subprocess):** `go-git` (remotes, tags, commits — *never* text-parse
+`.git/config`), `net/http`, `encoding/json`, stdlib regex/strings, `archive/tar` +
+`compress/gzip`, `os.MkdirTemp`, `filepath.WalkDir`, `internal/version` (not `sort -V`).
+
+## Key Go dependencies
 
 | Package                              | Purpose                  |
 | ------------------------------------ | ------------------------ |
@@ -94,4 +124,3 @@ Every task requires tests defined *before* implementation. Each plan file lists 
 | `github.com/charmbracelet/lipgloss`  | TUI styling              |
 | `github.com/muesli/termenv`          | Terminal color detection |
 | `github.com/go-git/go-git/v5`        | Native git operations    |
-

@@ -1,5 +1,9 @@
 # HTTP / Infrastructure (T7–T8b)
 
+> **Phase 1 (historical).** The ✅ marks below mean "code and tests exist",
+> not "behaviour matches the reference script". A 2026-10-05 audit found defects
+> in this area. See `plan/PLAN.md` for the corrected status and `15-PLAN-REMOTEID.md`, `17a`/`17b`.
+
 **Why:** Shared infra for rate limiting, retry, HTTP, git ops, and provider implementations.
 
 ### Status: ✅ **COMPLETE** — T7+T8+T8b all implemented with tests. 2,884 lines impl, 2,428 lines tests across 5 packages.

@@ -1,5 +1,9 @@
 # Bump Command (T12a–T12b)
 
+> **Phase 1 (historical).** The ✅ marks below mean "code and tests exist",
+> not "behaviour matches the reference script". A 2026-10-05 audit found defects
+> in this area. See `plan/PLAN.md` for the corrected status and `12-PLAN-ATOM.md`.
+
 **Why:** Depends on provider (T6, auto-version) and prepare (T13). Split into file creation + prepare invocation.
 
 ### Status: ✅ **T12a COMPLETE** — 2 files, 17 tests, 1 CLI subcommand

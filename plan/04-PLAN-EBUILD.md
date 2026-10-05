@@ -1,5 +1,9 @@
 # Ebuild Helper (T9)
 
+> **Phase 1 (historical).** The ✅ marks below mean "code and tests exist",
+> not "behaviour matches the reference script". A 2026-10-05 audit found defects
+> in this area. See `plan/PLAN.md` for the corrected status and `20a-PLAN-EBUILD-VARS.md`, `20b-PLAN-EBUILD-DETECT.md`.
+
 **Why:** Every command needs ebuild metadata.
 **Precondition:** T3 (logger)
 

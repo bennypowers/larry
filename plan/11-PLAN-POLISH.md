@@ -1,5 +1,9 @@
 # Polish (T23)
 
+> **Phase 1 (historical).** The ✅ marks below mean "code and tests exist",
+> not "behaviour matches the reference script". A 2026-10-05 audit found defects
+> in this area. See `plan/PLAN.md` for the corrected status and `29a-PLAN-HYGIENE-MECHANICAL.md`, `29b-PLAN-HYGIENE-ERRCHECK.md`, `29c-PLAN-HYGIENE-STATICCHECK.md`.
+
 **Why:** Everything above must be green first.
 **Precondition:** T1–T22 complete
 **Note:** Integration tests focus on full command lifecycle, not provider correctness (covered in T8b/T10/T14–T17).

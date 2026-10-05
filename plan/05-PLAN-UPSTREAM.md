@@ -1,5 +1,9 @@
 # Upstream Command (T10–T11)
 
+> **Phase 1 (historical).** The ✅ marks below mean "code and tests exist",
+> not "behaviour matches the reference script". A 2026-10-05 audit found defects
+> in this area. See `plan/PLAN.md` for the corrected status and `16`–`19` (upstream parity plans).
+
 **Why:** Provider-heavy command; tests full domain model.
 **Precondition:** T4, T5, T6, T7, T8, T8b, T9
 **Note:** T10 uses `httpclient.NewClientWithTransport(rl, transport)` from T8b to inject `httptest.Server` for PyPI/NPM/GitLab/Codeberg provider tests.

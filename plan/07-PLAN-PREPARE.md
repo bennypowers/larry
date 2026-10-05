@@ -1,5 +1,9 @@
 # Prepare Command (T13–T19)
 
+> **Phase 1 (historical).** The ✅ marks below mean "code and tests exist",
+> not "behaviour matches the reference script". A 2026-10-05 audit found defects
+> in this area. See `plan/PLAN.md` for the corrected status and `20`–`25` (prepare parity plans).
+
 **Why:** Most complex command; 6 type-specific pipelines (generic, npm, cargo, go, rpi-kernel, vendored). Broke into sub-tasks.
 **TUI stream isolation (all T13–T19):** Subprocess stdout/stderr piped via `StdoutPipe()`/`StderrPipe()` when `useTUI` is true. Never inherit `os.Stdout`/`os.Stderr`.
 **Rollback (all T13–T19):** Ebuild backed up `.bak` before mutations, restored on failure.

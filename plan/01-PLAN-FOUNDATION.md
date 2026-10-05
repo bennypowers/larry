@@ -1,5 +1,9 @@
 # Foundation Tasks (T1–T3)
 
+> **Phase 1 (historical).** The ✅ marks below mean "code and tests exist",
+> not "behaviour matches the reference script". A 2026-10-05 audit found defects
+> in this area. See `plan/PLAN.md` for the corrected status and `13a-PLAN-CLI-HARNESS.md`, `13b-PLAN-CLI-OUTPUT.md`.
+
 **What this covers:** Project scaffold, config system, logging/color output, CLI scaffolding.
 **Why first:** Everything else builds on this layer.
 

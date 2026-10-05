@@ -1,5 +1,9 @@
 # Import Command (T19)
 
+> **Phase 1 (historical).** The ✅ marks below mean "code and tests exist",
+> not "behaviour matches the reference script". A 2026-10-05 audit found defects
+> in this area. See `plan/PLAN.md` for the corrected status and `28a-PLAN-IMPORT-PATHS.md`, `28b-PLAN-IMPORT-METADATA.md`.
+
 **Why:** Relatively standalone; depends on ebuild helpers + prepare.
 **Precondition:** T9 (T13 implicit — import calls prepare)
 

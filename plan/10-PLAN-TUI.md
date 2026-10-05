@@ -1,5 +1,9 @@
 # TUI (T22)
 
+> **Phase 1 (historical).** The ✅ marks below mean "code and tests exist",
+> not "behaviour matches the reference script". A 2026-10-05 audit found defects
+> in this area. See `plan/PLAN.md` for the corrected status and `19-PLAN-UPSTREAM-OUTPUT.md` (two new status colours).
+
 **Why:** Optional polish on top of working commands.
 **Precondition:** T10 (upstream output is primary TUI target)
 **Note:** TUI tests render colors/statuses — providers tested in T8b/T10.

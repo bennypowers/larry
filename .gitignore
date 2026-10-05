@@ -1,5 +1,7 @@
 # Binaries
-larry
+# NOTE: must stay anchored with a leading slash. A bare `larry` matches any path
+# component, which silently ignored the whole cmd/larry/ source directory.
+/larry
 *.exe
 *.exe~
 *.dll
