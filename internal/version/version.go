@@ -14,13 +14,14 @@ const (
 	_ SuffixType = iota
 	Alpha          // _alpha1, _a1
 	Beta           // _beta1, _b1
-	Rc             // _rc1, _pre1
-	Patch          // _p1 (patch-level pre-release)
+	Pre            // _pre1 (pre-release, before RC)
+	Rc             // _rc1
 	Release        // no suffix — the final release
-	R1             // -r1 (revision)
+	Patch          // _p1 (patch-level post-release)
 
-	// Numeric ordering: alpha < beta < rc < patch < release < revision
+	// Numeric ordering (suffixKey): alpha=1 < beta=2 < pre=3 < rc=4 < release=5 < p=6
 	// This mirrors Gentoo/PkgVersionCompare semantics.
+	// NOTE: suffix rank is compared BEFORE the revision, so 1.0_p1 > 1.0-r1.
 )
 
 func (s SuffixType) String() string {
@@ -29,14 +30,14 @@ func (s SuffixType) String() string {
 		return "alpha"
 	case Beta:
 		return "beta"
+	case Pre:
+		return "pre"
 	case Rc:
 		return "rc"
 	case Patch:
 		return "patch"
 	case Release:
 		return "release"
-	case R1:
-		return "r"
 	default:
 		return "unknown"
 	}
@@ -45,10 +46,19 @@ func (s SuffixType) String() string {
 // Version represents a Gentoo package version.
 // Components can be 1–5 elements: e.g. 1, 1.0, 1.2.3, 1.2.3.4, 2024.01.01
 type Version struct {
-	Components []uint64 // flexible: 1, 2, 3, 4, or 5 components
+	Components []uint64 // flexible: longest leading all-numeric dot-run (legacy field)
+	base       string   // base version string for Format reconstruction
 	Suffix     *Suffix
 	Revision   uint64
 	Live       bool // true for 9999 (or any component that is 9999)
+	segments   []segment // authoritative for comparison
+}
+
+// segment is an atomic piece of a version base: either a numeric run or a string run.
+type segment struct {
+	num   uint64
+	str   string
+	isNum bool
 }
 
 // Suffix is a pre-release or patch-level marker.
@@ -58,55 +68,69 @@ type Suffix struct {
 }
 
 var (
-	// normalizeRe strips known prefix noise and ^{...} wrappers.
-	normalizeRe = regexp.MustCompile(`^\^{(.+?)\}$`)
+	// peeledRe strips ^{...} ANYWHERE in the string.
+	peeledRe = regexp.MustCompile(`\^\{.*\}`)
+	// vPrefixRe strips leading v/V or v./V. only when followed by a digit.
+	vPrefixRe = regexp.MustCompile(`^[vV]\.?([0-9])`)
+	// revRe matches -rN at the end of the string (anchored).
+	revRe = regexp.MustCompile(`-r([0-9]+)$`)
+	// dashSuffixRe rewrites dashed pre-release forms to underscore form.
+	// Requires at least one digit after the suffix keyword (e.g., "1.0.0-beta.1" → "1.0.0_beta1")
+	// Bare suffixes like "1.0-alpha" are left unchanged (not recognized as Gentoo suffixes).
+	dashSuffixRe = regexp.MustCompile(`[-.](alpha|beta|pre|rc)\.?([0-9]+)$`)
 )
 
 // Normalize strips known prefix noise from a version string.
-// Input: "v1.2.3", "bun-1.2.3", "rocm-1.2.3", "release-1.2.3", "^{1.2.3}"
+// Steps: TrimSpace → strip ^{.*} anywhere → strip bun-/rocm-/release- → strip v/V prefix → TrimSpace.
+// Input: "v1.2.3", "bun-1.2.3", "rocm-1.2.3", "release-1.2.3", "v1.0^{}"
 // Output: "1.2.3"
 func Normalize(s string) string {
 	s = strings.TrimSpace(s)
-	// Strip ^{...} wrapper
-	s = normalizeRe.ReplaceAllString(s, `$1`)
-	// Strip known prefixes
-	prefixes := []string{"bun-", "rocm-", "release-", "rel-"}
+	// Strip ^{...} wrapper — ANYWHERE in the string
+	s = peeledRe.ReplaceAllString(s, "")
+	// Strip known prefixes (rel- is NOT stripped — D7)
+	prefixes := []string{"bun-", "rocm-", "release-"}
 	for _, p := range prefixes {
 		if strings.HasPrefix(s, p) {
 			s = strings.TrimPrefix(s, p)
 			break
 		}
 	}
-	// Strip leading v or V
-	if len(s) > 0 && (s[0] == 'v' || s[0] == 'V') {
-		s = s[1:]
-	}
+	// Strip leading v or V only when followed by a digit
+	s = vPrefixRe.ReplaceAllString(s, "$1")
 	return strings.TrimSpace(s)
 }
 
 // Parse parses a version string into a Version struct.
-// Handles: 1.2.3, 1.2.3-r1, 1.2.3_p1, 1.0_alpha1, 1.0_beta2, 1.0_rc3, 9999
+// Handles: 1.2.3, 1.2.3-r1, 1.2.3_p1, 1.0_alpha1, 1.0_beta2, 1.0_rc3, 9999,
+//          1.2.3a, 2.0.0-rc1, 1.0.0-beta.1, 1.2.3.4.5.6, 20250410, 1.0_pre
 func Parse(s string) (*Version, error) {
+	// Step 1: Normalize
 	s = Normalize(s)
 	if s == "" {
 		return nil, fmt.Errorf("invalid version string: %q", s)
 	}
 
-	// Extract revision first: -rN (last occurrence)
-	revision := uint64(0)
-	if idx := strings.LastIndex(s, "-r"); idx > 0 {
-		revStr := s[idx+2:]
-		if revStr != "" && isDigits(revStr) {
-			rev, err := strconv.ParseUint(revStr, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("invalid revision in version: %q", s)
-			}
-			revision = rev
-			s = s[:idx]
-		}
+	// Step 2: Gate — must start with a digit
+	if len(s) == 0 || s[0] < '0' || s[0] > '9' {
+		return nil, fmt.Errorf("invalid version string: %q", s)
 	}
 
-	// Extract suffix: _alphaN, _aN, _betaN, _bN, _rcN, _preN, _pN
+	// Step 3: Revision — anchored -rN at end
+	revision := uint64(0)
+	if m := revRe.FindStringSubmatch(s); m != nil {
+		var err error
+		revision, err = strconv.ParseUint(m[1], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid revision in version: %q", s)
+		}
+		s = s[:len(s)-len(m[0])]
+	}
+
+	// Step 4: Dashed pre-release rewrite — one substitution
+	s = dashSuffixRe.ReplaceAllString(s, "_$1$2")
+
+	// Step 5: Suffix — parse _ suffix
 	var suffix *Suffix
 	if idx := strings.LastIndex(s, "_"); idx > 0 {
 		suffixPart := s[idx+1:]
@@ -119,19 +143,23 @@ func Parse(s string) (*Version, error) {
 		}
 	}
 
-	// Parse components from the base
+	// Step 6: Segments — split base into numeric/non-digit runs (dropping ., -, _)
+	segs := parseSegments(s)
+
+	// Step 7: Components — longest leading all-numeric dot-run (legacy)
+	// Store base for Format reconstruction
 	components := parseComponents(s)
-	if len(components) == 0 {
-		return nil, fmt.Errorf("invalid version string: %q", s)
-	}
+	base := s
 
 	v := &Version{
 		Components: components,
+		base:       base,
 		Suffix:     suffix,
 		Revision:   revision,
+		segments:   segs,
 	}
 
-	// Live version check: any component is 9999
+	// Step 8: Live version check — any component is 9999
 	for _, c := range v.Components {
 		if c == 9999 {
 			v.Live = true
@@ -154,63 +182,121 @@ func isDigits(s string) bool {
 	return true
 }
 
-// parseSuffix parses a suffix string like "alpha1", "a2", "beta3", "rc1", "p1"
+// parseSuffix parses a suffix string like "alpha1", "a2", "beta3", "rc1", "p1", "pre4"
 // Returns (SuffixType, Number, success).
+// Tries markers in order: alpha, beta, pre, rc, a, b, p.
+// If the numeric tail is non-empty, it must be all digits; if empty, number defaults to 0.
 func parseSuffix(s string) (SuffixType, uint32, bool) {
 	switch {
-	case strings.HasPrefix(s, "alpha") && len(s) > 5:
-		n, _ := strconv.ParseUint(s[5:], 10, 32)
-		return Alpha, uint32(n), true
-	case strings.HasPrefix(s, "a") && len(s) > 1:
-		n, _ := strconv.ParseUint(s[1:], 10, 32)
-		return Alpha, uint32(n), true
-	case strings.HasPrefix(s, "beta") && len(s) > 4:
-		n, _ := strconv.ParseUint(s[4:], 10, 32)
-		return Beta, uint32(n), true
-	case strings.HasPrefix(s, "b") && len(s) > 1:
-		n, _ := strconv.ParseUint(s[1:], 10, 32)
-		return Beta, uint32(n), true
-	case strings.HasPrefix(s, "rc") && len(s) > 2:
-		n, _ := strconv.ParseUint(s[2:], 10, 32)
-		return Rc, uint32(n), true
-	case strings.HasPrefix(s, "pre") && len(s) > 3:
-		n, _ := strconv.ParseUint(s[3:], 10, 32)
-		return Rc, uint32(n), true
-	case strings.HasPrefix(s, "p") && len(s) > 1:
-		n, _ := strconv.ParseUint(s[1:], 10, 32)
-		return Patch, uint32(n), true
+	case strings.HasPrefix(s, "alpha"):
+		if len(s) >= 5 {
+			tail := s[5:]
+			if tail == "" || isDigits(tail) {
+				n, _ := strconv.ParseUint(tail, 10, 32)
+				return Alpha, uint32(n), true
+			}
+		}
+	case strings.HasPrefix(s, "a") && len(s) >= 1:
+		tail := s[1:]
+		if tail == "" || isDigits(tail) {
+			n, _ := strconv.ParseUint(tail, 10, 32)
+			return Alpha, uint32(n), true
+		}
+	case strings.HasPrefix(s, "beta"):
+		if len(s) >= 4 {
+			tail := s[4:]
+			if tail == "" || isDigits(tail) {
+				n, _ := strconv.ParseUint(tail, 10, 32)
+				return Beta, uint32(n), true
+			}
+		}
+	case strings.HasPrefix(s, "b") && len(s) >= 1:
+		tail := s[1:]
+		if tail == "" || isDigits(tail) {
+			n, _ := strconv.ParseUint(tail, 10, 32)
+			return Beta, uint32(n), true
+		}
+	case strings.HasPrefix(s, "pre") && len(s) >= 3:
+		tail := s[3:]
+		if tail == "" || isDigits(tail) {
+			n, _ := strconv.ParseUint(tail, 10, 32)
+			return Pre, uint32(n), true
+		}
+	case strings.HasPrefix(s, "rc") && len(s) >= 2:
+		tail := s[2:]
+		if tail == "" || isDigits(tail) {
+			n, _ := strconv.ParseUint(tail, 10, 32)
+			return Rc, uint32(n), true
+		}
+	case strings.HasPrefix(s, "p") && len(s) >= 1:
+		tail := s[1:]
+		if tail == "" || isDigits(tail) {
+			n, _ := strconv.ParseUint(tail, 10, 32)
+			return Patch, uint32(n), true
+		}
 	}
 	return 0, 0, false
 }
 
 func parseComponents(s string) []uint64 {
 	parts := strings.Split(s, ".")
-	// Max 5 components
-	if len(parts) > 5 || len(parts) == 0 {
-		return nil
-	}
-	// Validate each part is a non-empty digit string
+	// Collect longest leading all-numeric dot-run
+	var components []uint64
 	for _, p := range parts {
 		if p == "" || !isDigits(p) {
-			return nil
+			break
 		}
+		c, _ := strconv.ParseUint(p, 10, 64)
+		components = append(components, c)
 	}
-	components := make([]uint64, len(parts))
-	for i, p := range parts {
-		components[i], _ = strconv.ParseUint(p, 10, 64)
+	if len(components) == 0 {
+		// No dot-separated numeric components; check if the whole string is numeric
+		if isDigits(s) {
+			c, _ := strconv.ParseUint(s, 10, 64)
+			return []uint64{c}
+		}
+		return nil
 	}
 	return components
+}
+
+// parseSegments splits the base string into maximal runs of ASCII digits and non-digit
+// characters, dropping ., -, and _ (they are boundaries, not segments).
+func parseSegments(s string) []segment {
+	var segs []segment
+	var buf strings.Builder
+	for _, c := range s {
+		if c == '.' || c == '-' || c == '_' {
+			// Flush current run
+			if buf.Len() > 0 {
+				segs = flushBuf(&buf, &segs)
+			}
+			continue
+		}
+		buf.WriteRune(c)
+	}
+	if buf.Len() > 0 {
+		segs = flushBuf(&buf, &segs)
+	}
+	return segs
+}
+
+func flushBuf(buf *strings.Builder, segs *[]segment) []segment {
+	content := buf.String()
+	buf.Reset()
+	if isDigits(content) {
+		n, _ := strconv.ParseUint(content, 10, 64)
+		*segs = append(*segs, segment{num: n, isNum: true})
+	} else {
+		*segs = append(*segs, segment{str: content, isNum: false})
+	}
+	return *segs
 }
 
 // Format returns the version as a string.
 func (v *Version) Format() string {
 	var sb strings.Builder
-	for i, c := range v.Components {
-		if i > 0 {
-			sb.WriteString(".")
-		}
-		sb.WriteString(strconv.FormatUint(c, 10))
-	}
+	sb.WriteString(v.base)
 	if v.Suffix != nil {
 		sb.WriteString("_")
 		switch v.Suffix.Type {
@@ -218,6 +304,8 @@ func (v *Version) Format() string {
 			sb.WriteString("alpha")
 		case Beta:
 			sb.WriteString("beta")
+		case Pre:
+			sb.WriteString("pre")
 		case Rc:
 			sb.WriteString("rc")
 		case Patch:
@@ -235,6 +323,7 @@ func (v *Version) Format() string {
 // Compare returns -1, 0, or 1 if v < other, v == other, or v > other.
 // Implements Gentoo PkgVersionCompare semantics.
 func (v *Version) Compare(other *Version) int {
+	// nil handling
 	if v == nil && other == nil {
 		return 0
 	}
@@ -245,7 +334,7 @@ func (v *Version) Compare(other *Version) int {
 		return 1
 	}
 
-	// Live versions (9999) are greater than any finite version
+	// Live versions (9999) beat non-Live
 	if v.Live && !other.Live {
 		return 1
 	}
@@ -253,30 +342,32 @@ func (v *Version) Compare(other *Version) int {
 		return -1
 	}
 
-	// Compare components
-	maxLen := len(v.Components)
-	if len(other.Components) > maxLen {
-		maxLen = len(other.Components)
+	// Compare segments (authoritative).
+	// Drop trailing zero-valued numeric segments from both sides first.
+	aSegs := dropTrailingZeros(v.segments)
+	bSegs := dropTrailingZeros(other.segments)
+
+	minLen := len(aSegs)
+	if len(bSegs) < minLen {
+		minLen = len(bSegs)
 	}
-	for i := 0; i < maxLen; i++ {
-		aVal := uint64(0)
-		bVal := uint64(0)
-		if i < len(v.Components) {
-			aVal = v.Components[i]
-		}
-		if i < len(other.Components) {
-			bVal = other.Components[i]
-		}
-		if aVal < bVal {
-			return -1
-		}
-		if aVal > bVal {
-			return 1
+
+	for i := 0; i < minLen; i++ {
+		cmp := compareSegment(aSegs[i], bSegs[i])
+		if cmp != 0 {
+			return cmp
 		}
 	}
 
-	// Components equal — compare suffixes
-	// Order: alpha < beta < rc < patch < release < revision
+	// All shared positions equal → longer slice wins
+	if len(aSegs) != len(bSegs) {
+		if len(aSegs) < len(bSegs) {
+			return -1
+		}
+		return 1
+	}
+
+	// Segments equal — compare suffixes
 	sv := suffixKey(v.Suffix)
 	so := suffixKey(other.Suffix)
 	if sv < so {
@@ -307,8 +398,46 @@ func (v *Version) Compare(other *Version) int {
 	return 0
 }
 
+// compareSegment compares two segments pairwise:
+// num vs num → numeric; str vs str → strings.Compare; num vs str → numeric below alphabetic.
+func compareSegment(a, b segment) int {
+	if a.isNum && b.isNum {
+		if a.num < b.num {
+			return -1
+		}
+		if a.num > b.num {
+			return 1
+		}
+		return 0
+	}
+	if a.isNum && !b.isNum {
+		// numeric sorts below alphabetic
+		return -1
+	}
+	if !a.isNum && b.isNum {
+		return 1
+	}
+	// Both strings
+	return strings.Compare(a.str, b.str)
+}
+
+// dropTrailingZeros drops trailing numeric segments whose value is 0.
+func dropTrailingZeros(segs []segment) []segment {
+	result := make([]segment, len(segs))
+	copy(result, segs)
+	for len(result) > 0 {
+		last := result[len(result)-1]
+		if last.isNum && last.num == 0 {
+			result = result[:len(result)-1]
+		} else {
+			break
+		}
+	}
+	return result
+}
+
 // suffixKey returns the numeric sort key for a suffix.
-// Alpha=1, Beta=2, Rc=3, Patch=4, Release=5 (no suffix), Revision=6
+// alpha=1, beta=2, pre=3, rc=4, release=5 (no suffix), patch=6
 func suffixKey(s *Suffix) int {
 	if s == nil {
 		return 5 // release (no suffix) beats pre-releases
@@ -318,14 +447,14 @@ func suffixKey(s *Suffix) int {
 		return 1
 	case Beta:
 		return 2
-	case Rc:
+	case Pre:
 		return 3
-	case Patch:
+	case Rc:
 		return 4
 	case Release:
 		return 5
-	case R1:
-		return 6 // revision beats release
+	case Patch:
+		return 6
 	default:
 		return 0
 	}
@@ -337,14 +466,48 @@ func (v *Version) String() string {
 }
 
 // IsPrerelease reports whether v is a pre-release version.
-// Pre-releases are versions with alpha, beta, rc, or patch (_p) suffixes.
-// Revisions (-rN) are NOT pre-releases — they are post-release.
-// Live versions (9999) are NOT pre-releases.
+// True for alpha, beta, pre, and rc suffixes.
+// Patch (_p), revisions (-rN), and live versions (9999) are NOT pre-releases.
 func (v *Version) IsPrerelease() bool {
 	if v == nil || v.Suffix == nil {
 		return false
 	}
-	// alpha, beta, rc, and patch (_p) are pre-releases
-	// release and revision are NOT pre-releases
-	return v.Suffix.Type == Alpha || v.Suffix.Type == Beta || v.Suffix.Type == Rc || v.Suffix.Type == Patch
+	return v.Suffix.Type == Alpha || v.Suffix.Type == Beta || v.Suffix.Type == Pre || v.Suffix.Type == Rc
+}
+
+// ExtractDate finds a YYYYMMDD date (exactly 8 digits starting with "20") in s.
+// Returns the 8-digit string and true if found; ("", false) otherwise.
+func ExtractDate(s string) (string, bool) {
+	m := regexp.MustCompile(`(20\d{6})`).FindStringSubmatch(s)
+	if len(m) < 2 {
+		return "", false
+	}
+	return m[1], true
+}
+
+// Compare parses a and b and compares them.
+// Unparseable input sorts BELOW any parseable version; two unparseable values
+// fall back to strings.Compare, so the result is always a total order.
+func Compare(a, b string) int {
+	va, errA := Parse(a)
+	vb, errB := Parse(b)
+
+	if errA != nil && errB != nil {
+		// Both unparseable → strings.Compare (total order guaranteed)
+		return strings.Compare(a, b)
+	}
+	if errA != nil {
+		// a unparseable → sorts below b
+		return -1
+	}
+	if errB != nil {
+		// b unparseable → a sorts above
+		return 1
+	}
+	return va.Compare(vb)
+}
+
+// Less is Compare(a, b), for slices.SortFunc / sort.Slice.
+func Less(a, b string) int {
+	return Compare(a, b)
 }

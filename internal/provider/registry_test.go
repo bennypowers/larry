@@ -20,6 +20,7 @@ func (s *stubProvider) FetchLatestVersion(remoteid.RemoteId, bool) (*version.Ver
 	return nil, nil
 }
 func (s *stubProvider) Name() string                         { return s.md.Name }
+func (s *stubProvider) IsPrerelease(v *version.Version) bool { return v.IsPrerelease() }
 
 func TestProviderRegistry_RegisterResolve(t *testing.T) {
 	reg := NewProviderRegistry()

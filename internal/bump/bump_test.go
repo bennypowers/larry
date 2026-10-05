@@ -441,3 +441,4 @@ func (m *mockUpstreamProvider) FetchLatestVersion(rid remoteid.RemoteId, allowPr
 	}
 	return version.Parse("1.0.0")
 }
+func (m *mockUpstreamProvider) IsPrerelease(v *version.Version) bool { return v.IsPrerelease() }

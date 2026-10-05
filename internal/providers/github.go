@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"regexp"
 	"strings"
 
 	"bennypowers.dev/larry/internal/github"
@@ -14,9 +13,6 @@ import (
 	"bennypowers.dev/larry/internal/ratelimit"
 	"bennypowers.dev/larry/internal/version"
 )
-
-// dateRegex matches either 8-digit (YYYYMMDD) or 6-digit (YYMMDD) dates.
-var dateRegex = regexp.MustCompile(`(20?\d{5,7})`)
 
 // GitHubProvider implements upstream version discovery for GitHub.
 // Uses the gh CLI for all GitHub API interaction.
@@ -157,10 +153,8 @@ func stripTagPrefix(tag string) string {
 			tag = tag[1:]
 		}
 	}
-	// Strip ^{...} annotation (from annotated tags)
-	if i := strings.Index(tag, "^{ "); i >= 0 {
-		tag = tag[:i]
-	}
+	// Strip ^{...} annotation (from annotated tags) — via Normalize (D6)
+	tag = version.Normalize(tag)
 	// Handle series-number formats: "1 20260519-1_bpo" -> "20260519-1_bpo"
 	// Common in Raspberry Pi OS packages where first number is series
 	if i := strings.Index(tag, " "); i > 0 {
@@ -226,25 +220,15 @@ func sortAndLatestVersion(tags []string) (string, error) {
 	return latestTag, nil
 }
 
-// extractVersionFromDate extracts a version-like date from non-standard tag names.
-// Handles formats like "260519-1_bpo13+1+rpt1" -> "20260519" for version comparison.
+// extractVersionFromDate extracts a YYYYMMDD date from non-standard tag names.
+// Uses version.ExtractDate — exactly 8 digits (20\d{6}), no 6-digit fallback (D8).
 func extractVersionFromDate(tag string) (*version.Version, error) {
-	// Find a 6 or 8-digit date (YYYYMMDD or YYMMDD) in the tag
-	matches := dateRegex.FindStringSubmatch(tag)
-	if len(matches) < 2 {
+	rawDate, ok := version.ExtractDate(tag)
+	if !ok {
 		return nil, fmt.Errorf("no date found in tag %q", tag)
 	}
-	rawDate := matches[1]
 
-	// Convert 6-digit date (YYMMDD) to 8-digit (YYYYMMDD)
-	var versionStr string
-	if len(rawDate) == 6 {
-		versionStr = "20" + rawDate
-	} else {
-		versionStr = rawDate
-	}
-
-	norm := version.Normalize(versionStr)
+	norm := version.Normalize(rawDate)
 	return version.Parse(norm)
 }
 

@@ -70,7 +70,7 @@ func TestPyPIProvider_FetchLatest_Prerelease(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := map[string]interface{}{
 			"info": map[string]string{
-				"version": "2.0.0_p1",
+				"version": "1.0.0_alpha1",
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -85,7 +85,7 @@ func TestPyPIProvider_FetchLatest_Prerelease(t *testing.T) {
 	rl := ratelimit.NewRateLimiter()
 	prov := NewPyPIProviderWithClient(rl, client)
 
-	// Without prerelease flag, should error
+	// Without prerelease flag, should error (alpha IS a prerelease)
 	_, err := prov.FetchLatestVersion(remoteid.RemoteId{Name: "testpkg"}, false)
 	if err == nil {
 		t.Fatal("expected prerelease error without allowPrereleases")
@@ -96,8 +96,8 @@ func TestPyPIProvider_FetchLatest_Prerelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchLatestVersion(): %v", err)
 	}
-	if v.String() != "2.0.0_p1" {
-		t.Errorf("version = %q, want 2.0.0_p1", v.String())
+	if v.String() != "1.0.0_alpha1" {
+		t.Errorf("version = %q, want 1.0.0_alpha1", v.String())
 	}
 }
 
@@ -134,7 +134,7 @@ func TestNpmProvider_FetchLatest_Prerelease(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := map[string]string{
 			"name":    "testpkg",
-			"version": "1.0.0_p1",
+			"version": "1.0.0_alpha1",
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -148,6 +148,7 @@ func TestNpmProvider_FetchLatest_Prerelease(t *testing.T) {
 	rl := ratelimit.NewRateLimiter()
 	prov := NewNpmProviderWithClient(rl, client)
 
+	// Without prerelease flag, should error (alpha IS a prerelease)
 	_, err := prov.FetchLatestVersion(remoteid.RemoteId{Name: "testpkg"}, false)
 	if err == nil {
 		t.Fatal("expected prerelease error without allowPrereleases")
@@ -157,8 +158,8 @@ func TestNpmProvider_FetchLatest_Prerelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchLatestVersion(): %v", err)
 	}
-	if v.String() != "1.0.0_p1" {
-		t.Errorf("version = %q, want 1.0.0_p1", v.String())
+	if v.String() != "1.0.0_alpha1" {
+		t.Errorf("version = %q, want 1.0.0_alpha1", v.String())
 	}
 }
 

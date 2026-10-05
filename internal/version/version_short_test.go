@@ -15,8 +15,8 @@ func TestVersion_Parse_ShortSuffixes(t *testing.T) {
 		{"1.0_a2", "1.0_alpha2"},
 		{"1.0_b1", "1.0_beta1"},
 		{"1.0_b2", "1.0_beta2"},
-		{"1.0_pre1", "1.0_rc1"},
-		{"1.0_pre2", "1.0_rc2"},
+		{"1.0_pre1", "1.0_pre1"},
+		{"1.0_pre2", "1.0_pre2"},
 	}
 
 	for _, tt := range tests {
@@ -45,8 +45,8 @@ func TestVersion_Parse_EquivalentSuffixes(t *testing.T) {
 		{"1.0_a2", "1.0_alpha2"},
 		{"1.0_b1", "1.0_beta1"},
 		{"1.0_b12", "1.0_beta12"},
-		{"1.0_pre1", "1.0_rc1"},
-		{"1.0_pre99", "1.0_rc99"},
+		{"1.0_pre1", "1.0_pre1"},
+		{"1.0_pre99", "1.0_pre99"},
 	}
 
 	for _, tt := range equivalentPairs {
@@ -84,8 +84,8 @@ func TestVersion_Format_NormalizesShortSuffixes(t *testing.T) {
 		{"1.0_a1", "1.0_alpha1"},
 		{"1.0_a1-r1", "1.0_alpha1-r1"},
 		{"1.0_b1", "1.0_beta1"},
-		{"1.0_pre1", "1.0_rc1"},
-		{"1.0_pre1-r1", "1.0_rc1-r1"},
+		{"1.0_pre1", "1.0_pre1"},
+		{"1.0_pre1-r1", "1.0_pre1-r1"},
 	}
 
 	for _, tt := range tests {
@@ -111,7 +111,7 @@ func TestVersion_Parse_EdgeSuffixes(t *testing.T) {
 	}{
 		{"1.0_a0", "1.0_alpha0"},
 		{"1.0_b0", "1.0_beta0"},
-		{"1.0_pre0", "1.0_rc0"},
+		{"1.0_pre0", "1.0_pre0"},
 		{"9999_a1", "9999_alpha1", /* live version with suffix */},
 	}
 
@@ -140,10 +140,10 @@ func TestVersion_Compare_ShortVsLong(t *testing.T) {
 	}{
 		{"1.0_a1", "1.0_alpha1", 0},
 		{"1.0_b1", "1.0_beta1", 0},
-		{"1.0_pre1", "1.0_rc1", 0},
+		{"1.0_pre1", "1.0_pre1", 0},
 		{"1.0_a1", "1.0_beta1", -1}, // a1 < beta1 (alpha < beta)
 		{"1.0_b1", "1.0_rc1", -1},   // beta1 < rc1
-		{"1.0_pre1", "1.0", -1},     // rc1 < release
+		{"1.0_pre1", "1.0", -1},     // pre1 < release
 	}
 
 	for _, tt := range tests {

@@ -23,6 +23,8 @@ type UpstreamProvider interface {
 	FetchLatestVersion(rid remoteid.RemoteId, allowPrereleases bool) (*version.Version, error)
 	// Name returns a human-readable name
 	Name() string
+	// IsPrerelease reports whether v is a pre-release version
+	IsPrerelease(v *version.Version) bool
 }
 
 // Factory creates a new provider instance with the given rate limiter.

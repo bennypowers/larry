@@ -3,6 +3,7 @@ package providers
 import (
 	"testing"
 
+	"bennypowers.dev/larry/internal/provider"
 	"bennypowers.dev/larry/internal/version"
 )
 
@@ -17,7 +18,7 @@ func TestPyPIProvider_IsPrerelease(t *testing.T) {
 	}{
 		{"1.0.0", false},
 		{"1.0.0-r1", false},
-		{"1.0.0_p1", true},  // patch-level pre-release
+		{"1.0.0_p1", false}, // patch-level POST-release, NOT prerelease (D3)
 		{"1.0_alpha1", true},
 		{"1.0_beta1", true},
 		{"1.0_rc1", true},
@@ -50,7 +51,7 @@ func TestNpmProvider_IsPrerelease(t *testing.T) {
 	}{
 		{"1.0.0", false},
 		{"1.0.0-r1", false},
-		{"1.0.0_p1", true},
+		{"1.0.0_p1", false}, // post-release (D3)
 		{"1.0_alpha1", true},
 		{"1.0_beta1", true},
 		{"1.0_rc1", true},
@@ -81,7 +82,7 @@ func TestGitLabProvider_IsPrerelease(t *testing.T) {
 	}{
 		{"1.0.0", false},
 		{"1.0.0-r1", false},
-		{"1.0.0_p1", true},
+		{"1.0.0_p1", false}, // post-release (D3)
 		{"1.0_alpha1", true},
 		{"1.0_beta1", true},
 		{"1.0_rc1", true},
@@ -111,7 +112,7 @@ func TestCodebergProvider_IsPrerelease(t *testing.T) {
 	}{
 		{"1.0.0", false},
 		{"1.0.0-r1", false},
-		{"1.0.0_p1", true},
+		{"1.0.0_p1", false}, // post-release (D3)
 		{"1.0_alpha1", true},
 		{"1.0_rc1", true},
 	}
@@ -140,7 +141,7 @@ func TestSourceHutProvider_IsPrerelease(t *testing.T) {
 	}{
 		{"1.0.0", false},
 		{"1.0.0-r1", false},
-		{"1.0.0_p1", true},
+		{"1.0.0_p1", false}, // post-release (D3)
 		{"1.0_alpha1", true},
 		{"1.0_rc1", true},
 	}
@@ -169,7 +170,7 @@ func TestGitHubProvider_IsPrerelease(t *testing.T) {
 	}{
 		{"1.0.0", false},
 		{"1.0.0-r1", false},
-		{"1.0.0_p1", true},
+		{"1.0.0_p1", false}, // post-release (D3)
 		{"1.0_alpha1", true},
 		{"1.0_beta1", true},
 		{"1.0_rc1", true},
@@ -212,6 +213,35 @@ func TestProvider_IsPrerelease_EdgeCases(t *testing.T) {
 			}
 			if got := p.IsPrerelease(v); got != tt.isPre {
 				t.Errorf("IsPrerelease(%q) = %v, want %v", tt.input, got, tt.isPre)
+			}
+		})
+	}
+}
+
+// ---- TestProvider_AcceptsPostRelease: _p versions are NOT prereleases (D3) ----
+
+func TestProvider_AcceptsPostRelease(t *testing.T) {
+	// For all six providers, IsPrerelease("1.0_p1") must be false
+	// so callers filtering with allowPrereleases==false keep it.
+	tests := []struct {
+		name string
+		p    provider.UpstreamProvider
+	}{
+		{"pypi", &PyPIProvider{}},
+		{"npm", &NpmProvider{}},
+		{"github", &GitHubProvider{}},
+		{"gitlab", &GitLabProvider{}},
+		{"codeberg", &CodebergProvider{}},
+		{"sourcehut", &SourceHutProvider{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v, err := version.Parse("1.0_p1")
+			if err != nil {
+				t.Fatalf("Parse(%q) error: %v", "1.0_p1", err)
+			}
+			if got := tt.p.IsPrerelease(v); got != false {
+				t.Errorf("%s.IsPrerelease(1.0_p1) = %v, want false (post-release, D3)", tt.name, got)
 			}
 		})
 	}

@@ -33,7 +33,8 @@ func (m *mockProvider) FetchLatestVersion(rid remoteid.RemoteId, allowPrerelease
 	}
 	return m.mockVersion, nil
 }
-func (m *mockProvider) Name() string { return "mock" }
+func (m *mockProvider) Name() string                        { return "mock" }
+func (m *mockProvider) IsPrerelease(v *version.Version) bool { return v.IsPrerelease() }
 
 // --- CheckUpstream tests ---
 
