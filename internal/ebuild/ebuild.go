@@ -16,18 +16,19 @@ const (
 // EbuildInfo holds structured information extracted from an ebuild via
 // `ebuild <path> info` output. Variables are expanded by Portage.
 type EbuildInfo struct {
-	Path      string
-	Category  string
-	Pkg       string // PN — package name
-	PVVal     string // PV — package version
-	PVal      string // P — ${PN}-${PV}
-	SRC_URI   string
-	DEPEND    string
-	RDEPEND   string
-	HOMEPAGE  string
-	Inherit   []string
+	Path       string
+	Category   string
+	Pkg        string // PN — package name
+	PVVal      string // PV — package version
+	PVal       string // P — ${PN}-${PV}
+	SRC_URI    string
+	DEPEND     string
+	RDEPEND    string
+	BDEPEND    string
+	HOMEPAGE   string
+	Inherit    []string
 	InheritRaw string // raw "inherit ..." line content
-	Raw       string // raw ebuild file content
+	Raw        string // raw ebuild file content
 }
 
 // PN returns the package name (PN variable).

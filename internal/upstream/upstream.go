@@ -150,6 +150,38 @@ func ParseEbuildInfo(path string) (*ebuild.EbuildInfo, error) {
 	// Extract HOMEPAGE
 	info.HOMEPAGE = extractVar(content, "HOMEPAGE")
 
+	// Extract DEPEND / RDEPEND / BDEPEND (plan 20a: multi-line aware).
+	info.DEPEND = extractVar(content, "DEPEND")
+	info.RDEPEND = extractVar(content, "RDEPEND")
+	info.BDEPEND = extractVar(content, "BDEPEND")
+
+	// Expand shell variables in DEPEND/RDEPEND/BDEPEND using a minimal var map.
+	// PN, PV, P are always available.  Also extract any custom variable
+	// assignments (MY_P=..., MY_PN=...) from the raw ebuild content so that
+	// e.g. RDEPEND="${DEPEND}\nbar" expands correctly when DEPEND was defined
+	// earlier in the file.
+	// Only expand the DEPEND/RDEPEND/BDEPEND fields themselves — not SRC_URI,
+	// which has its own expansion path (ebuild.ExpandVariables + BuildVariableMap).
+	varVars := ebuild.VariableMap{
+		"PN": info.PN(),
+		"PV": info.PV(),
+		"P":  info.PN() + "-" + info.PV(),
+	}
+	// Collect all variable assignments from the full ebuild content so that
+	// DEPEND, RDEPEND and BDEPEND can reference each other (e.g. RDEPEND="${DEPEND}").
+	for _, m := range npmAssignRe.FindAllStringSubmatch(content, -1) {
+		varVars[m[1]] = m[2]
+	}
+	if info.DEPEND != "" {
+		info.DEPEND = ebuild.ExpandVariables(info.DEPEND, varVars)
+	}
+	if info.RDEPEND != "" {
+		info.RDEPEND = ebuild.ExpandVariables(info.RDEPEND, varVars)
+	}
+	if info.BDEPEND != "" {
+		info.BDEPEND = ebuild.ExpandVariables(info.BDEPEND, varVars)
+	}
+
 	// Extract INHERIT
 	info.Inherit = extractInherit(content)
 
@@ -246,11 +278,6 @@ func extractInherit(content string) []string {
 // shouldSkip checks if a category should be skipped.
 func shouldSkip(category string) bool {
 	return category == "acct-group" || category == "acct-user"
-}
-
-// isLiveVersion checks if the version string represents a live version (9999).
-func isLiveVersion(pv string) bool {
-	return pv == "9999" || strings.HasSuffix(pv, "-9999")
 }
 
 // detectProviderFromSRCURI detects the provider type from SRC_URI and HOMEPAGE.
@@ -580,6 +607,196 @@ func buildResult(ei *ebuild.EbuildInfo, latestV, currentV *version.Version, ridT
 	}
 }
 
+// resolveOne turns one package's ebuild into exactly one UpstreamResult row.
+// It is the single source of truth for provider lookup, caching, error rows and
+// status derivation, used by both the top-level walk (depth 0) and the dependency scanner.
+//
+// The deprecated-package branch stays in the caller (walkAndCheckTargets) because it
+// is keyed off the deprecated map which the dependency scanner does not consult.
+//
+// Depth is the recursion depth: the root package is 0, its direct dependencies are 1, etc.
+func resolveOne(
+	overlayRoot string,
+	eb *atom.ParsedEbuild,
+	registry *provider.ProviderRegistry,
+	allowPrereleases bool,
+	cache *VersionCache,
+	depth int,
+) UpstreamResult {
+	einfo, err := ParseEbuildInfo(eb.Path)
+	if err != nil {
+		return UpstreamResult{
+			Package: eb.Category + "/" + eb.PN,
+			Current: eb.PVR,
+			Latest:  "",
+			Status:  StatusUnknown,
+			Error:   err.Error(),
+			Depth:   depth,
+		}
+	}
+
+	// Live-only handling
+	if eb.Live {
+		providerType := ResolveProviderType(einfo.Path, einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
+		if providerType == "" {
+			providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
+		}
+		if providerType != "" && providerType != "unknown" {
+			rid, err := ResolveRemoteId(einfo, providerType)
+			if err == nil && rid != nil {
+				cacheKey := MakeKey(einfo.Category, einfo.Pkg, string(rid.Type), einfo.PVVal)
+				var latestV *version.Version
+
+				if cachedVer, ok := cache.Get(cacheKey); ok {
+					latestV, _ = version.Parse(cachedVer)
+				} else if registry != nil {
+					ridType := mapTypeToRemoteIdType(providerType)
+					p, err := registry.Resolve(remoteid.RemoteId{Type: ridType, Name: rid.Name, Owner: rid.Owner, Repo: rid.Repo})
+					if err == nil {
+						latestV, err = p.FetchLatestVersion(*rid, allowPrereleases)
+						if err == nil && latestV != nil {
+							cache.Set(cacheKey, latestV.Format())
+						}
+					}
+				}
+
+				if latestV != nil {
+					return UpstreamResult{
+						Package:     einfo.Category + "/" + einfo.Pkg,
+						Current:     "9999 (live)",
+						Latest:      latestV.Format(),
+						Status:      StatusHasRelease,
+						Source:      resolveSourceURL(rid),
+						SourceLabel: resolveSourceLabel(rid),
+						Depth:       depth,
+					}
+				}
+			}
+		}
+		// No upstream release found
+		return UpstreamResult{
+			Package:   einfo.Category + "/" + einfo.Pkg,
+			Current:   "9999 (live)",
+			Latest:    "",
+			Status:    StatusLive,
+			SourceLabel: "",
+			Depth:     depth,
+		}
+	}
+
+	// Normal (versioned) handling
+	providerType := ResolveProviderType(einfo.Path, einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
+	if providerType == "" {
+		providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
+	}
+
+	if providerType == "" || providerType == "unknown" {
+		return UpstreamResult{
+			Package: einfo.Category + "/" + einfo.Pkg,
+			Current: eb.PVR,
+			Latest:  "",
+			Status:  StatusUnknown,
+			Error:   "no provider match",
+			Depth:   depth,
+		}
+	}
+
+	rid, err := ResolveRemoteId(einfo, providerType)
+	if err != nil || rid == nil {
+		return UpstreamResult{
+			Package: einfo.Category + "/" + einfo.Pkg,
+			Current: eb.PVR,
+			Latest:  "",
+			Status:  StatusUnknown,
+			Error:   "no remote-id found",
+			Depth:   depth,
+		}
+	}
+
+	cacheKey := MakeKey(einfo.Category, einfo.Pkg, string(rid.Type), einfo.PVVal)
+	var latestV *version.Version
+	var sourceURL, sourceLabel string
+
+	if cachedVer, ok := cache.Get(cacheKey); ok {
+		latestV, _ = version.Parse(cachedVer)
+		sourceURL = resolveSourceURL(rid)
+		sourceLabel = resolveSourceLabel(rid)
+	} else if registry != nil {
+		ridType := mapTypeToRemoteIdType(providerType)
+		p, err := registry.Resolve(remoteid.RemoteId{Type: ridType, Name: rid.Name, Owner: rid.Owner, Repo: rid.Repo})
+		if err != nil {
+			return UpstreamResult{
+				Package: einfo.Category + "/" + einfo.Pkg,
+				Current: eb.PVR,
+				Latest:  "",
+				Status:  StatusUnknown,
+				Error:   fmt.Sprintf("no provider for %s", providerType),
+				Depth:   depth,
+			}
+		}
+
+		// Try ResolverWithTags first (e.g. GitHubProvider — plan 17b),
+		// fall back to plain FetchLatestVersion for other providers.
+		if rt, ok := p.(provider.ResolverWithTags); ok {
+			res, rerr := rt.FetchResolution(*rid, allowPrereleases)
+			if rerr == nil && res != nil && res.ByDate {
+				status, latest := deriveTagStatus(einfo.PVVal, res)
+				return UpstreamResult{
+					Package:     einfo.Category + "/" + einfo.Pkg,
+					Current:     einfo.PVVal,
+					Latest:      latest,
+					Status:      status,
+					Source:      resolveSourceURL(rid),
+					SourceLabel: resolveSourceLabel(rid),
+					Depth:       depth,
+				}
+			}
+			if rerr == nil && res != nil && res.Version != "" {
+				latestV, err = version.Parse(res.Version)
+			} else {
+				latestV, err = p.FetchLatestVersion(*rid, allowPrereleases)
+			}
+		} else {
+			latestV, err = p.FetchLatestVersion(*rid, allowPrereleases)
+		}
+		if err != nil {
+			return UpstreamResult{
+				Package: einfo.Category + "/" + einfo.Pkg,
+				Current: eb.PVR,
+				Latest:  "",
+				Status:  StatusUnknown,
+				Error:   err.Error(),
+				Depth:   depth,
+			}
+		}
+
+		cache.Set(cacheKey, latestV.Format())
+		sourceURL = resolveSourceURL(rid)
+		sourceLabel = resolveSourceLabel(rid)
+	} else {
+		latestV, sourceURL = resolveVersionFromSRCURI(einfo, providerType, rid)
+		sourceLabel = resolveSourceLabel(rid)
+	}
+
+	if latestV == nil {
+		return UpstreamResult{
+			Package: einfo.Category + "/" + einfo.Pkg,
+			Current: eb.PVR,
+			Latest:  "",
+			Status:  StatusUnknown,
+			Error:   "could not resolve upstream version",
+			Depth:   depth,
+		}
+	}
+
+	currentV, _ := version.Parse(einfo.PVVal)
+	result := buildResult(einfo, latestV, currentV, rid.Type)
+	result.Source = sourceURL
+	result.SourceLabel = sourceLabel
+	result.Depth = depth
+	return *result
+}
+
 // resolveVersionFromSRCURI tries to resolve a version directly from SRC_URI
 // when no registry is available.
 func resolveVersionFromSRCURI(ei *ebuild.EbuildInfo, providerType string, rid *remoteid.RemoteId) (*version.Version, string) {
@@ -629,6 +846,10 @@ func walkAndCheckTargets(overlayDir string, deprecated map[string]DeprecatedInfo
 	}
 
 	var results []UpstreamResult
+	// Single visited map shared across the whole walk (script's CHECKED_PACKAGES).
+	// A package already emitted at any depth is never emitted again.
+	visited := make(map[string]bool)
+
 	for _, target := range targets {
 		atomKey := target.Atom.Category + "/" + target.Atom.PN
 
@@ -647,175 +868,21 @@ func walkAndCheckTargets(overlayDir string, deprecated map[string]DeprecatedInfo
 				SourceLabel: dep.Source,
 				Target:      dep.Target,
 			})
+			visited[atomKey] = true
 			continue
 		}
 
-		// Parse ebuild info
-		einfo, err := ParseEbuildInfo(target.Ebuild.Path)
-		if err != nil {
+		// Skip if already emitted as a dependency of an earlier package.
+		if visited[atomKey] {
 			continue
 		}
 
-		// Live-only handling
-		if target.LiveOnly {
-			// Still query upstream even for live-only
-			providerType := ResolveProviderType(einfo.Path, einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
-			if providerType == "" {
-				providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
-			}
-			if providerType != "" && providerType != "unknown" {
-				rid, err := ResolveRemoteId(einfo, providerType)
-				if err == nil && rid != nil {
-					cacheKey := MakeKey(einfo.Category, einfo.Pkg, string(rid.Type), einfo.PVVal)
-					var latestV *version.Version
+		row := resolveOne(overlayDir, target.Ebuild, registry, allowPrereleases, cache, 0)
+		results = append(results, row)
+		visited[atomKey] = true
 
-					if cachedVer, ok := cache.Get(cacheKey); ok {
-						latestV, _ = version.Parse(cachedVer)
-					} else if registry != nil {
-						ridType := mapTypeToRemoteIdType(providerType)
-						p, err := registry.Resolve(remoteid.RemoteId{Type: ridType, Name: rid.Name, Owner: rid.Owner, Repo: rid.Repo})
-						if err == nil {
-							latestV, err = p.FetchLatestVersion(*rid, allowPrereleases)
-							if err == nil && latestV != nil {
-								cache.Set(cacheKey, latestV.Format())
-							}
-						}
-					}
-
-					if latestV != nil {
-						results = append(results, UpstreamResult{
-							Package:     atomKey,
-							Current:     "9999 (live)",
-							Latest:      latestV.Format(),
-							Status:      StatusHasRelease,
-							Source:      resolveSourceURL(rid),
-							SourceLabel: resolveSourceLabel(rid),
-						})
-						continue
-					}
-				}
-			}
-			// No upstream release found
-			results = append(results, UpstreamResult{
-				Package:     atomKey,
-				Current:     "9999 (live)",
-				Latest:      "",
-				Status:      StatusLive,
-				SourceLabel: "",
-			})
-			continue
-		}
-
-		// Normal (versioned) handling
-		providerType := ResolveProviderType(einfo.Path, einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
-		if providerType == "" {
-			providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
-		}
-
-		if providerType == "" || providerType == "unknown" {
-			results = append(results, UpstreamResult{
-				Package: atomKey,
-				Current: target.Ebuild.PVR,
-				Latest:  "",
-				Status:  StatusUnknown,
-				Error:   "no provider match",
-			})
-			continue
-		}
-
-		rid, err := ResolveRemoteId(einfo, providerType)
-		if err != nil || rid == nil {
-			results = append(results, UpstreamResult{
-				Package: atomKey,
-				Current: target.Ebuild.PVR,
-				Latest:  "",
-				Status:  StatusUnknown,
-				Error:   "no remote-id found",
-			})
-			continue
-		}
-
-		cacheKey := MakeKey(einfo.Category, einfo.Pkg, string(rid.Type), einfo.PVVal)
-		var latestV *version.Version
-		var sourceURL, sourceLabel string
-
-		if cachedVer, ok := cache.Get(cacheKey); ok {
-			latestV, _ = version.Parse(cachedVer)
-			sourceURL = resolveSourceURL(rid)
-			sourceLabel = resolveSourceLabel(rid)
-		} else if registry != nil {
-			ridType := mapTypeToRemoteIdType(providerType)
-			p, err := registry.Resolve(remoteid.RemoteId{Type: ridType, Name: rid.Name, Owner: rid.Owner, Repo: rid.Repo})
-			if err != nil {
-				results = append(results, UpstreamResult{
-					Package: atomKey,
-					Current: target.Ebuild.PVR,
-					Latest:  "",
-					Status:  StatusUnknown,
-					Error:   fmt.Sprintf("no provider for %s", providerType),
-				})
-				continue
-			}
-
-			// Try ResolverWithTags first (e.g. GitHubProvider — plan 17b),
-			// fall back to plain FetchLatestVersion for other providers.
-			if rt, ok := p.(provider.ResolverWithTags); ok {
-				res, rerr := rt.FetchResolution(*rid, allowPrereleases)
-				if rerr == nil && res != nil && res.ByDate {
-					status, latest := deriveTagStatus(einfo.PVVal, res)
-					results = append(results, UpstreamResult{
-						Package:     atomKey,
-						Current:     einfo.PVVal,
-						Latest:      latest,
-						Status:      status,
-						Source:      resolveSourceURL(rid),
-						SourceLabel: resolveSourceLabel(rid),
-					})
-					continue
-				}
-				if rerr == nil && res != nil && res.Version != "" {
-					latestV, err = version.Parse(res.Version)
-				} else {
-					latestV, err = p.FetchLatestVersion(*rid, allowPrereleases)
-				}
-			} else {
-				latestV, err = p.FetchLatestVersion(*rid, allowPrereleases)
-			}
-			if err != nil {
-				results = append(results, UpstreamResult{
-					Package: atomKey,
-					Current: target.Ebuild.PVR,
-					Latest:  "",
-					Status:  StatusUnknown,
-					Error:   err.Error(),
-				})
-				continue
-			}
-
-			cache.Set(cacheKey, latestV.Format())
-			sourceURL = resolveSourceURL(rid)
-			sourceLabel = resolveSourceLabel(rid)
-		} else {
-			latestV, sourceURL = resolveVersionFromSRCURI(einfo, providerType, rid)
-			sourceLabel = resolveSourceLabel(rid)
-		}
-
-		if latestV == nil {
-			results = append(results, UpstreamResult{
-				Package: atomKey,
-				Current: target.Ebuild.PVR,
-				Latest:  "",
-				Status:  StatusUnknown,
-				Error:   "could not resolve upstream version",
-			})
-			continue
-		}
-
-		currentV, _ := version.Parse(einfo.PVVal)
-		result := buildResult(einfo, latestV, currentV, rid.Type)
-		result.Source = sourceURL
-		result.SourceLabel = sourceLabel
-		results = append(results, *result)
+		// Scan in-overlay dependencies (pre-order, depth 0→3, single visited map).
+		results = append(results, ScanDependencies(overlayDir, target.Ebuild, registry, allowPrereleases, cache, 0, visited)...)
 	}
 
 	return results, nil

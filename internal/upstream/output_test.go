@@ -188,3 +188,29 @@ func TestCheckTag_IsSignificant(t *testing.T) {
 		t.Error("StatusCheckTag.IsSignificant() should be true")
 	}
 }
+
+// TestRenderTable_Indentation verifies depth-based Package cell indentation (plan 18).
+func TestRenderTable_Indentation(t *testing.T) {
+	var buf bytes.Buffer
+	results := []UpstreamResult{
+		{Package: "p/a", Current: "1.0", Latest: "1.0", Status: StatusUpToDate, Depth: 0},
+		{Package: "p/b", Current: "1.0", Latest: "1.0", Status: StatusUpToDate, Depth: 1},
+		{Package: "p/c", Current: "1.0", Latest: "1.0", Status: StatusUpToDate, Depth: 2},
+	}
+	t.Setenv("LARRY_COLOR", "never")
+	if err := RenderTable(&buf, results); err != nil {
+		t.Fatal(err)
+	}
+	output := buf.String()
+	// Assert the two-space and four-space prefixes specifically (not full-line equality —
+	// lipgloss adds padding/borders).
+	if !strings.Contains(output, "p/a") {
+		t.Errorf("expected 'p/a' in output, got:\n%s", output)
+	}
+	if !strings.Contains(output, "  p/b") {
+		t.Errorf("expected '  p/b' (indented) in output, got:\n%s", output)
+	}
+	if !strings.Contains(output, "    p/c") {
+		t.Errorf("expected '    p/c' (double-indented) in output, got:\n%s", output)
+	}
+}

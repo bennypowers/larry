@@ -145,9 +145,9 @@ func (m *upstreamModel) renderResults() string {
 			source = m.colors.Hyperlink(source, source)
 		}
 
-		// Build row text
+		// Build row text — indent Package cell by 2 spaces per depth level (plan 18).
 		rowText := fmt.Sprintf("%-30s %-12s %-12s %-12s %s",
-			strings.TrimSpace(r.Package),
+			strings.TrimSpace(strings.Repeat("  ", r.Depth)+r.Package),
 			strings.TrimSpace(r.Current),
 			strings.TrimSpace(r.Latest),
 			status,
@@ -213,8 +213,10 @@ func nonTTYTable(results []*upstream.UpstreamResult) string {
 
 	for _, r := range results {
 		status := r.Status.String()
+		// Indent Package cell by 2 spaces per depth level (plan 18).
+		pkg := strings.Repeat("  ", r.Depth) + r.Package
 		b.WriteString(fmt.Sprintf("%-30s %-12s %-12s %-12s %s\n",
-			r.Package, r.Current, r.Latest, status, r.Source))
+			pkg, r.Current, r.Latest, status, r.Source))
 	}
 
 	_ = os.Stdout

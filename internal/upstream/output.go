@@ -148,6 +148,7 @@ type UpstreamResult struct {
 	SourceLabel string
 	Target      string // target package atom (for deprecated/renamed)
 	Error       string
+	Depth       int    // recursion depth (0=root, 1=direct dep, 2=grand-dep, 3=great-grand-dep)
 }
 
 // String returns a human-readable string representation.
@@ -213,9 +214,11 @@ func RenderTable(w io.Writer, results []UpstreamResult) error {
 	// Headers
 	t.Headers("Package", "Current", "Latest", "Status", "Source")
 
-	// Data rows
+	// Data rows — indent Package cell by 2 spaces per depth level (plan 18).
+	// Plan 19 owns the Source cell; do not touch it here.
 	for _, r := range results {
-		t.Row(r.Package, r.Current, r.Latest, r.Status.String(), SourceCell(r))
+		pkg := strings.Repeat("  ", r.Depth) + r.Package
+		t.Row(pkg, r.Current, r.Latest, r.Status.String(), SourceCell(r))
 	}
 
 	fmt.Fprint(w, t.Render())
