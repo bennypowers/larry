@@ -188,8 +188,12 @@ func (m *upstreamModel) statusColor(s upstream.Status) string {
 		return m.colors.Cyan("AHEAD")
 	case upstream.StatusNewerTag:
 		return m.colors.Yellow("NEWER-TAG")
+	case upstream.StatusCheckTag:
+		return m.colors.Yellow("CHECK-TAG")
 	case upstream.StatusLive:
 		return m.colors.Blue("LIVE")
+	case upstream.StatusHasRelease:
+		return m.colors.Blue("HAS-RELEASE")
 	case upstream.StatusUnknown:
 		return m.colors.Yellow("UNKNOWN")
 	default:

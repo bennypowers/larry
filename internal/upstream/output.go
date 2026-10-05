@@ -23,6 +23,8 @@ const (
 	StatusLive                   // Live version (9999)
 	StatusDeprecated             // Package is deprecated/renamed
 	StatusUnknown                // Could not determine upstream status
+	StatusHasRelease             // Live-only ebuild, but upstream has a release
+	StatusCheckTag               // Only a non-version-like tag was found; needs a human
 )
 
 // String returns the display string for the status.
@@ -42,6 +44,10 @@ func (s Status) String() string {
 		return "DEPRECATED"
 	case StatusUnknown:
 		return "UNKNOWN"
+	case StatusHasRelease:
+		return "HAS-RELEASE"
+	case StatusCheckTag:
+		return "CHECK-TAG"
 	default:
 		return "UNKNOWN"
 	}
@@ -51,7 +57,7 @@ func (s Status) String() string {
 // (i.e., everything except UP-TO-DATE, LIVE, and DEPRECATED).
 // Use -v to show DEPRECATED packages.
 func (s Status) IsSignificant() bool {
-	return s != StatusUpToDate && s != StatusLive && s != StatusDeprecated
+	return s != StatusUpToDate && s != StatusLive && s != StatusDeprecated && s != StatusHasRelease
 }
 
 // SourceGlyph returns the Nerd Font icon for a source label.
@@ -190,6 +196,8 @@ func RenderTable(w io.Writer, results []UpstreamResult) error {
 				case StatusAhead:
 					color = lipgloss.Color("32") // cyan
 				case StatusNewerTag:
+					color = lipgloss.Color("220") // yellow
+				case StatusCheckTag:
 					color = lipgloss.Color("220") // yellow
 				case StatusLive:
 					color = lipgloss.Color("39") // blue

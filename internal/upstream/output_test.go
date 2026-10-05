@@ -141,11 +141,50 @@ func TestStatusString(t *testing.T) {
 		{StatusAhead, "AHEAD"},
 		{StatusLive, "LIVE"},
 		{StatusUnknown, "UNKNOWN"},
+		{StatusCheckTag, "CHECK-TAG"},
 	}
 	for _, tt := range tests {
 		got := tt.status.String()
 		if got != tt.want {
 			t.Fatalf("status %d = %q, want %q", tt.status, got, tt.want)
 		}
+	}
+}
+
+
+func TestStatusColor_CheckTag(t *testing.T) {
+	// With LARRY_COLOR=never, no CSI sequences should appear.
+	t.Setenv("LARRY_COLOR", "never")
+	var buf bytes.Buffer
+	results := []UpstreamResult{
+		{Package: "dev-foo/bar", Current: "1.0", Latest: "nightly", Status: StatusCheckTag, Source: "https://example.com"},
+	}
+	if err := RenderTable(&buf, results); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "\x1b[") {
+		t.Errorf("RenderTable with LARRY_COLOR=never emitted CSI; output = %q", out)
+	}
+	// Status text should still be present.
+	if !strings.Contains(out, "CHECK-TAG") {
+		t.Errorf("RenderTable did not render CHECK-TAG; output = %q", out)
+	}
+
+	// With LARRY_COLOR=always, the status column gets a style applied.
+	t.Setenv("LARRY_COLOR", "always")
+	var buf2 bytes.Buffer
+	if err := RenderTable(&buf2, results); err != nil {
+		t.Fatal(err)
+	}
+	out2 := buf2.String()
+	if !strings.Contains(out2, "CHECK-TAG") {
+		t.Errorf("RenderTable with LARRY_COLOR=always did not render CHECK-TAG; output = %q", out2)
+	}
+}
+
+func TestCheckTag_IsSignificant(t *testing.T) {
+	if !StatusCheckTag.IsSignificant() {
+		t.Error("StatusCheckTag.IsSignificant() should be true")
 	}
 }

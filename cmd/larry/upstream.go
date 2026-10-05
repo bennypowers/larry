@@ -2,8 +2,11 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/cli"
 	"bennypowers.dev/larry/internal/provider"
 	"bennypowers.dev/larry/internal/providers"
@@ -31,7 +34,7 @@ func init() {
 }
 
 var upstreamCmd = cobra.Command{
-	Use:   "upstream [categories...]",
+	Use:   "upstream [cat/pkg...] [overlay-path]",
 	Short: "Check for upstream version updates",
 	Long: `Check for upstream version updates for packages in a Gentoo overlay.
 
@@ -52,13 +55,23 @@ Providers are auto-detected from SRC_URI:
   mirror://codeberg/ -> Codeberg
   mirror://sourcehut/ -> SourceHut
 
+Positional arguments:
+  larry upstream [cat/pkg ...] [overlay-path]
+
+  An argument is the overlay root iff os.Stat says it is a directory
+  and it contains a profiles/ subdirectory. At most one such argument
+  is allowed. Every other argument is a category/package atom.
+
+  The overlay root is detected first, then atoms are resolved against it,
+  so "larry upstream dev-util/cem /path/to/overlay" works regardless of order.
+
 Examples:
   larry upstream                      # Check overlay from git CWD
-  larry upstream dev-python dev-lisp  # Check specific categories
+  larry upstream dev-util/cem         # Check one package
   larry upstream --fresh              # Bypass cache
   larry upstream --prereleases        # Include prereleases
 `,
-	Args: cobra.MaximumNArgs(1),
+	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Resolve overlay directory.
 		overlayDir, err := cfg.ResolveOverlay(rootFlags.Overlay)
@@ -66,10 +79,41 @@ Examples:
 			return fmt.Errorf("resolving overlay: %w", err)
 		}
 
-		// Determine categories to check.
-		var categories []string
-		if len(args) > 0 {
-			categories = []string{args[0]}
+		// Classify arguments: overlay root vs atoms.
+		// Classification rule: an arg is the overlay root iff it is a directory
+		// and contains a profiles/ subdirectory.
+		var overlayPath string
+		var atomArgs []string
+
+		for _, arg := range args {
+			// Check if this looks like an overlay root
+			if info, err := os.Stat(arg); err == nil && info.IsDir() {
+				profilesPath := filepath.Join(arg, "profiles")
+				if _, err := os.Stat(profilesPath); err == nil {
+					if overlayPath != "" {
+						return fmt.Errorf("multiple overlay paths given: %q and %q", overlayPath, arg)
+					}
+					overlayPath = arg
+					continue
+				}
+			}
+			// Otherwise it's an atom
+			atomArgs = append(atomArgs, arg)
+		}
+
+		// If overlay was detected, use it; otherwise fall back to resolved overlay.
+		if overlayPath != "" {
+			overlayDir = overlayPath
+		}
+
+		// Resolve atom arguments against the overlay.
+		var targets []*atom.Atom
+		for _, atomStr := range atomArgs {
+			a, err := atom.ParseAtom(overlayDir, atomStr)
+			if err != nil {
+				return fmt.Errorf("invalid atom %q: %w", atomStr, err)
+			}
+			targets = append(targets, a)
 		}
 
 		// Create provider registry with default providers.
@@ -82,7 +126,7 @@ Examples:
 		if !upstreamTUI {
 			spinnerMsg := fmt.Sprintf("Checking packages in overlay: %s", overlayDir)
 			cli.AnimateSpinner(spinnerMsg, false, func() string {
-				results, err := upstream.RunWithCategories(overlayDir, registry, categories, upstreamPrereleases, upstreamFresh)
+				results, err := upstream.RunWithTargets(overlayDir, registry, targets, upstreamPrereleases, upstreamFresh)
 				if err != nil {
 					return "Error: " + err.Error()
 				}
@@ -116,7 +160,7 @@ Examples:
 		}
 
 		// TUI mode: run check then show interactive TUI.
-		results, err := upstream.RunWithCategories(overlayDir, registry, categories, upstreamPrereleases, upstreamFresh)
+		results, err := upstream.RunWithTargets(overlayDir, registry, targets, upstreamPrereleases, upstreamFresh)
 		if err != nil {
 			return fmt.Errorf("upstream check failed: %w", err)
 		}
@@ -146,5 +190,3 @@ Examples:
 		return err
 	},
 }
-
-
