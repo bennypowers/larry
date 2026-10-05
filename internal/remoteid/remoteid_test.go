@@ -53,8 +53,8 @@ func TestRemoteId_Parse_GitLab(t *testing.T) {
 	if r.Host != "gitlab.com" {
 		t.Errorf("Host = %q, want %q", r.Host, "gitlab.com")
 	}
-	if r.Path != "/group/project" {
-		t.Errorf("Path = %q, want %q", r.Path, "/group/project")
+	if r.Path != "group/project" {
+		t.Errorf("Path = %q, want %q", r.Path, "group/project")
 	}
 }
 
@@ -107,8 +107,8 @@ func TestRemoteId_Parse_SourceHut(t *testing.T) {
 	if r.Host != "git.sr.ht" {
 		t.Errorf("Host = %q, want %q", r.Host, "git.sr.ht")
 	}
-	if r.Path != "/~user/project" {
-		t.Errorf("Path = %q, want %q", r.Path, "/~user/project")
+	if r.Path != "~user/project" {
+		t.Errorf("Path = %q, want %q", r.Path, "~user/project")
 	}
 }
 
@@ -205,9 +205,9 @@ func TestRemoteId_String(t *testing.T) {
 		{RemoteId{Type: TypeGitHub, Owner: "golang", Repo: "go"}, "github:golang/go"},
 		{RemoteId{Type: TypePyPI, Name: "requests"}, "pypi:requests"},
 		{RemoteId{Type: TypeNPM, Name: "lodash"}, "npm:lodash"},
-		{RemoteId{Type: TypeGitLab, Host: "gitlab.com", Path: "/group/project"}, "gitlab:gitlab.com/group/project"},
+		{RemoteId{Type: TypeGitLab, Host: "gitlab.com", Path: "group/project"}, "gitlab:gitlab.com/group/project"},
 		{RemoteId{Type: TypeCodeberg, Owner: "owner", Repo: "repo"}, "codeberg:owner/repo"},
-		{RemoteId{Type: TypeSourceHut, Host: "git.sr.ht", Path: "/~user/project"}, "sourcehut:git.sr.ht/~user/project"},
+		{RemoteId{Type: TypeSourceHut, Host: "git.sr.ht", Path: "~user/project"}, "sourcehut:git.sr.ht/~user/project"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {

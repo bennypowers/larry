@@ -8,14 +8,14 @@ import (
 
 func TestParseMetadata(t *testing.T) {
 	xmlContent := []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE pkg-metadata SYSTEM "http://www.gentoo.org/dtd/metadata.dtd">
-<pkg-metadata>
+<!DOCTYPE pkgmetadata SYSTEM "http://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
   <longdescription>This is a test package for Gentoo Linux.</longdescription>
   <maintainer>
     <email>test@gentoo.org</email>
     <name>Test Maintainer</name>
   </maintainer>
-</pkg-metadata>
+</pkgmetadata>
 `)
 
 	m, err := ParseMetadata(xmlContent)
@@ -48,9 +48,9 @@ func TestParseMetadata_Invalid(t *testing.T) {
 func TestParseMetadataFile(t *testing.T) {
 	dir := t.TempDir()
 	xmlContent := []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<pkg-metadata>
+<pkgmetadata>
   <longdescription>File test</longdescription>
-</pkg-metadata>
+</pkgmetadata>
 `)
 	path := filepath.Join(dir, "metadata.xml")
 	if err := os.WriteFile(path, xmlContent, 0644); err != nil {
@@ -112,16 +112,18 @@ func TestFindUpstreamURL_Empty(t *testing.T) {
 
 func TestMetadataXML_Parse(t *testing.T) {
 	xmlContent := []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE pkg-metadata SYSTEM "http://www.gentoo.org/dtd/metadata.dtd">
-<pkg-metadata>
+<!DOCTYPE pkgmetadata SYSTEM "http://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
   <longdescription>This is a test package for Gentoo Linux.</longdescription>
   <maintainer>
     <email>test@gentoo.org</email>
     <name>Test Maintainer</name>
   </maintainer>
-  <remote-id type="github">golang/go</remote-id>
-  <remote-id type="pypi">requests</remote-id>
-</pkg-metadata>`)
+  <upstream>
+    <remote-id type="github">golang/go</remote-id>
+    <remote-id type="pypi">requests</remote-id>
+  </upstream>
+</pkgmetadata>`)
 
 	m, err := ParseMetadata(xmlContent)
 	if err != nil {
@@ -165,12 +167,14 @@ func TestMetadataXML_MissingFile(t *testing.T) {
 
 func TestRemoteId_MultipleTags(t *testing.T) {
 	xmlContent := []byte(`
-<pkg-metadata>
-  <remote-id type="github">owner/repo1</remote-id>
-  <remote-id type="github">owner/repo2</remote-id>
-  <remote-id type="pypi">package-a</remote-id>
-  <remote-id type="npm">lodash</remote-id>
-</pkg-metadata>`)
+<pkgmetadata>
+  <upstream>
+    <remote-id type="github">owner/repo1</remote-id>
+    <remote-id type="github">owner/repo2</remote-id>
+    <remote-id type="pypi">package-a</remote-id>
+    <remote-id type="npm">lodash</remote-id>
+  </upstream>
+</pkgmetadata>`)
 
 	m, err := ParseMetadata(xmlContent)
 	if err != nil {
@@ -214,9 +218,9 @@ func TestRemoteId_MultipleTags(t *testing.T) {
 
 func TestMetadataXML_Absent(t *testing.T) {
 	xmlContent := []byte(`
-<pkg-metadata>
+<pkgmetadata>
   <longdescription>No remote ids here.</longdescription>
-</pkg-metadata>`)
+</pkgmetadata>`)
 
 	m, err := ParseMetadata(xmlContent)
 	if err != nil {
@@ -228,5 +232,117 @@ func TestMetadataXML_Absent(t *testing.T) {
 	}
 	if len(m.Remotes) != 0 {
 		t.Errorf("Remotes should be empty, got %d", len(m.Remotes))
+	}
+}
+
+// ---- New tests per plan 15 ----
+
+func TestParseMetadata_RealShape(t *testing.T) {
+	xmlContent := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+  <maintainer type="person">
+    <email>web@bennypowers.com</email>
+    <name>Benny Powers</name>
+  </maintainer>
+  <upstream>
+    <remote-id type="github">owner/repo</remote-id>
+    <remote-id type="sourcehut">~tsdh/nirius</remote-id>
+    <remote-id type="gitlab">gitlab.com:GNOME/geary</remote-id>
+    <remote-id type="pypi">requests</remote-id>
+    <bugs-to>https://todo.sr.ht/~tsdh/nirius</bugs-to>
+  </upstream>
+  <longdescription>
+    Nirius provides utility commands for the niri wayland compositor.
+  </longdescription>
+</pkgmetadata>`)
+
+	m, err := ParseMetadata(xmlContent)
+	if err != nil {
+		t.Fatalf("ParseMetadata() error = %v", err)
+	}
+
+	if len(m.Remotes) != 4 {
+		t.Fatalf("Got %d remote-ids, want 4", len(m.Remotes))
+	}
+
+	// github
+	if m.Remotes[0].Type != TypeGitHub || m.Remotes[0].Owner != "owner" || m.Remotes[0].Repo != "repo" {
+		t.Errorf("Remote[0] = %+v, want github:owner/repo", m.Remotes[0])
+	}
+	// sourcehut
+	if m.Remotes[1].Type != TypeSourceHut || m.Remotes[1].Host != "git.sr.ht" || m.Remotes[1].Path != "~tsdh/nirius" {
+		t.Errorf("Remote[1] = %+v, want sourcehut:git.sr.ht/~tsdh/nirius", m.Remotes[1])
+	}
+	// gitlab
+	if m.Remotes[2].Type != TypeGitLab || m.Remotes[2].Host != "gitlab.com" || m.Remotes[2].Path != "GNOME/geary" {
+		t.Errorf("Remote[2] = %+v, want gitlab:gitlab.com/GNOME/geary", m.Remotes[2])
+	}
+	// pypi
+	if m.Remotes[3].Type != TypePyPI || m.Remotes[3].Name != "requests" {
+		t.Errorf("Remote[3] = %+v, want pypi:requests", m.Remotes[3])
+	}
+}
+
+func TestParseMetadata_NoUpstreamBlock(t *testing.T) {
+	xmlContent := []byte(`
+<pkgmetadata>
+  <maintainer type="person">
+    <email>test@example.com</email>
+    <name>Test</name>
+  </maintainer>
+</pkgmetadata>`)
+
+	m, err := ParseMetadata(xmlContent)
+	if err != nil {
+		t.Fatalf("ParseMetadata() error = %v", err)
+	}
+	if len(m.Remotes) != 0 {
+		t.Fatalf("Expected 0 remotes, got %d", len(m.Remotes))
+	}
+}
+
+func TestParseMetadata_Malformed(t *testing.T) {
+	_, err := ParseMetadata([]byte("not valid xml"))
+	if err == nil {
+		t.Error("ParseMetadata() should error on invalid XML")
+	}
+}
+
+func TestParseMetadataFile_Nirius(t *testing.T) {
+	fixturePath := filepath.Join("testdata", "metadata", "nirius.xml")
+	m, err := ParseMetadataFile(fixturePath)
+	if err != nil {
+		t.Fatalf("ParseMetadataFile() error = %v", err)
+	}
+	if len(m.Remotes) != 1 {
+		t.Fatalf("Got %d remote-ids, want 1", len(m.Remotes))
+	}
+	r := m.Remotes[0]
+	if r.Type != TypeSourceHut {
+		t.Errorf("Type = %v, want %v", r.Type, TypeSourceHut)
+	}
+	if r.Host != "git.sr.ht" {
+		t.Errorf("Host = %q, want %q", r.Host, "git.sr.ht")
+	}
+	if r.Path != "~tsdh/nirius" {
+		t.Errorf("Path = %q, want %q", r.Path, "~tsdh/nirius")
+	}
+}
+
+func TestRemoteId_SourceHutString(t *testing.T) {
+	r, err := ParseRemoteIdFromStrings("sourcehut", "~tsdh/nirius")
+	if err != nil {
+		t.Fatalf("ParseRemoteIdFromStrings(sourcehut) error = %v", err)
+	}
+	if r.Host != "git.sr.ht" {
+		t.Errorf("Host = %q, want %q", r.Host, "git.sr.ht")
+	}
+	if r.Path != "~tsdh/nirius" {
+		t.Errorf("Path = %q, want %q", r.Path, "~tsdh/nirius")
+	}
+	want := "sourcehut:git.sr.ht/~tsdh/nirius"
+	if got := r.String(); got != want {
+		t.Errorf("String() = %q, want %q", got, want)
 	}
 }

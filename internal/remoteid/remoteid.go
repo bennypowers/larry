@@ -47,7 +47,7 @@ func (r *RemoteId) String() string {
 	case TypePyPI, TypeNPM:
 		return fmt.Sprintf("%s:%s", r.Type, r.Name)
 	case TypeGitLab, TypeSourceHut:
-		return fmt.Sprintf("%s:%s%s", r.Type, r.Host, r.Path)
+		return fmt.Sprintf("%s:%s/%s", r.Type, r.Host, r.Path)
 	case TypeUnknown:
 		return "unknown"
 	default:
@@ -107,6 +107,14 @@ func ParseRemoteIdFromStrings(rtype string, content string) (*RemoteId, error) {
 		}, nil
 
 	case "gitlab", "sourcehut":
+		// SourceHut: ~user/project → git.sr.ht, or git.sr.ht/~user/project
+		if rtype == "sourcehut" && strings.HasPrefix(content, "~") {
+			return &RemoteId{
+				Type: RemoteIdType(rtype),
+				Host: "git.sr.ht",
+				Path: content,
+			}, nil
+		}
 		// Format: host:path or host/group/project
 		// GitLab: gitlab.com:group/project
 		// SourceHut: git.sr.ht/~user/project
@@ -120,7 +128,7 @@ func ParseRemoteIdFromStrings(rtype string, content string) (*RemoteId, error) {
 			slashIdx := strings.Index(content, "/")
 			if slashIdx > 0 {
 				host = content[:slashIdx]
-				path = "/" + content[slashIdx:]
+				path = content[slashIdx+1:] // strip leading / but keep remainder
 			} else {
 				host = content
 			}
@@ -134,7 +142,7 @@ func ParseRemoteIdFromStrings(rtype string, content string) (*RemoteId, error) {
 		return &RemoteId{
 			Type: RemoteIdType(rtype),
 			Host: host,
-			Path: "/" + path,
+			Path: path,
 		}, nil
 
 	default:
@@ -142,15 +150,4 @@ func ParseRemoteIdFromStrings(rtype string, content string) (*RemoteId, error) {
 	}
 }
 
-// ParseLegacyUpstream parses deprecated Gentoo <upstream> tags for backwards compatibility.
-// These typically contain <bugs-to>, <maintainer>, <remote-id> sub-tags.
-// We only extract <remote-id> from them if present.
-func ParseLegacyUpstream(xmlContent []byte) ([]*RemoteId, error) {
-	var upstream struct {
-		XMLName xml.Name    `xml:"upstream"`
-		Remotes []xml.Name  `xml:"remote-id"` // placeholder
-	}
-	// For backwards compat, try to find remote-id within upstream block
-	_ = upstream // we handle this at the metadata.xml parsing level
-	return nil, nil
-}
+

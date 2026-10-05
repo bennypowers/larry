@@ -357,7 +357,7 @@ func TestSourceHutProvider_FetchLatest(t *testing.T) {
 
 	v, err := prov.FetchLatestVersion(remoteid.RemoteId{
 		Host: "git.sr.ht",
-		Path: "/~testuser/testproject",
+		Path: "~testuser/testproject",
 	}, false)
 	if err != nil {
 		t.Fatalf("FetchLatestVersion(): %v", err)

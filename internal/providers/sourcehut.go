@@ -95,13 +95,13 @@ func (p *SourceHutProvider) FetchLatestVersion(rid remoteid.RemoteId, allowPrere
 
 // fetchViaGraphQL queries SourceHut's GraphQL API for the latest tag.
 func (p *SourceHutProvider) fetchViaGraphQL(rid remoteid.RemoteId, allowPrereleases bool) (*version.Version, error) {
-	// Extract user and project from path (format: /~user/project)
+	// Extract user and project from path (format: ~user/project)
 	path := rid.Path
-	if !strings.HasPrefix(path, "/~") {
-		return nil, fmt.Errorf("sourcehut: invalid path format %q, expected /~user/project", path)
+	if !strings.HasPrefix(path, "~") {
+		return nil, fmt.Errorf("sourcehut: invalid path format %q, expected ~user/project", path)
 	}
 
-	parts := strings.SplitN(strings.TrimPrefix(path, "/~"), "/", 2)
+	parts := strings.SplitN(strings.TrimPrefix(path, "~"), "/", 2)
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("sourcehut: invalid path format %q", path)
 	}
@@ -217,7 +217,7 @@ func (p *SourceHutProvider) fetchViaGraphQL(rid remoteid.RemoteId, allowPrerelea
 // This is a fallback when GraphQL is unavailable (no auth).
 func (p *SourceHutProvider) fetchViaHTML(rid remoteid.RemoteId, allowPrereleases bool) (*version.Version, error) {
 	// Build the refs URL: https://git.sr.ht/~user/project/refs
-	refsURL := fmt.Sprintf("https://%s%s/refs", rid.Host, rid.Path)
+	refsURL := fmt.Sprintf("https://%s/%s/refs", rid.Host, rid.Path)
 
 	resp, err := p.Client.GetWithRetry(refsURL)
 	if err != nil {

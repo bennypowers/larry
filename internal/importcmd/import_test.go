@@ -261,13 +261,15 @@ func TestImport_RetainRemoteId(t *testing.T) {
 	os.MkdirAll(srcMetaDir, 0755)
 	srcMetaPath := filepath.Join(srcMetaDir, "metadata.xml")
 	os.WriteFile(srcMetaPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<pkg-metadata>
-  <remote-id type="github">example/foo</remote-id>
+<pkgmetadata>
+  <upstream>
+    <remote-id type="github">example/foo</remote-id>
+  </upstream>
   <maintainer>
     <email>upstream@example.com</email>
     <name>Upstream</name>
   </maintainer>
-</pkg-metadata>
+</pkgmetadata>
 `), 0644)
 
 	// Parse the source metadata
@@ -348,13 +350,15 @@ func TestImport_TargetMetadataExists(t *testing.T) {
 
 	// Create existing metadata
 	os.WriteFile(metaPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<pkg-metadata>
-  <remote-id type="github">upstream/foo</remote-id>
+<pkgmetadata>
+  <upstream>
+    <remote-id type="github">upstream/foo</remote-id>
+  </upstream>
   <maintainer>
     <email>upstream@upstream.com</email>
     <name>Upstream</name>
   </maintainer>
-</pkg-metadata>
+</pkgmetadata>
 `), 0644)
 
 	// Merge with new maintainer
@@ -485,13 +489,15 @@ inherit nodejs`), 0644)
 	// 2. Create source metadata with remote-id
 	srcMetaPath := filepath.Join(srcCat, "..", "metadata.xml")
 	os.WriteFile(srcMetaPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<pkg-metadata>
-  <remote-id type="github">example/foo</remote-id>
+<pkgmetadata>
+  <upstream>
+    <remote-id type="github">example/foo</remote-id>
+  </upstream>
   <maintainer>
     <email>upstream@example.com</email>
     <name>Upstream Maintainer</name>
   </maintainer>
-</pkg-metadata>
+</pkgmetadata>
 `), 0644)
 
 	// 3. Setup destination overlay

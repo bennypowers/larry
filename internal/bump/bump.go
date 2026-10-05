@@ -198,7 +198,7 @@ func getUpstreamVersion(cfg BumpConfig, pn string, ebuildPath string) (string, e
 	}
 
 	// Use shared provider resolution logic
-	providerType := upstream.ResolveProviderType(ebi.SRC_URI, ebi.HOMEPAGE, ebi.Inherit, ebi.Raw)
+	providerType := upstream.ResolveProviderType(ebuildPath, ebi.SRC_URI, ebi.HOMEPAGE, ebi.Inherit, ebi.Raw)
 	if providerType == "" {
 		return "", fmt.Errorf("unable to detect provider type for auto-version bump")
 	}
@@ -207,6 +207,9 @@ func getUpstreamVersion(cfg BumpConfig, pn string, ebuildPath string) (string, e
 	rid, err := upstream.ResolveRemoteId(ebi, providerType)
 	if err != nil {
 		return "", fmt.Errorf("building remote id: %w", err)
+	}
+	if rid == nil {
+		return "", fmt.Errorf("could not resolve remote id for %s", providerType)
 	}
 
 	// Get provider and fetch latest version

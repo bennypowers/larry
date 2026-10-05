@@ -43,16 +43,10 @@ func CheckUpstream(ei *ebuild.EbuildInfo, registry *provider.ProviderRegistry, a
 		}, true, nil
 	}
 
-	// Detect package type from SRC_URI and HOMEPAGE
-	providerType := detectProviderFromSRCURI(ei.SRC_URI, ei.HOMEPAGE)
-	if providerType == "github" || providerType == "gitlab" || providerType == "codeberg" {
-		meta := detectProviderFromMetadata(ei.Inherit, ei.Raw)
-		if meta == "pypi" || meta == "npm" {
-			providerType = meta
-		}
-	}
+	// Detect provider type — metadata.xml (if available) wins over URL heuristics.
+	providerType := ResolveProviderType(ei.Path, ei.SRC_URI, ei.HOMEPAGE, ei.Inherit, ei.Raw)
 	if providerType == "" {
-		// Try to resolve from SRC_URI URL patterns
+		// Fallback: try to resolve from SRC_URI URL patterns
 		providerType = string(providers.ResolveProviderFromURL(ei.SRC_URI))
 	}
 
@@ -68,13 +62,13 @@ func CheckUpstream(ei *ebuild.EbuildInfo, registry *provider.ProviderRegistry, a
 
 	// Build RemoteId from SRC_URI
 	rid, err := ResolveRemoteId(ei, providerType)
-	if err != nil {
+	if err != nil || rid == nil {
 		return &UpstreamResult{
 			Package: fmt.Sprintf("%s/%s", ei.Category, ei.Pkg),
 			Current: ei.PVVal,
 			Latest:  "",
 			Status:  StatusUnknown,
-			Error:   err.Error(),
+			Error:   "no remote-id found",
 		}, true, nil
 	}
 
@@ -269,8 +263,8 @@ func walkAndCheck(dir string, deprecated map[string]DeprecatedInfo, registry *pr
 					continue
 				}
 
-				// Detect provider from SRC_URI/HOMEPAGE + metadata
-				providerType := ResolveProviderType(einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
+						// Detect provider from SRC_URI/HOMEPAGE + metadata.xml
+				providerType := ResolveProviderType(einfo.Path, einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
 				if providerType == "" {
 					providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
 				}
@@ -289,14 +283,14 @@ func walkAndCheck(dir string, deprecated map[string]DeprecatedInfo, registry *pr
 
 				// Build RemoteId
 				rid, err := ResolveRemoteId(einfo, providerType)
-				if err != nil {
+				if err != nil || rid == nil {
 					results = append(results, UpstreamResult{
 						Package:     fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg),
 						Current:     einfo.PVVal,
 						Latest:      "",
 						Status:      StatusUnknown,
 						SourceLabel: "unknown",
-						Error:       err.Error(),
+						Error:       "no remote-id found",
 					})
 					continue
 				}
@@ -600,7 +594,7 @@ func detectProviderFromSRCURI(srcURI string, homepage string) string {
 			return "sourcehut"
 		case strings.Contains(text, "github.com/"):
 			return "github"
-		case strings.Contains(text, "gitlab.com/") || strings.Contains(text, "gitlab."):
+		case regexp.MustCompile(`https?://gitlab\.[A-Za-z0-9.-]+/`).MatchString(text):
 			return "gitlab"
 		case strings.Contains(text, "codeberg.org/"):
 			return "codeberg"
@@ -654,20 +648,31 @@ func detectProviderFromMetadata(inherit []string, content string) string {
 	return ""
 }
 
-// resolveProviderType resolves the final provider type, preferring metadata
-// (e.g., PYPI_* variables, Python eclasses) over URL detection. This handles
-// cases like PyPI packages hosted on GitHub where URL detection would
-// incorrectly return "github" instead of "pypi".
-// ResolveProviderType resolves the final provider type, preferring metadata
-// overrides (e.g., pypi eclass) over SRC_URI hints.
-func ResolveProviderType(srcURI, homepage string, inherit []string, content string) string {
-	// Primary: detect from SRC_URI/HOMEPAGE
+// ResolveProviderType resolves the final provider type, preferring metadata.xml
+// <remote-id> over URL heuristics. When ebuildPath is non-empty, the function
+// first looks for metadata.xml in the ebuild's directory tree and returns the
+// type from the first <remote-id> entry whose type is one of the known forge
+// types (github, gitlab, pypi, npm, codeberg, sourcehut).  When no usable
+// remote-id is found the function falls back to URL scanning and eclass
+// heuristics.
+func ResolveProviderType(ebuildPath, srcURI, homepage string, inherit []string, content string) string {
+	// 1. metadata.xml <remote-id> wins.
+	if ebuildPath != "" {
+		if rids, err := remoteid.ResolveRemoteId(ebuildPath); err == nil && len(rids) > 0 {
+			for _, rid := range rids {
+				t := string(rid.Type)
+				if t == "github" || t == "gitlab" || t == "pypi" || t == "npm" || t == "codeberg" || t == "sourcehut" {
+					return t
+				}
+			}
+		}
+	}
+	// 2. URL detection.
 	provider := detectProviderFromSRCURI(srcURI, homepage)
 	if provider == "" {
-		// No URL detected, fall back to metadata
 		return detectProviderFromMetadata(inherit, content)
 	}
-	// Secondary: if URL detection says GitHub/npm but metadata says PyPI,
+	// 3. If URL detection says GitHub/npm but eclass says PyPI,
 	// prefer PyPI (the package is likely a PyPI package with a GitHub mirror)
 	if provider == "github" || provider == "gitlab" || provider == "codeberg" {
 		meta := detectProviderFromMetadata(inherit, content)
@@ -698,11 +703,25 @@ func mapTypeToRemoteIdType(pkgType string) remoteid.RemoteIdType {
 	}
 }
 
-// resolveRemoteId extracts a RemoteId from ebuild SRC_URI/HOMEPAGE.
 // ResolveRemoteId constructs a RemoteId from ebuild info and resolved provider type.
 // Handles all provider-specific extraction: GitHub owner/repo, PyPI PN expansion,
 // NPM scoped packages, etc.
+//
+// When ebuildPath is non-empty and metadata.xml contains a <remote-id> matching
+// providerType, that entry is returned directly.  Otherwise URL heuristics
+// (SRC_URI / HOMEPAGE) are used.
 func ResolveRemoteId(ei *ebuild.EbuildInfo, providerType string) (*remoteid.RemoteId, error) {
+	// 1. Prefer metadata.xml <remote-id> when it matches providerType.
+	if ei.Path != "" {
+		if rids, err := remoteid.ResolveRemoteId(ei.Path); err == nil && len(rids) > 0 {
+			for _, rid := range rids {
+				if string(rid.Type) == providerType {
+					return rid, nil
+				}
+			}
+		}
+	}
+
 	switch providerType {
 	case "pypi":
 		// Use PYPI_PN if present, otherwise fall back to Gentoo PN
@@ -733,61 +752,28 @@ func ResolveRemoteId(ei *ebuild.EbuildInfo, providerType string) (*remoteid.Remo
 			Name: name,
 		}, nil
 	case "github":
-		owner, repo := extractRepoFromURLs(ei.SRC_URI, ei.HOMEPAGE, "github.com")
-		return &remoteid.RemoteId{
-			Type:  remoteid.TypeGitHub,
-			Owner: owner,
-			Repo:  repo,
-		}, nil
+		if r := remoteid.ExtractFromURLs(remoteid.TypeGitHub, ei.SRC_URI, ei.HOMEPAGE); r != nil {
+			return r, nil
+		}
+		return nil, nil
 	case "gitlab":
-		host, path := extractRepoFromURLs(ei.SRC_URI, ei.HOMEPAGE, "gitlab")
-		return &remoteid.RemoteId{
-			Type: remoteid.TypeGitLab,
-			Host: host,
-			Path: "/" + path,
-		}, nil
+		if r := remoteid.ExtractFromURLs(remoteid.TypeGitLab, ei.SRC_URI, ei.HOMEPAGE); r != nil {
+			return r, nil
+		}
+		return nil, nil
 	case "codeberg":
-		owner, repo := extractRepoFromURLs(ei.SRC_URI, ei.HOMEPAGE, "codeberg.org")
-		return &remoteid.RemoteId{
-			Type:  remoteid.TypeCodeberg,
-			Owner: owner,
-			Repo:  repo,
-		}, nil
+		if r := remoteid.ExtractFromURLs(remoteid.TypeCodeberg, ei.SRC_URI, ei.HOMEPAGE); r != nil {
+			return r, nil
+		}
+		return nil, nil
 	case "sourcehut":
-		host, path := extractRepoFromURLs(ei.SRC_URI, ei.HOMEPAGE, "sr.ht")
-		return &remoteid.RemoteId{
-			Type: remoteid.TypeSourceHut,
-			Host: host,
-			Path: "/" + path,
-		}, nil
+		if r := remoteid.ExtractFromURLs(remoteid.TypeSourceHut, ei.SRC_URI, ei.HOMEPAGE); r != nil {
+			return r, nil
+		}
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("unknown provider type: %s", providerType)
 	}
-}
-
-// extractRepoFromURLs extracts owner/repo (or host/path) from SRC_URI and HOMEPAGE.
-// It looks for URLs matching the given domain pattern.
-func extractRepoFromURLs(srcURI, homepage, domain string) (string, string) {
-	for _, text := range []string{srcURI, homepage} {
-		owner, repo := extractOwnerRepo(text, domain)
-		if owner != "" && repo != "" {
-			return owner, repo
-		}
-	}
-	return "", ""
-}
-
-// extractOwnerRepo extracts owner/repo from text containing URLs with the given domain.
-func extractOwnerRepo(text, domain string) (string, string) {
-	// Look for URLs like https://domain.com/owner/repo or mirror://domain/owner/repo
-	// Pattern: domain followed by /owner/repo (exactly 2 path segments)
-	pattern := domain + "/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)"
-	re := regexp.MustCompile(pattern)
-	matches := re.FindStringSubmatch(text)
-	if len(matches) >= 3 {
-		return matches[1], matches[2]
-	}
-	return "", ""
 }
 
 // resolveSourceLabel builds a short source label like "GitHub:owner/repo" or "PyPI:name".
@@ -804,7 +790,7 @@ func resolveSourceLabel(rid *remoteid.RemoteId) string {
 		return "GitHub:"
 	case remoteid.TypeGitLab:
 		if rid.Host != "" && rid.Path != "" {
-			return "GitLab:" + rid.Host + rid.Path
+			return "GitLab:" + rid.Host + "/" + rid.Path
 		}
 		return "GitLab:"
 	case remoteid.TypeCodeberg:
@@ -814,7 +800,7 @@ func resolveSourceLabel(rid *remoteid.RemoteId) string {
 		return "Codeberg:"
 	case remoteid.TypeSourceHut:
 		if rid.Host != "" && rid.Path != "" {
-			return "Sourcehut:" + rid.Host + rid.Path
+			return "Sourcehut:" + rid.Host + "/" + rid.Path
 		}
 		return "Sourcehut:"
 	default:
@@ -832,11 +818,11 @@ func resolveSourceURL(rid *remoteid.RemoteId) string {
 	case remoteid.TypeGitHub:
 		return fmt.Sprintf("https://github.com/%s/%s", rid.Owner, rid.Repo)
 	case remoteid.TypeGitLab:
-		return fmt.Sprintf("https://%s%s", rid.Host, rid.Path)
+		return fmt.Sprintf("https://%s/%s", rid.Host, rid.Path)
 	case remoteid.TypeCodeberg:
 		return fmt.Sprintf("https://codeberg.org/%s/%s", rid.Owner, rid.Repo)
 	case remoteid.TypeSourceHut:
-		return fmt.Sprintf("https://%s%s", rid.Host, rid.Path)
+		return fmt.Sprintf("https://%s/%s", rid.Host, rid.Path)
 	default:
 		return ""
 	}
@@ -972,7 +958,7 @@ func walkAndCheckCategories(dir string, deprecated map[string]DeprecatedInfo, re
 			}
 
 			// Detect provider from SRC_URI and HOMEPAGE
-			providerType := ResolveProviderType(einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
+			providerType := ResolveProviderType(einfo.Path, einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
 			if providerType == "" {
 				providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
 			}
@@ -990,13 +976,13 @@ func walkAndCheckCategories(dir string, deprecated map[string]DeprecatedInfo, re
 
 			// Build RemoteId
 			rid, err := ResolveRemoteId(einfo, providerType)
-			if err != nil {
+			if err != nil || rid == nil {
 				results = append(results, UpstreamResult{
 					Package: fmt.Sprintf("%s/%s", einfo.Category, einfo.Pkg),
 					Current: einfo.PVVal,
 					Latest:  "",
 					Status:  StatusUnknown,
-					Error:   err.Error(),
+					Error:   "no remote-id found",
 				})
 				continue
 			}

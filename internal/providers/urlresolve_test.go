@@ -289,8 +289,8 @@ func TestResolveRemoteIdFromURL_GitLab_Group(t *testing.T) {
 		host string
 		path string
 	}{
-		{"https://gitlab.com/g1/g2/project", "gitlab.com", "/g1/g2/project"},
-		{"https://gitlab.com/group/subgroup/subsubgroup/project", "gitlab.com", "/group/subgroup/subsubgroup/project"},
+		{"https://gitlab.com/g1/g2/project", "gitlab.com", "g1/g2/project"},
+		{"https://gitlab.com/group/subgroup/subsubgroup/project", "gitlab.com", "group/subgroup/subsubgroup/project"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.url, func(t *testing.T) {

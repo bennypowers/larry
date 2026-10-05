@@ -17,24 +17,17 @@ type rawRemoteIdXML struct {
 
 // Metadata represents the structure of metadata.xml.
 type Metadata struct {
-	XMLName      xml.Name          `xml:"pkg-metadata"`
-	Longdesc     string            `xml:"longdescription"`
-	Maintainers  []Maintainer      `xml:"maintainer"`
-	RawRemotes   []rawRemoteIdXML  `xml:"remote-id"`   // raw XML children, auto-parsed
-	Remotes      []*RemoteId       `xml:"-"`            // parsed (computed from RawRemotes)
-	Legacy       *LegacyUpstream   `xml:"upstream"`     // legacy <upstream> for backwards compat
+	XMLName  xml.Name       `xml:"pkgmetadata"`
+	Longdesc string         `xml:"longdescription"`
+	Maintainers []Maintainer `xml:"maintainer"`
+	RawRemotes []rawRemoteIdXML `xml:"upstream>remote-id"` // <upstream><remote-id> elements
+	Remotes  []*RemoteId    `xml:"-"`                  // parsed (computed from RawRemotes)
 }
 
 // Maintainer represents a maintainer entry in metadata.xml.
 type Maintainer struct {
 	Email string `xml:"email"`
 	Name  string `xml:"name"`
-}
-
-// LegacyUpstream represents a deprecated <upstream> block in metadata.xml.
-type LegacyUpstream struct {
-	BugsTo     string `xml:"bugs-to"`
-	Maintainer *Maintainer
 }
 
 // ParseMetadata parses metadata.xml content.
@@ -52,7 +45,7 @@ func ParseMetadata(data []byte) (*Metadata, error) {
 		}
 		m.Remotes = append(m.Remotes, r)
 	}
-	_ = m.RawRemotes // keep RawRemotes for potential future use
+	_ = m.RawRemotes
 	return &m, nil
 }
 

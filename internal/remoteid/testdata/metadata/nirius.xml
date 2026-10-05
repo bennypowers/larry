@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>web@bennypowers.com</email>
+		<name>Benny Powers</name>
+	</maintainer>
+	<upstream>
+		<remote-id type="sourcehut">~tsdh/nirius</remote-id>
+		<bugs-to>https://todo.sr.ht/~tsdh/nirius</bugs-to>
+	</upstream>
+	<longdescription>
+		Nirius provides utility commands for the niri wayland compositor.
+		It includes a daemon (niriusd) and a client (nirius) for features
+		like focus-or-spawn, scratchpad, follow-mode, window marks, and
+		moving windows between workspaces.
+	</longdescription>
+</pkgmetadata>

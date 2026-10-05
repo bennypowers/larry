@@ -397,29 +397,29 @@ func mergeMetadata(path string, maintainerEmail, maintainerName string, remotes 
 
 // writeMetadata marshals metadata to XML and writes it.
 func writeMetadata(path string, m *remoteid.Metadata) error {
-	// Build XML manually for proper formatting
+	// Build XML manually for proper formatting.
 	var buf bytes.Buffer
-	buf.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
-<pkg-metadata>
-`)
+	buf.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+	buf.WriteString("<pkgmetadata>\n")
 
 	// Write maintainers
 	for _, maint := range m.Maintainers {
-		buf.WriteString(fmt.Sprintf(`  <maintainer>
-    <email>%s</email>
-    <name>%s</name>
-  </maintainer>
-`, escXML(maint.Email), escXML(maint.Name)))
+		buf.WriteString(fmt.Sprintf("  <maintainer>\n"))
+		buf.WriteString(fmt.Sprintf("    <email>%s</email>\n", escXML(maint.Email)))
+		buf.WriteString(fmt.Sprintf("    <name>%s</name>\n", escXML(maint.Name)))
+		buf.WriteString("  </maintainer>\n")
 	}
 
-	// Write remote-ids
-	for _, r := range m.Remotes {
-		buf.WriteString(fmt.Sprintf(`  <remote-id type="%s">%s</remote-id>
-`, r.Type, escXML(rString(r))))
+	// Write <upstream> block when there are remote-ids.
+	if len(m.Remotes) > 0 {
+		buf.WriteString("  <upstream>\n")
+		for _, r := range m.Remotes {
+			buf.WriteString(fmt.Sprintf("    <remote-id type=\"%s\">%s</remote-id>\n", r.Type, escXML(rString(r))))
+		}
+		buf.WriteString("  </upstream>\n")
 	}
 
-	buf.WriteString(`</pkg-metadata>
-`)
+	buf.WriteString("</pkgmetadata>\n")
 
 	return os.WriteFile(path, buf.Bytes(), 0644)
 }
