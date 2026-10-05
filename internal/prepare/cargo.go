@@ -60,7 +60,13 @@ func PrepareCargo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	}
 
 	// 5. Generate Manifest
-	if err := runManifest(cfg.Overlay, ei.Path, cfg.Distdir); err != nil {
+	if err := runManifest(manifestRequest{
+		Overlay:    cfg.Overlay,
+		CatPkg:     ei.Category + "/" + ei.PN(),
+		Distdir:    cfg.Distdir,
+		EbuildPath: ei.Path,
+		Prefetch:   nil,
+	}); err != nil {
 		return fmt.Errorf("cargo: manifest: %w", err)
 	}
 

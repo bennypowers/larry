@@ -84,20 +84,8 @@ func Prepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	}
 }
 
-// PrepareAll prepares all ebuilds in the given directory.
-func PrepareAll(dir string, cfg *PrepareConfig) error {
-	files, err := collectEbuilds(dir)
-	if err != nil {
-		return fmt.Errorf("collect ebuilds: %w", err)
-	}
-
-	for _, f := range files {
-		if err := PrepareFromFile(f, cfg); err != nil {
-			return fmt.Errorf("prepare %s: %w", f, err)
-		}
-	}
-	return nil
-}
+// PrepareFile prepares one ebuild. Tests replace it to simulate per-target failures.
+var PrepareFile = PrepareFromFile
 
 // PrepareFromFile prepares a single ebuild from file path.
 // Uses the shared upstream parser for accurate multi-line value extraction.
@@ -111,6 +99,97 @@ func PrepareFromFile(path string, cfg *PrepareConfig) error {
 	}
 	einfo.Path = path
 	return Prepare(einfo, cfg)
+}
+
+// PrepareManifestAll runs ONE bulk `pkgdev manifest -d <distdir>` from the overlay root.
+// Used only by `larry prepare --all` with no positional arguments.
+// It does NOT run any type-specific pipeline.
+func PrepareManifestAll(overlay, distdir string) error {
+	if distdir == "" {
+		return fmt.Errorf("manifest: distdir is empty")
+	}
+	// mkdir -p $DISTDIR
+	if err := os.MkdirAll(distdir, 0o755); err != nil {
+		return fmt.Errorf("mkdir distdir: %w", err)
+	}
+
+	// Collect all category/package directories under the overlay root
+	// that contain at least one .ebuild, then run pkgdev manifest per target.
+	dirs, err := collectCatPkgs(overlay)
+	if err != nil {
+		return fmt.Errorf("collect cat/pkg: %w", err)
+	}
+	for _, cp := range dirs {
+		bin2, style2, err2 := findManifestRunner()
+		if err2 != nil {
+			return err2
+		}
+		args := manifestArgs(style2, distdir, cp, "")
+		if err := ManifestRunner(bin2, args, overlay, append(os.Environ(), "DISTDIR="+distdir)); err != nil {
+			return fmt.Errorf("manifest %s: %w", cp, err)
+		}
+	}
+	return nil
+}
+
+// collectCatPkgs returns category/package directory names under overlay root.
+func collectCatPkgs(overlay string) ([]string, error) {
+	entries, err := os.ReadDir(overlay)
+	if err != nil {
+		return nil, err
+	}
+	var catPkgs []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		subDir := filepath.Join(overlay, e.Name())
+		subEntries, err := os.ReadDir(subDir)
+		if err != nil {
+			continue
+		}
+		for _, se := range subEntries {
+			if !se.IsDir() {
+				continue
+			}
+			ebuildEntries, err2 := os.ReadDir(filepath.Join(subDir, se.Name()))
+			if err2 != nil {
+				continue
+			}
+			hasEbuild := false
+			for _, ee := range ebuildEntries {
+				if strings.HasSuffix(ee.Name(), ".ebuild") && !strings.HasSuffix(ee.Name(), ".ebuild.bak") {
+					hasEbuild = true
+					break
+				}
+			}
+			if hasEbuild {
+				catPkgs = append(catPkgs, e.Name()+"/"+se.Name())
+			}
+		}
+	}
+	return catPkgs, nil
+}
+
+// PrepareDir runs the full per-type pipeline for every *.ebuild in dir,
+// counting failures instead of aborting on the first one (D9).
+func PrepareDir(dir string, cfg *PrepareConfig) error {
+	files, err := collectEbuilds(dir)
+	if err != nil {
+		return fmt.Errorf("collect ebuilds: %w", err)
+	}
+
+	var failures int
+	for _, f := range files {
+		if err := PrepareFile(f, cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "prepare %s: %v\n", f, err)
+			failures++
+		}
+	}
+	if failures > 0 {
+		return fmt.Errorf("%d package(s) failed", failures)
+	}
+	return nil
 }
 
 // prepareGeneric runs pkgdev manifest on a generic ebuild.
@@ -127,7 +206,14 @@ func prepareGeneric(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	defer os.Remove(ei.Path + ".bak")
 
 	// Run manifest
-	if err := runManifest(cfg.Overlay, ei.Path, cfg.Distdir); err != nil {
+	req := manifestRequest{
+		Overlay:    cfg.Overlay,
+		CatPkg:     ei.Category + "/" + ei.PN(),
+		Distdir:    cfg.Distdir,
+		EbuildPath: ei.Path,
+		Prefetch:   nil,
+	}
+	if err := runManifest(req); err != nil {
 		// Rollback on failure
 		Restore(ei.Path)
 		return fmt.Errorf("generic: manifest: %w", err)
@@ -151,15 +237,11 @@ func prepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	return PrepareGo(ei, cfg)
 }
 
-
-
 // NewEbuildInfoFromPath creates an EbuildInfo from a file path.
 // Uses the shared upstream parser for accurate multi-line value extraction.
 func NewEbuildInfoFromPath(path string) (*ebuild.EbuildInfo, error) {
 	return upstream.ParseEbuildInfo(path)
 }
-
-
 
 // parsePVRaw parses a PV string and returns (basePV, revision).
 func parsePVRaw(pv string) (string, int) {
@@ -210,29 +292,6 @@ func getEnv(key string) string {
 	return os.Getenv(key)
 }
 
-// findManifestRunner finds the ebuild manifest runner binary.
-func findManifestRunner() (string, error) {
-	// Use pkgdev manifest for category-level scanning. This matches the fish
-	// script and properly handles ${CARGO_CRATE_URIS} expansion for cargo
-	// packages, which requires scanning the full category.
-	if path, err := exec.LookPath("pkgdev"); err == nil {
-		logger.Debug("using pkgdev: " + path)
-		return path, nil
-	}
-	// Fallback to ebuild digest if pkgdev is not available.
-	if path, err := exec.LookPath("ebuild"); err == nil {
-		logger.Debug("using ebuild: " + path)
-		return path, nil
-	}
-	return "", fmt.Errorf("manifest runner not found: try installing portage (pkgdev or ebuild)")
-}
-
-// manifestArgs returns the command-line arguments for running manifest.
-// ebuild digest takes the full ebuild path and generates the Manifest.
-func manifestArgs(path string) []string {
-	return []string{path, "digest"}
-}
-
 // verifyDistfiles checks that all distfiles exist in the distdir.
 func verifyDistfiles(distdir string, distfiles []string) bool {
 	if distdir == "" {
@@ -264,16 +323,16 @@ func extractDistfilesFromSRCURI(srcURI string) []string {
 //
 // The script runs inside a userspace sandbox modeled after Portage's sandbox:
 //
-//   SANDBOXED (userspace policy):
-//     - Environment is sanitized (dangerous variables unset)
-//     - PATH restricted to system directories only
-//     - Write access limited to: ebuild directory, DISTDIR
+//	SANDBOXED (userspace policy):
+//	  - Environment is sanitized (dangerous variables unset)
+//	  - PATH restricted to system directories only
+//	  - Write access limited to: ebuild directory, DISTDIR
 //
-//   NOT SANDBOXED (limitations):
-//     - No syscall-level file access control (unlike Portage's ld.so preload)
-//     - Network access is NOT blocked
-//     - No PID or mount namespace isolation
-//     - No user/group switching
+//	NOT SANDBOXED (limitations):
+//	  - No syscall-level file access control (unlike Portage's ld.so preload)
+//	  - Network access is NOT blocked
+//	  - No PID or mount namespace isolation
+//	  - No user/group switching
 //
 // To achieve true sandboxing, run larry inside a container or use --emerge.
 func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConfig) error {

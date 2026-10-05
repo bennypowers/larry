@@ -1,6 +1,7 @@
 package prepare
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -314,26 +315,40 @@ func TestBackupNonExistent(t *testing.T) {
 // manifestArgs tests
 // ---------------------------------------------------------------------------
 
-func TestManifestArgs(t *testing.T) {
+func TestManifestArgs_MatchesRunner(t *testing.T) {
 	tests := []struct {
-		name     string
-		path     string
-		expected []string
+		name         string
+		style        manifestStyle
+		distdir      string
+		catPkg       string
+		ebuildPath   string
+		want         []string
 	}{
 		{
-			name:     "simple",
-			path:     "/path/to/pkg-1.0.0.ebuild",
-			expected: []string{"/path/to/pkg-1.0.0.ebuild", "digest"},
+			name:         "pkgdev",
+			style:        stylePkgdev,
+			distdir:      "/d",
+			catPkg:       "dev-util/foo",
+			ebuildPath:   "/ov/dev-util/foo/foo-1.0.ebuild",
+			want:         []string{"manifest", "-d", "/d", "dev-util/foo"},
+		},
+		{
+			name:         "ebuild-digest",
+			style:        styleEbuildDigest,
+			distdir:      "/d",
+			catPkg:       "dev-util/foo",
+			ebuildPath:   "/ov/dev-util/foo/foo-1.0.ebuild",
+			want:         []string{"/ov/dev-util/foo/foo-1.0.ebuild", "digest"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := manifestArgs(tt.path)
-			if len(result) != len(tt.expected) {
-				t.Fatalf("manifestArgs returned %d args, want %d: %v", len(result), len(tt.expected), result)
+			result := manifestArgs(tt.style, tt.distdir, tt.catPkg, tt.ebuildPath)
+			if len(result) != len(tt.want) {
+				t.Fatalf("manifestArgs returned %d args, want %d: %v", len(result), len(tt.want), result)
 			}
-			for i, want := range tt.expected {
+			for i, want := range tt.want {
 				if result[i] != want {
 					t.Errorf("manifestArgs[%d] = %q, want %q", i, result[i], want)
 				}
@@ -416,7 +431,7 @@ func TestExtractDistfilesFromSRCURI(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFindManifestRunner(t *testing.T) {
-	binPath, err := findManifestRunner()
+	binPath, _, err := findManifestRunner()
 	if err != nil {
 		t.Logf("findManifestRunner returned (expected on non-host): %v", err)
 		return
@@ -433,7 +448,7 @@ func TestFindManifestRunner_NotFound(t *testing.T) {
 	origPath := os.Getenv("PATH")
 	t.Setenv("PATH", "/nonexistent/path")
 
-	_, err := findManifestRunner()
+	_, _, err := findManifestRunner()
 	if err == nil {
 		t.Fatal("findManifestRunner should fail when binary not in PATH")
 	}
@@ -569,15 +584,47 @@ func TestPrepareFromFile_NonExistent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// PrepareAll tests
+// PrepareDir tests
 // ---------------------------------------------------------------------------
 
-func TestPrepareAll_NoEbuilds(t *testing.T) {
+func TestPrepareDir_NoEbuilds(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &PrepareConfig{DryRun: true}
-	err := PrepareAll(dir, cfg)
+	err := PrepareDir(dir, cfg)
 	if err != nil {
-		t.Fatalf("PrepareAll returned error on empty dir: %v", err)
+		t.Fatalf("PrepareDir returned error on empty dir: %v", err)
+	}
+}
+
+func TestPrepareDir_AggregatesFailures(t *testing.T) {
+	// D9 — all ebuilds attempted, middle one fails, returns "1 package(s) failed".
+	dir := t.TempDir()
+	// Create three ebuilds.
+	for _, name := range []string{"foo-1.0.ebuild", "foo-2.0.ebuild", "foo-3.0.ebuild"} {
+		os.WriteFile(filepath.Join(dir, name), []byte("EAPI=8\n"), 0644)
+	}
+
+	rec := newRecorder()
+	pfOrig := PrepareFile
+	PrepareFile = func(path string, cfg *PrepareConfig) error {
+		rec.record("", nil, path, nil)
+		// Middle one (foo-2.0) fails.
+		if strings.Contains(path, "foo-2.0") {
+			return errors.New("prepare boom")
+		}
+		return nil
+	}
+	t.Cleanup(func() { PrepareFile = pfOrig })
+
+	err := PrepareDir(dir, &PrepareConfig{DryRun: true})
+	if err == nil {
+		t.Fatal("expected error from PrepareDir")
+	}
+	if !strings.Contains(err.Error(), "1 package(s) failed") {
+		t.Errorf("error = %v, want '1 package(s) failed'", err)
+	}
+	if len(rec.calls) != 3 {
+		t.Errorf("PrepareFile called %d times, want 3", len(rec.calls))
 	}
 }
 
@@ -587,7 +634,7 @@ func TestPrepareAll_NoEbuilds(t *testing.T) {
 
 func TestPrepare_Generic_RealManifest(t *testing.T) {
 	// Only run if pkgdev is available
-	_, err := findManifestRunner()
+	_, _, err := findManifestRunner()
 	if err != nil {
 		t.Skip("pkgdev not available")
 	}

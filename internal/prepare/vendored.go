@@ -414,7 +414,13 @@ func PrepareVendored(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	}
 
 	// 5. Run manifest
-	return runManifest(cfg.Overlay, ei.Path, distdir)
+	return runManifest(manifestRequest{
+		Overlay:    cfg.Overlay,
+		CatPkg:     ei.Category + "/" + ei.PN(),
+		Distdir:    distdir,
+		EbuildPath: ei.Path,
+		Prefetch:   nil,
+	})
 }
 
 // ---------------------------------------------------------------------------

@@ -12,110 +12,125 @@ import (
 	"bennypowers.dev/larry/internal/logger"
 )
 
-// manifestRunner returns the manifest command path (pkgdev or ebuild).
-var manifestRunner = func() (string, error) {
-	return findManifestRunner()
-}
-
-// manifestRunnerArgs builds the command arguments for manifest.
-var manifestRunnerArgs = func(path string) []string {
-	return manifestArgs(path)
-}
-
-// runManifest executes pkgdev manifest with the specific ebuild path
-// (matching the fish script). This properly handles ${CARGO_CRATE_URIS}
-// expansion for cargo packages while only processing the target ebuild.
-func runManifest(overlay, path, distdir string) error {
-	// Use pkgdev manifest with the specific ebuild path (not category level).
-	// This matches the fish script behavior and properly handles ${CARGO_CRATE_URIS}
-	// for cargo packages while only processing the target ebuild.
-	binPath, err := manifestRunner()
-	if err != nil {
-		return err
-	}
-	logger.Debug("using runner: " + binPath)
-	logger.Debug("ebuild: " + path)
-	logger.Debug("distdir: " + distdir)
-	logger.Debug("overlay: " + overlay)
-
-	args := []string{"manifest", "-d", distdir, path}
-
-	// Build env: use the larry distdir consistently (same as the fish script).
-	// All distfiles — old and new — are expected to be in DISTDIR.
-	env := os.Environ()
-	env = append(env, "DISTDIR="+distdir)
-	env = append(env, "GENTOO_MIRRORS=")
-
-	cmd := exec.Command(binPath, args...)
+// ManifestRunner executes the resolved manifest subprocess. Tests replace it.
+var ManifestRunner = func(bin string, args []string, dir string, env []string) error {
+	cmd := exec.Command(bin, args...)
+	cmd.Dir = dir
 	cmd.Env = env
-	logger.Debug("running: " + strings.Join(cmd.Args, " "))
-
-	// Remove stale Manifest so pkgdev manifest generates fresh entries
-	manifestPath := filepath.Join(filepath.Dir(path), "Manifest")
-	_ = os.Remove(manifestPath)
-
-	// Capture both stderr and stdout for debugging on failure
-	var stdoutBuf, stderrBuf strings.Builder
-
-	// Run from overlay root so pkgdev finds the ebuilds
-	cmd.Dir = overlay
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
-
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		fmt.Fprint(os.Stderr, stdoutBuf.String())
-		fmt.Fprint(os.Stderr, stderrBuf.String())
+		fmt.Fprint(os.Stderr, stdout.String(), stderr.String())
 		return err
 	}
-	if stdoutBuf.Len() > 0 {
-		logger.Debug("stdout:\n" + stdoutBuf.String())
-	}
-	if stderrBuf.Len() > 0 {
-		logger.Debug("runner warnings:\n" + stderrBuf.String())
-	}
-
-	// Verify manifest validity: check the Manifest file exists and has
-	// valid entries matching the ebuild's distfiles.
-	return verifyManifestValid(path)
-}
-
-// runManifestCmd is an internal helper that runs manifest without TUI piping.
-func runManifestCmd(args ...string) error {
-	binPath, err := manifestRunner()
-	if err != nil {
-		return err
-	}
-	cmd := exec.Command(binPath, args...)
-	logger.Debug("runManifestCmd: " + strings.Join(cmd.Args, " "))
-	if err := cmd.Run(); err != nil {
-		return err
-	}
+	logger.Debug("stdout:\n" + stdout.String())
+	logger.Debug("stderr:\n" + stderr.String())
 	return nil
 }
 
-// FindManifestRunner is the exported version of findManifestRunner.
-func FindManifestRunner() (string, error) {
-	return findManifestRunner()
+// ManifestRunnerRestore restores the original ManifestRunner (called from tests).
+func ManifestRunnerRestore(orig func(string, []string, string, []string) error) {
+	ManifestRunner = orig
 }
 
-// GetManifestArgs is the exported version of manifestArgs.
-func GetManifestArgs(path string) []string {
-	return manifestArgs(path)
+// manifestStyle selects the manifest generation tool and argument format.
+type manifestStyle int
+
+const (
+	stylePkgdev manifestStyle = iota // pkgdev manifest -d <distdir> <cat/pkg>, cwd = overlay
+	styleEbuildDigest                // <ebuild path> digest, cwd = overlay
+)
+
+// manifestRequest is the input to runManifest.
+type manifestRequest struct {
+	Overlay    string            // overlay root; becomes cmd.Dir
+	CatPkg     string            // "dev-util/fish-lsp" — NEVER a file path
+	Distdir    string            // must be non-empty
+	Distfiles  []string          // distfile basenames the caller expects; may be nil
+	EbuildPath string            // only consulted when the runner is ebuild; pkgdev ignores it
+	Prefetch   func(pkgDir, distdir string) error // runs before Manifest removal; may be nil
 }
 
-// RunManifestCommand is the exported version of runManifest.
-func RunManifestCommand(overlay, path, distdir string) error {
-	return runManifest(overlay, path, distdir)
+// findManifestRunner finds the manifest runner binary and returns its style.
+func findManifestRunner() (bin string, style manifestStyle, err error) {
+	if path, err := exec.LookPath("pkgdev"); err == nil {
+		logger.Debug("using pkgdev: " + path)
+		return path, stylePkgdev, nil
+	}
+	if path, err := exec.LookPath("ebuild"); err == nil {
+		logger.Debug("using ebuild: " + path)
+		return path, styleEbuildDigest, nil
+	}
+	return "", 0, fmt.Errorf("manifest runner not found: try installing portage (pkgdev or ebuild)")
 }
 
-// verifyManifestValid checks that the Manifest file for the given ebuild
-// exists and contains valid entries for all declared distfiles.
-func verifyManifestValid(ebuildPath string) error {
-	manifestPath := filepath.Join(filepath.Dir(ebuildPath), "Manifest")
+// manifestArgs builds the command arguments for manifest.
+func manifestArgs(style manifestStyle, distdir, catPkg, ebuildPath string) []string {
+	switch style {
+	case stylePkgdev:
+		return []string{"manifest", "-d", distdir, catPkg}
+	case styleEbuildDigest:
+		return []string{ebuildPath, "digest"}
+	default:
+		return nil
+	}
+}
 
-	// Check Manifest file exists
+// runManifest executes pkgdev manifest (or ebuild digest) for a category/package target.
+func runManifest(req manifestRequest) error {
+	if req.Distdir == "" {
+		return fmt.Errorf("manifest: distdir is empty")
+	}
+
+	// mkdir -p $DISTDIR
+	if err := os.MkdirAll(req.Distdir, 0o755); err != nil {
+		return fmt.Errorf("mkdir distdir: %w", err)
+	}
+
+	pkgDir := filepath.Join(req.Overlay, req.CatPkg)
+
+	// Prefetch runs BEFORE Manifest removal
+	if req.Prefetch != nil {
+		if err := req.Prefetch(pkgDir, req.Distdir); err != nil {
+			return err
+		}
+	}
+
+	// Remove stale Manifest
+	manifestPath := filepath.Join(pkgDir, "Manifest")
+	_ = os.Remove(manifestPath)
+
+	// Resolve runner
+	bin, style, err := findManifestRunner()
+	if err != nil {
+		return err
+	}
+	args := manifestArgs(style, req.Distdir, req.CatPkg, req.EbuildPath)
+
+	env := os.Environ()
+	env = append(env, "DISTDIR="+req.Distdir)
+	// No GENTOO_MIRRORS — do not set it at all.
+
+	if err := ManifestRunner(bin, args, req.Overlay, env); err != nil {
+		return err
+	}
+
+	// Verify manifest validity
+	return verifyManifestValid(pkgDir, req.Distfiles)
+}
+
+// verifyManifestValid checks <pkgDir>/Manifest.
+// expectedDistfiles may be empty, which means "no DIST lines required".
+func verifyManifestValid(pkgDir string, expectedDistfiles []string) error {
+	manifestPath := filepath.Join(pkgDir, "Manifest")
+
+	// Check Manifest file exists — only an error if distfiles were expected.
 	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
-		return fmt.Errorf("manifest file not found: %s", manifestPath)
+		if len(expectedDistfiles) > 0 {
+			return fmt.Errorf("manifest file not found: %s", manifestPath)
+		}
+		return nil
 	}
 
 	data, err := os.ReadFile(manifestPath)
@@ -123,19 +138,21 @@ func verifyManifestValid(ebuildPath string) error {
 		return fmt.Errorf("read manifest: %w", err)
 	}
 
-	// Count valid DIST entries: DIST filename size ALGO hash or DIST filename size hash
-	entryRe := regexp.MustCompile(`^DIST\s+\S+\s+\d+\s+`)
+	// Valid DIST line: DIST <name> <size> <algo> <hash1> <algo2> <hash2>
+	// Size must be [1-9]\d*, hashes must be non-empty \S+
+	distRe := regexp.MustCompile(`^DIST\s+\S+\s+[1-9]\d*\s+\S+\s+\S+`)
+
 	entries := 0
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
-		if entryRe.MatchString(scanner.Text()) {
+		if distRe.MatchString(scanner.Text()) {
 			entries++
 		}
 	}
 
-	// A valid Manifest must have at least one DIST entry
-	if entries == 0 {
-		return fmt.Errorf("manifest has no valid DIST entries")
+	// Zero matching DIST lines is an error only if distfiles were expected.
+	if entries == 0 && len(expectedDistfiles) > 0 {
+		return fmt.Errorf("manifest has no valid DIST entries (expected %d distfile(s))", len(expectedDistfiles))
 	}
 
 	return nil

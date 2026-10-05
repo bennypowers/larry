@@ -133,7 +133,13 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 	}
 
 	// 3. Run pkgdev manifest
-	if err := runManifest(cfg.Overlay, ei.Path, distDir); err != nil {
+	if err := runManifest(manifestRequest{
+		Overlay:    cfg.Overlay,
+		CatPkg:     ei.Category + "/" + ei.PN(),
+		Distdir:    distDir,
+		EbuildPath: ei.Path,
+		Prefetch:   nil,
+	}); err != nil {
 		Restore(ei.Path)
 		return fmt.Errorf("npm: manifest: %w", err)
 	}

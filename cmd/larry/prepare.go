@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/prepare"
@@ -24,7 +25,7 @@ func init() {
 	prepareCmd.Flags().StringVarP(&prepareType, "type", "t", "",
 		"force package type: npm, cargo, go, vendored, generic (overrides auto-detection)")
 	prepareCmd.Flags().BoolVarP(&prepareAll, "all", "a", false,
-		"prepare all ebuilds in the directory")
+		"regenerate Manifest for all packages via pkgdev (manifest-only, no type-specific pipeline)")
 	prepareCmd.Flags().BoolVarP(&prepareDryRun, "dry-run", "n", false,
 		"show what would be done without making changes")
 	prepareCmd.Flags().BoolVar(&prepareCleanupOrphans, "cleanup", false,
@@ -56,12 +57,12 @@ Override detection with --type flag.
 Commands:
   larry prepare sys-apps/foo/foo-1.0.0.ebuild    # Prepare single ebuild
   larry prepare sys-apps/foo                      # Prepare all ebuilds in pkg dir
-  larry prepare --all /var/db/repos/gentoo/sys-apps/foo  # All ebuilds in pkg dir
+  larry prepare --all                             # Manifest-only: all packages in overlay
   larry prepare --type generic sys-apps/foo/foo.ebuild # Force type
 
 Flags:
   -t, --type string       Force package type (overrides auto-detection)
-  -a, --all               Prepare all ebuilds in directory
+  -a, --all               Manifest-only: pkgdev for every cat/pkg in overlay (no pipeline)
   -n, --dry-run           Show what would be done without making changes
       --distdir string    Distdir path for source downloads
       --overlay string    Overlay root path
@@ -71,6 +72,11 @@ Flags:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Resolve distdir through config.
 		distdir := cfg.ResolveDistdir(rootFlags.Distdir)
+
+		// Reject empty distdir (D5).
+		if distdir == "" {
+			return fmt.Errorf("prepare: distdir is empty — set --distdir, $LARRY_DISTDIR, or $PORTAGE_DISTDIR")
+		}
 
 		// Resolve overlay directory.
 		overlay, err := cfg.ResolveOverlay(rootFlags.Overlay)
@@ -106,74 +112,72 @@ Flags:
 		// Determine what to prepare.
 		switch {
 		case prepareAll && len(args) == 0:
-			// --all without args: prepare all ebuilds in overlay root.
-			return prepare.PrepareAll(overlay, pcfg)
+			// --all without args: manifest-only bulk pkgdev call (D8).
+			return prepare.PrepareManifestAll(overlay, distdir)
 		case len(args) == 0:
 			// No args: show help.
 			return cmd.Help()
 		case len(args) == 1 && !prepareAll:
 			// Single path (file or directory).
-			path := args[0]
-			_, fi, err := resolvePrepareTarget(path, overlay)
+			resolved, fi, err := resolvePrepareTarget(args[0], overlay)
 			if err != nil {
 				return err
 			}
 
 			if fi.IsDir() {
-				// Directory: prepare all ebuilds.
-				return prepare.PrepareAll(path, pcfg)
+				// Directory: prepare all ebuilds with failure counting.
+				return prepare.PrepareDir(resolved, pcfg)
 			}
 
 			// Single file: prepare that ebuild.
-			return prepare.PrepareFromFile(path, pcfg)
+			return prepare.PrepareFromFile(resolved, pcfg)
 		default:
-			// Multiple paths: prepare each.
-			for _, path := range args {
-				if err := prepare.PrepareFromFile(path, pcfg); err != nil {
-					return fmt.Errorf("prepare %s: %w", path, err)
+			// Multiple paths: attempt each, aggregate failures (D9).
+			var failures int
+			for _, raw := range args {
+				resolved, _, err := resolvePrepareTarget(raw, overlay)
+				if err != nil {
+					failures++
+					continue
 				}
+				if err := prepare.PrepareFile(resolved, pcfg); err != nil {
+					failures++
+				}
+			}
+			if failures > 0 {
+				return fmt.Errorf("%d package(s) failed", failures)
 			}
 			return nil
 		}
 	},
 }
 
-// resolvePrepareTarget determines if a path is a file or directory.
-// If it's a bare package name (e.g., "sys-apps/foo"), resolve to the overlay path.
-func resolvePrepareTarget(path, overlay string) (*ebuild.EbuildInfo, os.FileInfo, error) {
-	// Check if it's a file.
+// resolvePrepareTarget resolves a path to an absolute filesystem path and returns its info.
+// If it's a bare package name (e.g., "sys-apps/foo"), resolves to overlay/category/package.
+// Returns the resolved path (D11), file info, and error.
+func resolvePrepareTarget(path, overlay string) (string, os.FileInfo, error) {
+	// Check if it's a file or directory already.
 	fi, err := os.Stat(path)
-	if err != nil {
-		// Not a file or directory — try resolving as category/package.
-		if parts := filepath.SplitList(path); len(parts) == 2 {
-			path = filepath.Join(overlay, parts[0], parts[1])
-			fi, err = os.Stat(path)
-			if err != nil {
-				return nil, nil, fmt.Errorf("path %q not found (tried %q)", path, filepath.Join(overlay, parts[0], parts[1]))
-			}
-		} else {
-			// Try overlay/category/package.
-			fullPath := filepath.Join(overlay, path)
-			fi, err = os.Stat(fullPath)
-			if err != nil {
-				return nil, nil, fmt.Errorf("path %q not found (tried %q)", path, fullPath)
-			}
-			path = fullPath
+	if err == nil {
+		return path, fi, nil
+	}
+
+	// Not a file or directory — try resolving as category/package.
+	// Use strings.Split (not filepath.SplitList which splits on ":").
+	if parts := strings.Split(path, "/"); len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+		candidate := filepath.Join(overlay, path)
+		fi, err = os.Stat(candidate)
+		if err == nil {
+			return candidate, fi, nil
 		}
+		return "", nil, fmt.Errorf("path %q not found (tried %q)", path, candidate)
 	}
 
-	if fi.IsDir() {
-		return nil, fi, nil
+	// Try overlay/path as a whole.
+	fullPath := filepath.Join(overlay, path)
+	fi, err = os.Stat(fullPath)
+	if err == nil {
+		return fullPath, fi, nil
 	}
-
-	// Single ebuild file — parse info for validation.
-	info, err := prepare.NewEbuildInfoFromPath(path)
-	if err != nil {
-		return nil, fi, fmt.Errorf("parse ebuild info: %w", err)
-	}
-	info.Path = path
-
-	return info, fi, nil
+	return "", nil, fmt.Errorf("path %q not found (tried %q)", path, fullPath)
 }
-
-
