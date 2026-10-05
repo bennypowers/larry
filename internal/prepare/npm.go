@@ -386,54 +386,27 @@ func npmCreateDepsTarball(npmTarball, distDir, assetName string) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Extract npm package
-	extractDir := filepath.Join(tmpDir, "pkg")
-	if err := extractTarball(npmTarball, extractDir); err != nil {
-		return fmt.Errorf("extract npm package: %w", err)
-	}
-
-	// Find package.json — it might be at root or in a subdirectory
-	var pkgDir string
-	if _, err := os.Stat(filepath.Join(extractDir, "package.json")); err == nil {
-		pkgDir = extractDir
-	} else {
-		// Look for package.json in first-level subdirectories
-		entries, err := os.ReadDir(extractDir)
-		if err != nil {
-			return fmt.Errorf("list extracted contents: %w", err)
-		}
-		for _, entry := range entries {
-			if entry.IsDir() {
-				if _, err := os.Stat(filepath.Join(extractDir, entry.Name(), "package.json")); err == nil {
-					pkgDir = filepath.Join(extractDir, entry.Name())
-					break
-				}
-			}
-		}
-	}
-
-	if pkgDir == "" {
-		return fmt.Errorf("package.json not found in extracted npm package")
-	}
-
-	// Create .npmrc to suppress audit/fund prompts
-	npmrc := filepath.Join(pkgDir, ".npmrc")
-	if err := os.WriteFile(npmrc, []byte("audit=false\nfund=false\n"), 0644); err != nil {
-		return fmt.Errorf("write .npmrc: %w", err)
-	}
-
-	// Create a dedicated npm cache directory
+	// Create a dedicated npm cache directory (matching fish script: ./npm-cache)
 	npmCacheDir := filepath.Join(tmpDir, "npm-cache")
 	if err := os.MkdirAll(npmCacheDir, 0755); err != nil {
 		return fmt.Errorf("create npm cache dir: %w", err)
 	}
 
-	// Run npm install with --cache to populate the cache (NOT --offline).
-	// We intentionally do NOT use --offline here because we need npm to
-	// actually fetch all transitive dependencies and cache them.
+	// Create .npmrc to suppress audit/fund prompts in temp dir
+	npmrc := filepath.Join(tmpDir, ".npmrc")
+	if err := os.WriteFile(npmrc, []byte("audit=false\nfund=false\n"), 0644); err != nil {
+		return fmt.Errorf("write .npmrc: %w", err)
+	}
+
+	// Run npm install with --cache, passing the .tgz directly.
+	// This matches the fish script: npm --cache ./npm-cache install "$DISTDIR/$distfile_name"
+	// Passing the .tgz directly ensures npm reads the package.json/npm-shrinkwrap.json
+	// from inside the tarball and resolves all transitive dependencies through the cache.
+	// Unlike extracting first (which triggers shrinkwrap's resolved URLs to bypass cache),
+	// passing the .tgz directly causes npm to resolve from the registry cache.
 	var cmd *exec.Cmd
-	cmd = exec.Command("npm", "install", "--ignore-scripts", "--cache", npmCacheDir)
-	cmd.Dir = pkgDir
+	cmd = exec.Command("npm", "install", "--ignore-scripts", "--cache", npmCacheDir, npmTarball)
+	cmd.Dir = tmpDir
 	logger.Debug("running: " + strings.Join(cmd.Args, " "))
 	output, err := cmd.CombinedOutput()
 	if err != nil {

@@ -22,19 +22,23 @@ var manifestRunnerArgs = func(path string) []string {
 	return manifestArgs(path)
 }
 
-// runManifest executes pkgdev manifest on the given ebuild path.
+// runManifest executes pkgdev manifest with the specific ebuild path
+// (matching the fish script). This properly handles ${CARGO_CRATE_URIS}
+// expansion for cargo packages while only processing the target ebuild.
 func runManifest(overlay, path, distdir string) error {
+	// Use pkgdev manifest with the specific ebuild path (not category level).
+	// This matches the fish script behavior and properly handles ${CARGO_CRATE_URIS}
+	// for cargo packages while only processing the target ebuild.
 	binPath, err := manifestRunner()
 	if err != nil {
 		return err
 	}
 	logger.Debug("using runner: " + binPath)
-
-	args := manifestArgs(path)
-	logger.Debug("args: " + strings.Join(args, " "))
 	logger.Debug("ebuild: " + path)
 	logger.Debug("distdir: " + distdir)
 	logger.Debug("overlay: " + overlay)
+
+	args := []string{"manifest", "-d", distdir, path}
 
 	// Build env: use the larry distdir consistently (same as the fish script).
 	// All distfiles — old and new — are expected to be in DISTDIR.
@@ -46,14 +50,14 @@ func runManifest(overlay, path, distdir string) error {
 	cmd.Env = env
 	logger.Debug("running: " + strings.Join(cmd.Args, " "))
 
-	// Remove stale Manifest so ebuild digest generates fresh entries
+	// Remove stale Manifest so pkgdev manifest generates fresh entries
 	manifestPath := filepath.Join(filepath.Dir(path), "Manifest")
 	_ = os.Remove(manifestPath)
 
 	// Capture both stderr and stdout for debugging on failure
 	var stdoutBuf, stderrBuf strings.Builder
 
-	// Run from overlay root so ebuild finds the ebuild
+	// Run from overlay root so pkgdev finds the ebuilds
 	cmd.Dir = overlay
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf

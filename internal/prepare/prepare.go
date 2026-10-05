@@ -272,13 +272,19 @@ func getEnv(key string) string {
 
 // findManifestRunner finds the ebuild manifest runner binary.
 func findManifestRunner() (string, error) {
-	// Always use ebuild manifest — it processes only the specific ebuild
-	// instead of pkgdev which tries to verify ALL versions in the category.
+	// Use pkgdev manifest for category-level scanning. This matches the fish
+	// script and properly handles ${CARGO_CRATE_URIS} expansion for cargo
+	// packages, which requires scanning the full category.
+	if path, err := exec.LookPath("pkgdev"); err == nil {
+		logger.Debug("using pkgdev: " + path)
+		return path, nil
+	}
+	// Fallback to ebuild digest if pkgdev is not available.
 	if path, err := exec.LookPath("ebuild"); err == nil {
 		logger.Debug("using ebuild: " + path)
 		return path, nil
 	}
-	return "", fmt.Errorf("manifest runner not found: try installing portage (ebuild)")
+	return "", fmt.Errorf("manifest runner not found: try installing portage (pkgdev or ebuild)")
 }
 
 // manifestArgs returns the command-line arguments for running manifest.
