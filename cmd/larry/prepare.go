@@ -96,7 +96,11 @@ Flags:
 
 		// Force type if specified.
 		if prepareType != "" {
-			pcfg.ForceType = ebuild.PackageType(prepareType)
+			pt, err := ebuild.ParsePackageType(prepareType)
+			if err != nil {
+				return err
+			}
+			pcfg.ForceType = pt
 		}
 
 		// Determine what to prepare.

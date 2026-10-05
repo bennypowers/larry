@@ -1,20 +1,62 @@
 package ebuild
 
 import (
+	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
 
-// DetectType determines the package type from an ebuild file path.
-// It reads the ebuild content and checks for type-indicating patterns:
-//   - vendored:  releases/download/${PN}/ in SRC_URI (pre-vendored deps in GH releases)
-//   - npm:       mirror://npm/ in SRC_URI
-//   - cargo:     CRATES=" variable definition present
-//   - go:        inherits go-module eclass
-//   - rpi-kernel: inherits linux-info and has _p in PV
-//   - generic:   everything else
+// cratesRe matches a literal CRATES= assignment starting at column 0.
+var cratesRe = regexp.MustCompile(`(?m)^CRATES=`)
+
+// validPackageTypes lists the accepted package-type strings.
+var validPackageTypes = []string{"npm", "cargo", "go", "vendored", "rpi-kernel", "generic"}
+
+// detectFromRaw is the one and only detection algorithm, operating on the
+// raw, unexpanded ebuild text. Order: first match wins.
 //
-// The force type overrides auto-detection.
+//  1. TypeNPM      — strings.Contains(raw, "mirror://npm/")
+//  2. TypeCargo    — cratesRe.MatchString(raw) || ParseInherit(raw) contains "cargo"
+//  3. TypeGo       — ParseInherit(raw) contains "go-module"
+//  4. TypeVendored — strings.Contains(raw, "releases/download/${PN}/")
+//  5. TypeGeneric  — otherwise
+func detectFromRaw(raw string) PackageType {
+	// 1. npm
+	if strings.Contains(raw, "mirror://npm/") {
+		return TypeNPM
+	}
+
+	// 2. cargo: literal CRATES= block at column 0
+	if cratesRe.MatchString(raw) {
+		return TypeCargo
+	}
+
+	// 2b. cargo: inherits cargo eclass
+	for _, e := range ParseInherit(raw) {
+		if e == "cargo" {
+			return TypeCargo
+		}
+	}
+
+	// 3. go: inherits go-module
+	for _, e := range ParseInherit(raw) {
+		if e == "go-module" {
+			return TypeGo
+		}
+	}
+
+	// 4. vendored: the single literal substring (with tag segment included)
+	if strings.Contains(raw, "releases/download/${PN}/") {
+		return TypeVendored
+	}
+
+	// 5. generic
+	return TypeGeneric
+}
+
+// DetectType determines the package type from an ebuild file path.
+// It reads the ebuild content and delegates to detectFromRaw.
 func DetectType(ebuildPath string) (PackageType, error) {
 	return DetectTypeForce(ebuildPath, "")
 }
@@ -30,50 +72,7 @@ func DetectTypeForce(ebuildPath string, force PackageType) (PackageType, error) 
 		return TypeUnknown, err
 	}
 
-	content := string(data)
-
-	// Check for vendored: releases/download/${PN}/ in SRC_URI
-	if strings.Contains(content, "releases/download/") && strings.Contains(content, "${PN}/") {
-		return TypeVendored, nil
-	}
-
-	// Check for npm: mirror://npm/ in SRC_URI
-	if strings.Contains(content, "mirror://npm/") {
-		return TypeNPM, nil
-	}
-
-	// Check for cargo: CRATES=" variable definition
-	if strings.Contains(content, "CRATES=") {
-		return TypeCargo, nil
-	}
-
-	// Check for go: inherits go-module
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "INHERITED=") || strings.Contains(line, "inherit go-module") {
-			return TypeGo, nil
-		}
-	}
-
-	// Check for rpi-kernel: inherits linux-info and PV has _p
-	inheritsLinuxInfo := false
-	var pv string
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, "inherit linux-info") {
-			inheritsLinuxInfo = true
-		}
-		if strings.HasPrefix(line, "PV=") {
-			pv = strings.TrimPrefix(line, "PV=")
-			pv = strings.Trim(pv, `"' `)
-		}
-	}
-	if inheritsLinuxInfo && strings.Contains(pv, "_p") {
-		return TypeRpiKernel, nil
-	}
-
-	return TypeGeneric, nil
+	return detectFromRaw(string(data)), nil
 }
 
 // DetectTypeFromInfo determines the package type from parsed EbuildInfo,
@@ -93,51 +92,36 @@ func DetectTypeFromInfoForce(info *EbuildInfo, force PackageType) (PackageType, 
 		return TypeGeneric, nil
 	}
 
-	// Check for npm: mirror://npm/ in SRC_URI (more specific than vendored)
-	if strings.Contains(info.SRC_URI, "mirror://npm/") {
-		return TypeNPM, nil
+	// If Raw is populated, use it (the single detection path).
+	if info.Raw != "" {
+		return detectFromRaw(info.Raw), nil
 	}
 
-	// Check for cargo: CRATES= variable definition
-	if strings.Contains(info.SRC_URI, "CRATES=") {
-		return TypeCargo, nil
+	// Fallback: build a synthetic raw string from SRC_URI + inherit.
+	var raw strings.Builder
+	raw.WriteString(info.SRC_URI)
+	raw.WriteString("\ninherit ")
+	raw.WriteString(strings.Join(info.Inherit, " "))
+	raw.WriteString("\n")
+
+	return detectFromRaw(raw.String()), nil
+}
+
+// ParsePackageType validates a --type value.
+// Accepted: npm, cargo, go, vendored, rpi-kernel, generic.
+// "" → (TypeUnknown, nil). Anything else returns an error listing valid types.
+func ParsePackageType(s string) (PackageType, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return TypeUnknown, nil
 	}
 
-	// Check for vendored: releases/download/${PN}/ in SRC_URI
-	if strings.Contains(info.SRC_URI, "releases/download/") && strings.Contains(info.SRC_URI, "${PN}/") {
-		return TypeVendored, nil
-	}
-
-	// Check for cargo: CRATES=" variable definition
-	if strings.Contains(info.SRC_URI, "CRATES=") {
-		return TypeCargo, nil
-	}
-
-	// Check for go: inherits go-module (must come before cargo check in Inherit loop)
-	for _, inherited := range info.Inherit {
-		if inherited == "go-module" {
-			return TypeGo, nil
+	for _, pt := range validPackageTypes {
+		if s == pt {
+			return PackageType(pt), nil
 		}
 	}
 
-	// Check for cargo: inherits cargo (covers ebuilds that use ${CARGO_CRATE_URIS} instead of literal CRATES=)
-	for _, inherited := range info.Inherit {
-		if inherited == "cargo" {
-			return TypeCargo, nil
-		}
-	}
-
-	// Check for rpi-kernel: inherits linux-info and PV has _p
-	hasLinuxInfo := false
-	for _, inherited := range info.Inherit {
-		if inherited == "linux-info" {
-			hasLinuxInfo = true
-			break
-		}
-	}
-	if hasLinuxInfo && strings.Contains(info.PV(), "_p") {
-		return TypeRpiKernel, nil
-	}
-
-	return TypeGeneric, nil
+	return "", fmt.Errorf("unknown type %q: valid types are %s",
+		s, strings.Join(validPackageTypes, ", "))
 }
