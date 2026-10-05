@@ -6,8 +6,9 @@ import (
 )
 
 func main() {
-	if err := Execute(); err != nil {
+	err := Execute()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "larry: %v\n", err)
-		os.Exit(1)
 	}
+	os.Exit(exitCodeFor(err))
 }

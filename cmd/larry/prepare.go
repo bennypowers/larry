@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"bennypowers.dev/larry/internal/config"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/output"
 	"bennypowers.dev/larry/internal/prepare"
@@ -15,12 +14,10 @@ import (
 )
 
 var (
-	prepareType            string
-	prepareAll             bool
-	prepareDryRun          bool
-	prepareDistdir         string
-	prepareOverlay         string
-	prepareCleanupOrphans  bool
+	prepareType             string
+	prepareAll              bool
+	prepareDryRun           bool
+	prepareCleanupOrphans   bool
 )
 
 func init() {
@@ -32,10 +29,6 @@ func init() {
 		"prepare all ebuilds in the directory")
 	prepareCmd.Flags().BoolVarP(&prepareDryRun, "dry-run", "n", false,
 		"show what would be done without making changes")
-	prepareCmd.Flags().StringVar(&prepareDistdir, "distdir", "",
-		"distdir path for source downloads (default: $LARRY_DISTDIR or PORTAGE_DISTDIR)")
-	prepareCmd.Flags().StringVar(&prepareOverlay, "overlay", "",
-		"overlay root path (default: $LARRY_OVERLAY or /var/db/repos/gentoo)")
 	prepareCmd.Flags().BoolVar(&prepareCleanupOrphans, "cleanup", false,
 		"remove orphaned GitHub release assets on prepare failure")
 }
@@ -78,20 +71,17 @@ Flags:
 `,
 	Args: cobra.MinimumNArgs(0),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Determine distdir
-		distdir := prepareDistdir
-		if distdir == "" {
-			distdir = getEnv("LARRY_DISTDIR")
-		}
-		if distdir == "" {
-			distdir = getEnv("PORTAGE_DISTDIR")
+		// Resolve distdir through config.
+		distdir := cfg.ResolveDistdir(rootFlags.Distdir)
+
+		// Resolve overlay directory.
+		overlay, err := cfg.ResolveOverlay(rootFlags.Overlay)
+		if err != nil {
+			return fmt.Errorf("resolving overlay: %w", err)
 		}
 
-		// Resolve overlay directory (shared with all commands)
-		overlay := config.ResolveOverlay(prepareOverlay)
-
-		// Create config
-		cfg := &prepare.PrepareConfig{
+		// Create config.
+		pcfg := &prepare.PrepareConfig{
 			DryRun:                  prepareDryRun,
 			Distdir:                 distdir,
 			Overlay:                 overlay,
@@ -99,28 +89,28 @@ Flags:
 			CleanupOrphanedAssets:   prepareCleanupOrphans,
 		}
 
-		// Resolve GitHub repo from overlay git remote (for release uploads)
+		// Resolve GitHub repo from overlay git remote (for release uploads).
 		if overlay != "" {
 			if repo, err := resolveGitHubRepo(overlay); err == nil && repo != "" {
-				cfg.GitHubRepo = repo
+				pcfg.GitHubRepo = repo
 			}
 		}
 
-		// Force type if specified
+		// Force type if specified.
 		if prepareType != "" {
-			cfg.ForceType = ebuild.PackageType(prepareType)
+			pcfg.ForceType = ebuild.PackageType(prepareType)
 		}
 
-		// Determine what to prepare
+		// Determine what to prepare.
 		switch {
 		case prepareAll && len(args) == 0:
-			// --all without args: prepare all ebuilds in overlay root
-			return prepare.PrepareAll(overlay, cfg)
+			// --all without args: prepare all ebuilds in overlay root.
+			return prepare.PrepareAll(overlay, pcfg)
 		case len(args) == 0:
-			// No args: show help
+			// No args: show help.
 			return cmd.Help()
 		case len(args) == 1 && !prepareAll:
-			// Single path (file or directory)
+			// Single path (file or directory).
 			path := args[0]
 			_, fi, err := resolvePrepareTarget(path, overlay)
 			if err != nil {
@@ -128,16 +118,16 @@ Flags:
 			}
 
 			if fi.IsDir() {
-				// Directory: prepare all ebuilds
-				return prepare.PrepareAll(path, cfg)
+				// Directory: prepare all ebuilds.
+				return prepare.PrepareAll(path, pcfg)
 			}
 
-			// Single file: prepare that ebuild
-			return prepare.PrepareFromFile(path, cfg)
+			// Single file: prepare that ebuild.
+			return prepare.PrepareFromFile(path, pcfg)
 		default:
-			// Multiple paths: prepare each
+			// Multiple paths: prepare each.
 			for _, path := range args {
-				if err := prepare.PrepareFromFile(path, cfg); err != nil {
+				if err := prepare.PrepareFromFile(path, pcfg); err != nil {
 					return fmt.Errorf("prepare %s: %w", path, err)
 				}
 			}
@@ -149,10 +139,10 @@ Flags:
 // resolvePrepareTarget determines if a path is a file or directory.
 // If it's a bare package name (e.g., "sys-apps/foo"), resolve to the overlay path.
 func resolvePrepareTarget(path, overlay string) (*ebuild.EbuildInfo, os.FileInfo, error) {
-	// Check if it's a file
+	// Check if it's a file.
 	fi, err := os.Stat(path)
 	if err != nil {
-		// Not a file or directory — try resolving as category/package
+		// Not a file or directory — try resolving as category/package.
 		if parts := filepath.SplitList(path); len(parts) == 2 {
 			path = filepath.Join(overlay, parts[0], parts[1])
 			fi, err = os.Stat(path)
@@ -160,7 +150,7 @@ func resolvePrepareTarget(path, overlay string) (*ebuild.EbuildInfo, os.FileInfo
 				return nil, nil, fmt.Errorf("path %q not found (tried %q)", path, filepath.Join(overlay, parts[0], parts[1]))
 			}
 		} else {
-			// Try overlay/category/package
+			// Try overlay/category/package.
 			fullPath := filepath.Join(overlay, path)
 			fi, err = os.Stat(fullPath)
 			if err != nil {
@@ -174,7 +164,7 @@ func resolvePrepareTarget(path, overlay string) (*ebuild.EbuildInfo, os.FileInfo
 		return nil, fi, nil
 	}
 
-	// Single ebuild file — parse info for validation
+	// Single ebuild file — parse info for validation.
 	info, err := prepare.NewEbuildInfoFromPath(path)
 	if err != nil {
 		return nil, fi, fmt.Errorf("parse ebuild info: %w", err)
@@ -182,11 +172,6 @@ func resolvePrepareTarget(path, overlay string) (*ebuild.EbuildInfo, os.FileInfo
 	info.Path = path
 
 	return info, fi, nil
-}
-
-// getEnv is a wrapper for os.Getenv, exported for testability.
-func getEnv(key string) string {
-	return os.Getenv(key)
 }
 
 // printPrepareResult prints the result of a prepare operation.
@@ -204,7 +189,7 @@ func resolveGitHubRepo(overlay string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read git config: %w", err)
 	}
-	// Match: url = git@github.com:owner/repo.git or url = https://github.com/owner/repo.git
+	// Match: url = git@github.com:owner/repo.git or url = https://github.com/owner/repo.git.
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(strings.ToLower(line))
 		if strings.HasPrefix(line, "url = git@github.com:") {

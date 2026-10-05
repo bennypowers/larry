@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"bennypowers.dev/larry/internal/config"
 	"bennypowers.dev/larry/internal/importcmd"
 
 	"github.com/spf13/cobra"
@@ -52,9 +51,19 @@ Examples:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		catPkg := args[0]
 
+		// Resolve overlays through config.
+		sourceOverlay, err := cfg.ResolveOverlay(importFrom)
+		if err != nil {
+			return fmt.Errorf("resolving source overlay: %w", err)
+		}
+		targetOverlay, err := cfg.ResolveOverlay("")
+		if err != nil {
+			return fmt.Errorf("resolving target overlay: %w", err)
+		}
+
 		importCfg := &importcmd.ImportConfig{
-			SourceOverlay: config.ResolveOverlay(importFrom),
-			TargetOverlay: config.ResolveOverlay(""),
+			SourceOverlay: sourceOverlay,
+			TargetOverlay: targetOverlay,
 			DryRun:        importDry,
 			Force:         importForce,
 		}

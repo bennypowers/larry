@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 
 	"bennypowers.dev/larry/internal/atom"
-	"bennypowers.dev/larry/internal/config"
 	"bennypowers.dev/larry/internal/test"
 
 	"github.com/spf13/cobra"
@@ -15,7 +14,6 @@ var (
 	testCompile  bool
 	testMerge    bool
 	testPretend  bool
-	testOverlay  string
 	testDistdir  string
 	testPhases   []string
 	testEmerge bool
@@ -30,10 +28,6 @@ func init() {
 		"run clean + fetch + unpack + compile + install + qmerge phases")
 	testCmd.Flags().BoolVar(&testPretend, "pretend", false,
 		"show what would be done without executing")
-	testCmd.Flags().StringVar(&testOverlay, "overlay", "",
-		"overlay root path (default: $LARRY_OVERLAY or git CWD)")
-	testCmd.Flags().StringVar(&testDistdir, "distdir", "",
-		"distfiles directory (default: $DISTDIR)")
 	testCmd.Flags().BoolVarP(&testEmerge, "emerge", "e", false,
 		"run in podman container with GPU passthrough (requires Containerfile.larry-test)")
 	testCmd.Flags().StringArrayVar(&testPhases, "phase", nil,
@@ -67,15 +61,18 @@ Examples:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		input := args[0]
 
-		// Resolve overlay directory (shared with all commands)
-		overlayDir := config.ResolveOverlay(testOverlay)
+		// Resolve overlay directory.
+		overlayDir, err := cfg.ResolveOverlay(rootFlags.Overlay)
+		if err != nil {
+			return fmt.Errorf("resolving overlay: %w", err)
+		}
 
-		// Resolve ebuild path
+		// Resolve ebuild path.
 		var ebuildPath string
 		if filepath.IsAbs(input) {
 			ebuildPath = input
 		} else {
-			// Treat as cat/pkg — resolve atom and find latest ebuild
+			// Treat as cat/pkg — resolve atom and find latest ebuild.
 			a, err := atom.ParseAtom(overlayDir, input)
 			if err != nil {
 				return fmt.Errorf("resolving atom %q: %w", input, err)
@@ -87,11 +84,12 @@ Examples:
 			ebuildPath = pe.Path
 		}
 
-		// Determine mode: container or local
+		// Determine mode: container or local.
 		if testEmerge {
+			distdir := cfg.ResolveDistdir(rootFlags.Distdir)
 			cfg := &test.ContainerConfig{
 				Overlay:   overlayDir,
-				Distdir:   testDistdir,
+				Distdir:   distdir,
 				ImageName: "larry-test",
 				UseTUI:    false,
 			}
@@ -101,7 +99,7 @@ Examples:
 			}
 			fmt.Println("Container test completed successfully.")
 		} else {
-			// Local mode
+			// Local mode.
 			runner := test.NewCmdRunner()
 			err := test.TestLocal(ebuildPath, nil, runner, testPretend, true)
 			if err != nil {

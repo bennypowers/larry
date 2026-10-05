@@ -17,31 +17,35 @@ var FilePath string
 
 // Config holds all configuration for larry.
 type Config struct {
-	Verbose     int
-	Quiet       bool
-	CacheDir    string
-	Distdir     string
-	Color       string
-	DryRun      bool
-	Jobs        int
-	GitHubToken string
-	Remote      string
-	Overlay     string
+	Verbose       int
+	Quiet         bool
+	CacheDir      string
+	Distdir       string
+	Color         string
+	DryRun        bool
+	Jobs          int
+	GitHubToken   string
+	Remote        string
+	Overlay       string
+	MaintainerName  string
+	MaintainerEmail string
 }
 
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		Verbose:     0,
-		Quiet:       false,
-		Color:       "auto",
-		DryRun:      false,
-		Jobs:        0,
-		Remote:      "origin",
-		CacheDir:    defaultCacheDir(),
-		Distdir:     "",
-		Overlay:     "",
-		GitHubToken: "",
+		Verbose:       0,
+		Quiet:         false,
+		Color:         "auto",
+		DryRun:        false,
+		Jobs:          0,
+		Remote:        "origin",
+		CacheDir:      defaultCacheDir(),
+		Distdir:       "",
+		Overlay:       "",
+		GitHubToken:   "",
+		MaintainerName:  "",
+		MaintainerEmail: "",
 	}
 }
 
@@ -74,12 +78,12 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// Apply config file values (file > defaults)
+	// Apply config file values (file > defaults).
 	if err := applyConfig(v, c); err != nil {
 		return nil, err
 	}
 
-	// Apply environment overrides (env > file)
+	// Apply environment overrides (env > file).
 	applyEnvOverrides(c)
 
 	return c, nil
@@ -115,6 +119,12 @@ func applyConfig(v *viper.Viper, c *Config) error {
 	}
 	if v.Get("quiet") != nil {
 		c.Quiet = v.GetBool("quiet")
+	}
+	if v.Get("maintainer.name") != nil {
+		c.MaintainerName = v.GetString("maintainer.name")
+	}
+	if v.Get("maintainer.email") != nil {
+		c.MaintainerEmail = v.GetString("maintainer.email")
 	}
 	return nil
 }
@@ -154,39 +164,78 @@ func applyEnvOverrides(c *Config) {
 	if v := os.Getenv("LARRY_QUIET"); v != "" {
 		c.Quiet = v == "true" || v == "1"
 	}
+	if v := os.Getenv("LARRY_MAINTAINER_NAME"); v != "" {
+		c.MaintainerName = v
+	}
+	if v := os.Getenv("LARRY_MAINTAINER_EMAIL"); v != "" {
+		c.MaintainerEmail = v
+	}
 }
 
 // ResolveOverlay determines the overlay directory using the following priority:
 //
-//	1. override — explicit value from --overlay flag or positional argument
+//	1. override — explicit value from --overlay flag
 //	2. cfg.Overlay — from config file or $LARRY_OVERLAY env var
 //	3. git rev-parse --show-toplevel — current working directory's git root
-//	4. /var/db/repos/gentoo — fallback to the main tree
 //
-// This is the single source of truth for overlay directory resolution across
-// all larry commands. Since larry is designed for maintaining a local overlay
-// git repo, git detection is the natural default when no explicit path is set.
-func (c *Config) ResolveOverlay(override string) string {
+// Returns an error when no overlay can be resolved. The user must supply one
+// via --overlay, $LARRY_OVERLAY, the overlay config key, or by running
+// inside a git repo that is the overlay.
+func (c *Config) ResolveOverlay(override string) (string, error) {
+	if override != "" {
+		return override, nil
+	}
+	if c.Overlay != "" {
+		return c.Overlay, nil
+	}
+	if gitDir, err := git.ResolveOverlayDir(); err == nil && gitDir != "" {
+		return gitDir, nil
+	}
+	return "", fmt.Errorf("no overlay directory found; set it via --overlay, $LARRY_OVERLAY, or the overlay config key (or run inside a git repo)")
+}
+
+// ResolveDistdir returns the distdir path using the following priority:
+//
+//	1. override — explicit value from --distdir flag
+//	2. $LARRY_DISTDIR
+//	3. cfg.Distdir — from config file
+//	4. $PORTAGE_DISTDIR
+//	5. <cacheDir>/distfiles
+//
+// This function never returns an empty string.
+func (c *Config) ResolveDistdir(override string) string {
 	if override != "" {
 		return override
 	}
-	if c.Overlay != "" {
-		return c.Overlay
+	if v := os.Getenv("LARRY_DISTDIR"); v != "" {
+		return v
 	}
-	if gitDir, err := git.ResolveOverlayDir(); err == nil && gitDir != "" {
-		return gitDir
+	if c.Distdir != "" {
+		return c.Distdir
 	}
-	return "/var/db/repos/gentoo"
+	if v := os.Getenv("PORTAGE_DISTDIR"); v != "" {
+		return v
+	}
+	return filepath.Join(c.ResolveCacheDir(""), "distfiles")
 }
 
-// ResolveOverlayDir resolves the overlay directory with the same priority
-// as Config.ResolveOverlay but using DefaultConfig. This is the recommended
-// entry point for commands that need overlay resolution.
+// ResolveCacheDir returns the cache directory using the following priority:
 //
-//	ResolveOverlay("")           — full resolution with env/git detection
-//	ResolveOverlay("/custom")    — force custom path
-func ResolveOverlay(override string) string {
-	return DefaultConfig().ResolveOverlay(override)
+//	1. override — explicit value from --cache-dir flag
+//	2. $LARRY_CACHE_DIR
+//	3. cfg.CacheDir — from config file
+//	4. defaultCacheDir()
+func (c *Config) ResolveCacheDir(override string) string {
+	if override != "" {
+		return override
+	}
+	if v := os.Getenv("LARRY_CACHE_DIR"); v != "" {
+		return v
+	}
+	if c.CacheDir != "" {
+		return c.CacheDir
+	}
+	return defaultCacheDir()
 }
 
 func defaultCacheDir() string {

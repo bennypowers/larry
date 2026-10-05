@@ -7,10 +7,8 @@ import (
 	"path/filepath"
 
 	"bennypowers.dev/larry/internal/bump"
-	"bennypowers.dev/larry/internal/config"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/git"
-	"bennypowers.dev/larry/internal/logger"
 	"bennypowers.dev/larry/internal/prepare"
 	"bennypowers.dev/larry/internal/provider"
 	"bennypowers.dev/larry/internal/providers"
@@ -23,10 +21,7 @@ var (
 	bumpVersion     string
 	bumpPrereleases bool
 	bumpDryRun      bool
-	bumpOverlay     string
-	bumpDistdir     string
 	bumpForceType   string
-	bumpVerbose     int
 )
 
 var bumpCmd = cobra.Command{
@@ -73,30 +68,23 @@ func init() {
 		"include pre-release versions in auto-version lookup")
 	bumpCmd.Flags().BoolVar(&bumpDryRun, "dry-run", false,
 		"show what would be done without making changes")
-	bumpCmd.Flags().StringVar(&bumpOverlay, "overlay", "",
-		"overlay root path (default: $LARRY_OVERLAY or /var/db/repos/gentoo)")
-	bumpCmd.Flags().StringVar(&bumpDistdir, "distdir", "",
-		"distdir path for source downloads (default: $LARRY_DISTDIR or PORTAGE_DISTDIR)")
 	bumpCmd.Flags().StringVarP(&bumpForceType, "type", "t", "",
 		"force package type (npm, cargo, go, vendored, generic)")
-	bumpCmd.Flags().CountVarP(&bumpVerbose, "verbose", "v",
-		"verbose output (-v for debug, -vv for trace)")
 
 	bumpCmd.RunE = runBump
 }
 
 func runBump(cmd *cobra.Command, args []string) error {
-	// Set verbose level
-	logger.Verbose = bumpVerbose >= 1
-
 	// Resolve overlay root and package path.
 	var overlayRoot, pkgPath string
+	var err error
+	overlayRoot, err = cfg.ResolveOverlay(rootFlags.Overlay)
+	if err != nil {
+		return fmt.Errorf("resolving overlay: %w", err)
+	}
 	if len(args) > 0 {
-		// User provided a category/package path — resolve overlay from git env
-		overlayRoot = config.ResolveOverlay(bumpOverlay)
 		pkgPath = filepath.Join(overlayRoot, args[0])
 	} else {
-		overlayRoot = config.ResolveOverlay(bumpOverlay)
 		pkgPath = overlayRoot
 	}
 
@@ -130,7 +118,7 @@ func runBump(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Run bump
+	// Run bump.
 	result, err := bump.Bump(bump.BumpConfig{
 		Dir:             pkgPath,
 		Mode:            mode,
@@ -142,26 +130,16 @@ func runBump(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("bump failed: %w", err)
 	}
 
-	// Print result
+	// Print result.
 	if err := printBumpResult(cmd.OutOrStdout(), result); err != nil {
 		return err
 	}
 
-	// Run prepare on the new ebuild (downloads distfiles, generates Manifest)
+	// Run prepare on the new ebuild (downloads distfiles, generates Manifest).
 	// Revision bumps also benefit from prepare (manifest regeneration, etc.)
 
-	// Determine distdir (same default as fish script)
-	distdir := bumpDistdir
-	if distdir == "" {
-		distdir = os.Getenv("LARRY_DISTDIR")
-	}
-	if distdir == "" {
-		distdir = os.Getenv("PORTAGE_DISTDIR")
-	}
-	if distdir == "" {
-		home, _ := os.UserHomeDir()
-		distdir = filepath.Join(home, ".cache", "larry", "distfiles")
-	}
+	// Resolve distdir through config (override → env → config → PORTAGE_DISTDIR → cache).
+	distdir := cfg.ResolveDistdir(rootFlags.Distdir)
 
 	// Determine force type
 	var forceType ebuild.PackageType
@@ -177,22 +155,28 @@ func runBump(cmd *cobra.Command, args []string) error {
 		RevisionBump:            mode == bump.BumpModeRevision,
 	}
 
-	logger.Debug("prepare distdir=" + distdir + " forceType=" + string(forceType))
+	log.Debug("prepare distdir=" + distdir + " forceType=" + string(forceType))
 	fmt.Fprintf(cmd.OutOrStdout(), "\nPreparing %s...\n", result.NewFile)
 	if err := prepare.PrepareFromFile(result.NewFile, pcfg); err != nil {
-		// Delete the stale new ebuild — prepare rollback restores from backup
+			// Delete the stale new ebuild — prepare rollback restores from backup
 		// but the backup was of the new file itself, so it persists on disk.
 		os.Remove(result.NewFile)
 		return fmt.Errorf("prepare failed: %w", err)
 	}
 
-	// Commit the bump (only files in the package directory)
-	if args[0] != "" {
+	// Commit the bump (only files in the package directory).
+	var pkgName string
+	if len(args) > 0 {
+		pkgName = args[0]
+	} else {
+		pkgName = result.PackageName
+	}
+	if pkgName != "" {
 		var msg string
 		if result.Revision > 0 {
-			msg = fmt.Sprintf("bump(%s): revision -r%d", args[0], result.Revision)
+			msg = fmt.Sprintf("bump(%s): revision -r%d", pkgName, result.Revision)
 		} else {
-			msg = fmt.Sprintf("bump(%s): %s", args[0], result.NewVersion)
+			msg = fmt.Sprintf("bump(%s): %s", pkgName, result.NewVersion)
 		}
 		repo, err := git.Open(overlayRoot)
 		if err != nil {
@@ -200,12 +184,11 @@ func runBump(cmd *cobra.Command, args []string) error {
 		}
 		// Stage only files in the package directory to avoid picking up
 		// stale files from previous failed bumps in other packages.
-		pkgDir := args[0]
-		commitHash, err := repo.CommitWithDir(msg, pkgDir)
+		commitHash, err := repo.CommitWithDir(msg, pkgName)
 		if err != nil {
 			return fmt.Errorf("commit: %w", err)
 		}
-		logger.Debug("committed " + commitHash[:7] + ": " + msg)
+		log.Debug("committed " + commitHash[:7] + ": " + msg)
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "Done.")

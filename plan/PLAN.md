@@ -27,9 +27,9 @@ Hard facts at audit time:
 | `larry test --compile/--merge/--phase` | flags parsed then discarded; always runs `clean` only |
 | `larry test --emerge` | cannot work — `Containerfile.larry-test` is Ubuntu with no Portage |
 | `larry import` | writes to `<overlay>/var/db/repos/.../foo-1.0.0.ebuild/foo-1.0.0.ebuild` |
-| `config.Load()` | **zero non-test callers** — config file and every `LARRY_*` var inert |
-| global flags | registered non-persistently — `larry upstream --distdir` → "unknown flag" |
-| bare `larry` | prints `larry: hello` |
+| `config.Load()` | ✅ wired in `PersistentPreRunE` (plan 13a) |
+| global flags | ✅ persistent flags registered on root (plan 13a) |
+| bare `larry` | ✅ exits 1, no "hello" (plan 13a) |
 
 Phase 2 is therefore **parity and correctness**, not new surface area.
 
@@ -43,10 +43,10 @@ corrective work is in Phase 2. Status corrections:
 
 | # | Task | File | Real status |
 |---|------|------|-------------|
-| 1 | Foundation (scaffold, config, logging, CLI) | `01-PLAN-FOUNDATION.md` | ⚠️ config + flags not wired → `13` |
+| 1 | Foundation (scaffold, config, logging, CLI) | `01-PLAN-FOUNDATION.md` | ✅ (13a) |
 | 2 | Core domain (version, remoteid, provider registry) | `02-PLAN-CORE-DOMAIN.md` | ⚠️ version ordering + metadata.xml broken → `14`, `15` |
 | 3 | Infra: rate limiter, retry, HTTP client | `03-PLAN-INFRA.md#T7` | ✅ |
-| 3b | go-git helper + `gh` CLI wrapper | `03-PLAN-INFRA.md#T8` | ⚠️ wrappers bypassed by callers → `13` |
+| 3b | go-git helper + `gh` CLI wrapper | `03-PLAN-INFRA.md#T8` | ✅ (13a) |
 | 3c | Provider implementations (6 providers) | `03-PLAN-INFRA.md#T8b` | ⚠️ GitLab/SourceHut dead on arrival → `15`, `17b` |
 | 4 | Ebuild helper (portageq, info, SRC_URI, detection) | `04-PLAN-EBUILD.md` | ⚠️ 3 rival expanders, 2 rival detectors → `20a`, `20b` |
 | 5 | Upstream command | `05-PLAN-UPSTREAM.md` | ⚠️ discovery/output/deps defects → `16`–`19` |
@@ -75,7 +75,7 @@ stated acceptance check. Respect preconditions — the first four unblock the re
 | #    | ?    | File                                | Scope                                                                                                                                                                                                                                                                            | Precondition          |
 | ---- | ---- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
 | 12   | ✅   | `12-PLAN-ATOM.md`                   | `internal/atom`: one atom/filename parser; kill 5 duplicates                                                                                                                                                                                                                     | —                     |
-| 13a  |      | `13a-PLAN-CLI-HARNESS.md`           | `ExitError`+`main.go`, the `cmd/larry` test harness (`execCmd`/`fixtureOverlay`), persistent flags incl. a root `--overlay`, `config.Load()` wiring, `ResolveOverlay`/`ResolveDistdir`/`ResolveCacheDir`, maintainer keys                                                        | —                     |
+| 13a  | ✅   | `13a-PLAN-CLI-HARNESS.md`           | `ExitError`+`main.go`, the `cmd/larry` test harness (`execCmd`/`fixtureOverlay`), persistent flags incl. a root `--overlay`, `config.Load()` wiring, `ResolveOverlay`/`ResolveDistdir`/`ResolveCacheDir`, maintainer keys                                                        | —                     |
 | 13b  |      | `13b-PLAN-CLI-OUTPUT.md`            | `internal/output` rewrite (`Msg`/`Warn`/`Error` prefixes, injectable writers), replace bare `fmt.Printf` in the commands, `(*Config).ResolveGitHubRepo` via go-git, read `--remote`                                                                                              | 13a                   |
 | 14   |      | `14-PLAN-VERSION.md`                | Gentoo suffix order (`_p`, `_pre`), `IsPrerelease`, lenient parse, `v`-prefix                                                                                                                                                                                                    | —                     |
 | 15   |      | `15-PLAN-REMOTEID.md`               | `metadata.xml` parsing; GitLab/SourceHut/`.git` repo extraction                                                                                                                                                                                                                  | —                     |
@@ -177,12 +177,12 @@ docs/ · testdata/ · Containerfile.larry-test · Makefile
 
 | Package | Test funcs | Source files | Note |
 |---|---|---|---|
-| `cmd/larry` | **0** | 7 | Every CLI-wiring defect in plans 13, 16, 21, 26, 28 lives here |
+| `cmd/larry` | **15** | 10 | CLI harness, exit codes, persistent flags, config wiring (plan 13a). Plans 16, 21, 26, 28 add more. |
 | `internal/logger` | 0 | 1 | Minor |
 | `internal/prepare` | 123 | 9 | 1 failing; highest lint-issue count (29) |
 
 **`cmd/larry` has no tests at all.** That is the single largest gap and the direct cause
-of the worst defects: discarded flags, `config.Load()` never called, the `larry: hello`
+of the worst defects: discarded flags (now fixed 13a), `config.Load()` (now wired 13a), the `larry: hello` (now deleted 13a),
 debug print, the zero-arg panic, and `--distdir` rejected on every subcommand. Plan 13
 13a builds a reusable `cmd/larry` test harness (`execCmd`, `fixtureOverlay`) as its first
 deliverable; plans 16, 18, 20b, 21, 26 and 28 consume it.
