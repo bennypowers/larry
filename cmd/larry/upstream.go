@@ -151,7 +151,9 @@ Examples:
 				}
 
 				var buf strings.Builder
-				upstream.RenderTable(&buf, results)
+				if err := upstream.RenderTable(&buf, results, upstream.HyperlinksEnabled()); err != nil {
+					return "Error rendering table: " + err.Error()
+				}
 				buf.WriteString("\nCheck complete. Cache stored in: " + upstream.DefaultCachePath() + " (expires after 6h)\n")
 				buf.WriteString("Use --fresh to force a refresh.\n")
 				return buf.String()

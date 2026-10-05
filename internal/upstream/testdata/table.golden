@@ -1,0 +1,13 @@
+┌────────────────────┬─────────────┬─────────┬─────────────┬────────────────────────────┐
+│ Package            │ Current     │ Latest  │ Status      │ Source                     │
+├────────────────────┼─────────────┼─────────┼─────────────┼────────────────────────────┤
+│ dev-util/alpha     │ 1.0.0       │ 1.1.0   │ OUTDATED    │  acme/alpha               │
+│   dev-util/beta    │ 2.0.0       │ 2.0.0   │ UP-TO-DATE  │  gitlab.gnome.org/g/beta  │
+│ dev-util/gamma     │ 3.0.0       │ 2.9.0   │ AHEAD       │  acme/gamma               │
+│ dev-util/delta     │ 4.0.0       │ 4.1.0   │ NEWER-TAG   │  git.sr.ht/~u/delta       │
+│ dev-python/epsilon │ 5.0.0       │ 5.0.0   │ LIVE        │  epsilon                  │
+│ dev-util/zeta      │ 9999 (live) │ 6.0.0   │ HAS-RELEASE │  @acme/zeta               │
+│ dev-util/eta       │ 7.0.0       │ nightly │ CHECK-TAG   │  acme/eta                 │
+│ dev-util/theta     │ 8.0.0       │         │ DEPRECATED  │ deprecated → dev-util/iota │
+│ dev-util/kappa     │ 9.0.0       │         │ UNKNOWN     │ unknown                    │
+└────────────────────┴─────────────┴─────────┴─────────────┴────────────────────────────┘

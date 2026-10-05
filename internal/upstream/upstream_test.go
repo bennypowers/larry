@@ -597,7 +597,7 @@ func TestUpstreamResult_String(t *testing.T) {
 		Current: "1.0.0",
 		Latest:  "2.0.0",
 		Status:  StatusOutdated,
-		Source:  "https://pypi.org",
+		Source:  SourceInfo{URL: "https://pypi.org"},
 	}
 	s := result.String()
 	if !strings.Contains(s, "dev-python/requests") {

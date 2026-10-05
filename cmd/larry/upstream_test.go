@@ -189,3 +189,32 @@ SLOT="0"
 	// by cobra's SetOut). That's fine — the internal tests verify content;
 	// this just ensures no crash/error.
 }
+
+// TestUpstreamNoRawOSC8WhenColorNever verifies that LARRY_COLOR=never
+// suppresses OSC-8 hyperlink escapes from upstream output (plan 19, D4).
+func TestUpstreamNoRawOSC8WhenColorNever(t *testing.T) {
+	t.Setenv("LARRY_COLOR", "never")
+	ov := fixtureUpstream(t, map[string]string{
+		"dev-util/cem/cem-1.0.0.ebuild": `EAPI=8
+DESCRIPTION="Test"
+SRC_URI=""
+LICENSE="MIT"
+SLOT="0"
+`,
+	})
+	_, stdout, err := execCmd(t, "upstream", "--overlay", ov, "-v")
+	if err != nil {
+		// If there's a setup error (no providers), the output is just a message;
+		// check stdout for escape sequences anyway.
+		if strings.Contains(stdout, "\033]8;;") || strings.Contains(stdout, "]8;;") {
+			t.Errorf("stdout contains OSC-8 escape: %s", stdout)
+		}
+		return
+	}
+	if strings.Contains(stdout, "\033]8;;") {
+		t.Errorf("stdout contains OSC-8 escape: %s", stdout)
+	}
+	if strings.Contains(stdout, "]8;;") {
+		t.Errorf("stdout contains literal ]8;;: %s", stdout)
+	}
+}

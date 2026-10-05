@@ -484,32 +484,33 @@ func ResolveRemoteId(ei *ebuild.EbuildInfo, providerType string) (*remoteid.Remo
 }
 
 // resolveSourceLabel builds a short source label like "GitHub:owner/repo" or "PyPI:name".
+// Uses the Label* constants so the producer and glyph matcher cannot drift apart.
 func resolveSourceLabel(rid *remoteid.RemoteId) string {
 	switch rid.Type {
 	case remoteid.TypePyPI:
-		return "PyPI:" + rid.Name
+		return LabelPyPI + rid.Name
 	case remoteid.TypeNPM:
-		return "npm:" + rid.Name
+		return LabelNPM + rid.Name
 	case remoteid.TypeGitHub:
 		if rid.Owner != "" && rid.Repo != "" {
-			return "GitHub:" + rid.Owner + "/" + rid.Repo
+			return LabelGitHub + rid.Owner + "/" + rid.Repo
 		}
-		return "GitHub:"
+		return LabelGitHub
 	case remoteid.TypeGitLab:
 		if rid.Host != "" && rid.Path != "" {
-			return "GitLab:" + rid.Host + "/" + rid.Path
+			return LabelGitLab + rid.Host + "/" + rid.Path
 		}
-		return "GitLab:"
+		return LabelGitLab
 	case remoteid.TypeCodeberg:
 		if rid.Owner != "" && rid.Repo != "" {
-			return "Codeberg:" + rid.Owner + "/" + rid.Repo
+			return LabelCodeberg + rid.Owner + "/" + rid.Repo
 		}
-		return "Codeberg:"
+		return LabelCodeberg
 	case remoteid.TypeSourceHut:
 		if rid.Host != "" && rid.Path != "" {
-			return "Sourcehut:" + rid.Host + "/" + rid.Path
+			return LabelSourceHut + rid.Host + "/" + rid.Path
 		}
-		return "Sourcehut:"
+		return LabelSourceHut
 	default:
 		return "unknown"
 	}
@@ -533,6 +534,14 @@ func resolveSourceURL(rid *remoteid.RemoteId) string {
 	default:
 		return ""
 	}
+}
+
+// resolveSourceInfo computes SourceInfo (label, URL, glyph) from a RemoteId.
+func resolveSourceInfo(rid *remoteid.RemoteId) SourceInfo {
+	info := SourceInfo{Label: resolveSourceLabel(rid), URL: resolveSourceURL(rid)}
+	// Resolve the glyph — SourceGlyph in output.go uses the label constants.
+	info.Glyph = SourceGlyph(info)
+	return info
 }
 
 // buildResult builds an UpstreamResult from version comparison.
@@ -662,25 +671,23 @@ func resolveOne(
 
 				if latestV != nil {
 					return UpstreamResult{
-						Package:     einfo.Category + "/" + einfo.Pkg,
-						Current:     "9999 (live)",
-						Latest:      latestV.Format(),
-						Status:      StatusHasRelease,
-						Source:      resolveSourceURL(rid),
-						SourceLabel: resolveSourceLabel(rid),
-						Depth:       depth,
+						Package: einfo.Category + "/" + einfo.Pkg,
+						Current: "9999 (live)",
+						Latest:  latestV.Format(),
+						Status:  StatusHasRelease,
+						Source:  resolveSourceInfo(rid),
+						Depth:   depth,
 					}
 				}
 			}
 		}
 		// No upstream release found
 		return UpstreamResult{
-			Package:   einfo.Category + "/" + einfo.Pkg,
-			Current:   "9999 (live)",
-			Latest:    "",
-			Status:    StatusLive,
-			SourceLabel: "",
-			Depth:     depth,
+			Package: einfo.Category + "/" + einfo.Pkg,
+			Current: "9999 (live)",
+			Latest:  "",
+			Status:  StatusLive,
+			Depth:   depth,
 		}
 	}
 
@@ -742,13 +749,12 @@ func resolveOne(
 			if rerr == nil && res != nil && res.ByDate {
 				status, latest := deriveTagStatus(einfo.PVVal, res)
 				return UpstreamResult{
-					Package:     einfo.Category + "/" + einfo.Pkg,
-					Current:     einfo.PVVal,
-					Latest:      latest,
-					Status:      status,
-					Source:      resolveSourceURL(rid),
-					SourceLabel: resolveSourceLabel(rid),
-					Depth:       depth,
+					Package: einfo.Category + "/" + einfo.Pkg,
+					Current: einfo.PVVal,
+					Latest:  latest,
+					Status:  status,
+					Source:  resolveSourceInfo(rid),
+					Depth:   depth,
 				}
 			}
 			if rerr == nil && res != nil && res.Version != "" {
@@ -791,8 +797,7 @@ func resolveOne(
 
 	currentV, _ := version.Parse(einfo.PVVal)
 	result := buildResult(einfo, latestV, currentV, rid.Type)
-	result.Source = sourceURL
-	result.SourceLabel = sourceLabel
+	result.Source = SourceInfo{Label: sourceLabel, URL: sourceURL, Glyph: SourceGlyph(SourceInfo{Label: sourceLabel})}
 	result.Depth = depth
 	return *result
 }
@@ -861,12 +866,12 @@ func walkAndCheckTargets(overlayDir string, deprecated map[string]DeprecatedInfo
 		// Skip deprecated/renamed packages
 		if dep, ok := deprecated[atomKey]; ok {
 			results = append(results, UpstreamResult{
-				Package:     atomKey,
-				Current:     target.Ebuild.PVR,
-				Latest:      "",
-				Status:      StatusDeprecated,
-				SourceLabel: dep.Source,
-				Target:      dep.Target,
+				Package: atomKey,
+				Current: target.Ebuild.PVR,
+				Latest:  "",
+				Status:  StatusDeprecated,
+				Source:  SourceInfo{Label: dep.Source},
+				Target:  dep.Target,
 			})
 			visited[atomKey] = true
 			continue

@@ -138,11 +138,11 @@ func (m *upstreamModel) renderResults() string {
 	var rows []string
 	for i, r := range m.results {
 		status := m.statusColor(r.Status)
-		source := r.Source
+		source := r.Source.Label
 
 		// Create hyperlink for source
-		if source != "" && m.colors.Enabled() {
-			source = m.colors.Hyperlink(source, source)
+		if r.Source.URL != "" && m.colors.Enabled() {
+			source = m.colors.Hyperlink(r.Source.URL, source)
 		}
 
 		// Build row text — indent Package cell by 2 spaces per depth level (plan 18).
@@ -216,7 +216,7 @@ func nonTTYTable(results []*upstream.UpstreamResult) string {
 		// Indent Package cell by 2 spaces per depth level (plan 18).
 		pkg := strings.Repeat("  ", r.Depth) + r.Package
 		b.WriteString(fmt.Sprintf("%-30s %-12s %-12s %-12s %s\n",
-			pkg, r.Current, r.Latest, status, r.Source))
+			pkg, r.Current, r.Latest, status, r.Source.Label))
 	}
 
 	_ = os.Stdout

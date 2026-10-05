@@ -16,9 +16,9 @@ import (
 
 func TestTUI_UpstreamTable(t *testing.T) {
 	results := []*upstream.UpstreamResult{
-		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: "github.com"},
-		{Package: "dev-python/bar", Current: "2.0.0", Latest: "2.0.0", Status: upstream.StatusUpToDate, Source: "github.com"},
-		{Package: "dev-ruby/baz", Current: "3.0.0", Latest: "", Status: upstream.StatusUnknown, Source: ""},
+		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
+		{Package: "dev-python/bar", Current: "2.0.0", Latest: "2.0.0", Status: upstream.StatusUpToDate, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
+		{Package: "dev-ruby/baz", Current: "3.0.0", Latest: "", Status: upstream.StatusUnknown, Source: upstream.SourceInfo{}},
 	}
 
 	m := newUpstreamModel(results)
@@ -74,16 +74,16 @@ func TestTUI_UpstreamProgress(t *testing.T) {
 
 func TestTUI_ProvideSourceNames(t *testing.T) {
 	results := []*upstream.UpstreamResult{
-		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: "github.com"},
-		{Package: "dev-python/bar", Current: "2.0.0", Latest: "2.0.0", Status: upstream.StatusUpToDate, Source: "github.com"},
+		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
+		{Package: "dev-python/bar", Current: "2.0.0", Latest: "2.0.0", Status: upstream.StatusUpToDate, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
 	}
 
 	m := newUpstreamModel(results)
 	view := m.View()
 
-	// Should contain source names
-	if !bytes.Contains([]byte(view), []byte("github.com")) {
-		t.Error("table should contain 'github.com'")
+	// Should contain source labels
+	if !bytes.Contains([]byte(view), []byte("GitHub:test/pkg")) {
+		t.Error("table should contain source label")
 	}
 }
 
@@ -93,7 +93,7 @@ func TestTUI_ProvideSourceNames(t *testing.T) {
 
 func TestTUI_NonTTY_Fallback(t *testing.T) {
 	results := []*upstream.UpstreamResult{
-		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: "github.com"},
+		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
 	}
 
 	// When output is not TTY, table output should be used instead of TUI
@@ -111,7 +111,7 @@ func TestTUI_NonTTY_Fallback(t *testing.T) {
 
 func TestTUI_ColorSupport(t *testing.T) {
 	results := []*upstream.UpstreamResult{
-		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: "github.com"},
+		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
 	}
 
 	// Non-color model
@@ -140,7 +140,7 @@ func TestTUI_ColorSupport(t *testing.T) {
 
 func TestTUI_Keybindings_Quit(t *testing.T) {
 	results := []*upstream.UpstreamResult{
-		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: "github.com"},
+		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
 	}
 
 	m := newUpstreamModel(results)
@@ -158,9 +158,9 @@ func TestTUI_Keybindings_Quit(t *testing.T) {
 
 func TestTUI_Keybindings_Navigate(t *testing.T) {
 	results := []*upstream.UpstreamResult{
-		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: "github.com"},
-		{Package: "dev-python/bar", Current: "2.0.0", Latest: "2.0.0", Status: upstream.StatusUpToDate, Source: "github.com"},
-		{Package: "dev-ruby/baz", Current: "3.0.0", Latest: "", Status: upstream.StatusUnknown, Source: ""},
+		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
+		{Package: "dev-python/bar", Current: "2.0.0", Latest: "2.0.0", Status: upstream.StatusUpToDate, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
+		{Package: "dev-ruby/baz", Current: "3.0.0", Latest: "", Status: upstream.StatusUnknown, Source: upstream.SourceInfo{}},
 	}
 
 	m := newUpstreamModel(results)
