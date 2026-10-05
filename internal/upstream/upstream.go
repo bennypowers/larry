@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/provider"
 	"bennypowers.dev/larry/internal/providers"
@@ -447,15 +448,21 @@ func ParseEbuildInfo(path string) (*ebuild.EbuildInfo, error) {
 	if pv := extractVar(content, "PV"); pv != "" {
 		info.PVVal = pv
 	} else {
-		// Derive PV from filename
-		info.PVVal = extractVersionFromFilename(path)
+		// Derive PV from filename via atom parser
+		pe, err := atom.ParseEbuildPath(path)
+		if err == nil {
+			info.PVVal = pe.PV
+		}
 	}
 
 	// Extract PN
 	if pn := extractVar(content, "PN"); pn != "" {
 		info.Pkg = pn
 	} else {
-		info.Pkg = extractPkgName(path)
+		pe, err := atom.ParseEbuildPath(path)
+		if err == nil {
+			info.Pkg = pe.PN
+		}
 	}
 
 	// Extract SRC_URI
@@ -481,7 +488,10 @@ func ParseEbuildInfo(path string) (*ebuild.EbuildInfo, error) {
 
 	// Derive category from directory
 	info.Path = path
-	info.Category = extractCategoryFromPath(path)
+	pe, _ := atom.ParseEbuildPath(path)
+	if pe != nil {
+		info.Category = pe.Category
+	}
 
 	return info, nil
 }
@@ -540,85 +550,6 @@ func expandVar(raw, pn string) string {
 	}
 	// Return raw value as-is if no known pattern
 	return raw
-}
-
-// extractVersionFromFilename extracts version from ebuild filename.
-// Strips revision suffix (-rN) first. e.g., "pkg-1.2.3-r1.ebuild" -> "1.2.3"
-func extractVersionFromFilename(path string) string {
-	base := filepath.Base(path)
-	base = strings.TrimSuffix(base, ".ebuild")
-	// Strip revision suffix: -rN
-	if idx := strings.LastIndex(base, "-r"); idx > 0 {
-		base = base[:idx]
-	}
-	if idx := strings.LastIndex(base, "-"); idx > 0 {
-		return base[idx+1:]
-	}
-	return base
-}
-
-// extractPkgName extracts package name from ebuild filename.
-// Strips revision suffix (-rN) first. e.g., "pkg-1.2.3-r1.ebuild" -> "pkg"
-func extractPkgName(path string) string {
-	base := filepath.Base(path)
-	base = strings.TrimSuffix(base, ".ebuild")
-	// Strip revision suffix: -rN
-	if idx := strings.LastIndex(base, "-r"); idx > 0 {
-		base = base[:idx]
-	}
-	if idx := strings.LastIndex(base, "-"); idx > 0 {
-		return base[:idx]
-	}
-	return base
-}
-
-// extractCategoryFromPath extracts category from path.
-// e.g., "/overlay/dev-python/requests/pkg-1.0.ebuild" -> "dev-python"
-// Strategy: extract PN from filename, then find the directory that matches PN.
-// That directory is the package directory; its parent is the category.
-func extractCategoryFromPath(path string) string {
-	parts := strings.Split(path, string(filepath.Separator))
-	if len(parts) < 3 {
-		return ""
-	}
-
-	// Extract PN from filename
-	filename := parts[len(parts)-1]
-	filename = strings.TrimSuffix(filename, ".ebuild")
-	if idx := strings.LastIndex(filename, "-"); idx > 0 {
-		filename = filename[:idx]
-	}
-
-	// Find the package directory (matches PN)
-	for i := len(parts) - 2; i >= 0; i-- {
-		if parts[i] == filename {
-			// This is the package directory; category is its parent
-			if i > 0 {
-				return parts[i-1]
-			}
-		}
-	}
-
-	// Fallback: find the first directory that looks like a Gentoo category
-	// (starts with letter, contains hyphens, or is a known category prefix)
-	knownPrefixes := []string{"dev-", "www-", "app-", "sys-", "net-", "media-", "sci-", "mail-", "net-", "x11-", "acct-", "virtual-", "profiles"}
-	for i := len(parts) - 2; i >= 1; i-- {
-		part := parts[i]
-		if len(part) > 0 && part[0] >= 'a' && part[0] <= 'z' {
-			// Check if it looks like a Gentoo category
-			for _, prefix := range knownPrefixes {
-				if strings.HasPrefix(part, prefix) {
-					return part
-				}
-			}
-		}
-	}
-
-	// Last resort: second-to-last directory component
-	if len(parts) >= 3 {
-		return parts[len(parts)-2]
-	}
-	return ""
 }
 
 // extractInherit extracts the inherit line from ebuild content.

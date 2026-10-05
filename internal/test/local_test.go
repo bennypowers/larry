@@ -1,11 +1,14 @@
 package test
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"bennypowers.dev/larry/internal/atom"
 )
 
 // ---------------------------------------------------------------------------
@@ -49,8 +52,10 @@ func TestResolveEbuild_CatPkgNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing cat/pkg")
 	}
-	if !strings.Contains(err.Error(), "no ebuilds found") {
-		t.Errorf("error = %q, want 'no ebuilds found'", err)
+	// atom.ParseAtom returns ErrCategoryNotFound for missing category,
+	// or ErrPackageNotFound for missing package.
+	if !errors.Is(err, atom.ErrCategoryNotFound) && !errors.Is(err, atom.ErrPackageNotFound) && !strings.Contains(err.Error(), "no ebuilds found") {
+		t.Errorf("error = %q, want category/package not found or 'no ebuilds found'", err)
 	}
 }
 

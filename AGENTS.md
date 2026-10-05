@@ -28,6 +28,7 @@ AGENTS.md       — This file
 ```
 
 One plan file = one agent session. Execute in numbered order; respect `Precondition:`.
+Once a plan item is complete, tested, and verified, mark it done in plan/PLAN.md
 
 ## Build & test
 

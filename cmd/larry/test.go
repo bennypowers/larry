@@ -2,10 +2,9 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 
+	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/config"
 	"bennypowers.dev/larry/internal/test"
 
@@ -76,34 +75,16 @@ Examples:
 		if filepath.IsAbs(input) {
 			ebuildPath = input
 		} else {
-			// Treat as cat/pkg — find latest ebuild in overlay
-			catDir := filepath.Join(overlayDir, input)
-			entries, err := os.ReadDir(catDir)
+			// Treat as cat/pkg — resolve atom and find latest ebuild
+			a, err := atom.ParseAtom(overlayDir, input)
 			if err != nil {
-				return fmt.Errorf("no ebuilds found for %s in %s", input, catDir)
+				return fmt.Errorf("resolving atom %q: %w", input, err)
 			}
-
-			parts := strings.Split(input, "/")
-			if len(parts) != 2 {
-				return fmt.Errorf("invalid category/package: %s", input)
+			pe, err := atom.FindForAtom(a)
+			if err != nil {
+				return fmt.Errorf("finding ebuild for %s: %w", input, err)
 			}
-			pkgName := parts[1] + "-"
-
-			var ebuilds []string
-			for _, entry := range entries {
-				name := entry.Name()
-				if entry.IsDir() || !strings.HasPrefix(name, pkgName) || !strings.HasSuffix(name, ".ebuild") {
-					continue
-				}
-				ebuilds = append(ebuilds, name)
-			}
-
-			if len(ebuilds) == 0 {
-				return fmt.Errorf("no ebuilds found for %s in %s", input, catDir)
-			}
-
-			// Sort by version and pick the highest
-			ebuildPath = filepath.Join(catDir, ebuilds[len(ebuilds)-1])
+			ebuildPath = pe.Path
 		}
 
 		// Determine mode: container or local

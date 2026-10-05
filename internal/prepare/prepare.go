@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/logger"
 	"bennypowers.dev/larry/internal/upstream"
@@ -163,27 +164,34 @@ func NewEbuildInfoFromPath(path string) (*ebuild.EbuildInfo, error) {
 func parseEbuildInfo(path string, content []byte) (*ebuild.EbuildInfo, error) {
 	var ei ebuild.EbuildInfo
 	ebContent := string(content)
-	dir := filepath.Dir(path)
-	ebName := filepath.Base(path)
 
-	// Parse category from directory
-	ei.Category = filepath.Base(dir)
-
-	// Parse PN from filename: pn-pv[.ebuild]
-	name := strings.TrimSuffix(ebName, ".ebuild")
-	// Strip revision: pn-pv-rN → pn-pv
-	if idx := strings.LastIndex(name, "-r"); idx > 0 {
-		name = name[:idx]
-	}
-	// Find the last hyphen to split PN from PV
-	if idx := strings.LastIndex(name, "-"); idx > 0 {
-		ei.Pkg = name[:idx]
-		ei.PVVal = name[idx+1:]
+	// Parse ebuild path via atom package (one parser)
+	pe, err := atom.ParseEbuildPath(path)
+	if err != nil {
+		// Fallback: parse category from directory
+		ei.Category = filepath.Base(filepath.Dir(path))
+	} else {
+		ei.Category = pe.Category
 	}
 
-	// Set P
-	if ei.Pkg != "" && ei.PVVal != "" {
-		ei.PVal = ei.Pkg + "-" + ei.PVVal
+	// Parse PN/PV from filename via atom
+	if pe != nil {
+		ei.Pkg = pe.PN
+		ei.PVVal = pe.PV
+		ei.PVal = pe.P
+	} else {
+		// Fallback: parse from directory
+		dir := filepath.Dir(path)
+		ebName := filepath.Base(path)
+		ei.Category = filepath.Base(dir)
+		name := strings.TrimSuffix(ebName, ".ebuild")
+		if idx := strings.LastIndex(name, "-"); idx > 0 {
+			ei.Pkg = name[:idx]
+			ei.PVVal = name[idx+1:]
+			if ei.Pkg != "" && ei.PVVal != "" {
+				ei.PVal = ei.Pkg + "-" + ei.PVVal
+			}
+		}
 	}
 
 	// Parse SRC_URI

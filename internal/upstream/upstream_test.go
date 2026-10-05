@@ -720,8 +720,11 @@ func TestResolveSourceURL_NPM(t *testing.T) {
 // --- Ebuild parsing tests ---
 
 func TestParseEbuildInfo(t *testing.T) {
+	// Structure: <temp>/dev-python/requests/requests-1.0.0.ebuild
 	tmpDir := t.TempDir()
-	ebuildPath := filepath.Join(tmpDir, "requests-1.0.0.ebuild")
+	pkgDir := filepath.Join(tmpDir, "dev-python", "requests")
+	os.MkdirAll(pkgDir, 0755)
+	ebuildPath := filepath.Join(pkgDir, "requests-1.0.0.ebuild")
 	err := os.WriteFile(ebuildPath, []byte(`
 EAPI=8
 
@@ -770,8 +773,11 @@ func TestDebugFindEbuilds(t *testing.T) {
 }
 
 func TestDebugParseEbuildInfo(t *testing.T) {
+	// Structure: <temp>/dev-python/requests/requests-1.0.0.ebuild
 	dir := t.TempDir()
-	ebuildPath := filepath.Join(dir, "requests-1.0.0.ebuild")
+	pkgDir := filepath.Join(dir, "dev-python", "requests")
+	os.MkdirAll(pkgDir, 0755)
+	ebuildPath := filepath.Join(pkgDir, "requests-1.0.0.ebuild")
 	os.WriteFile(ebuildPath, []byte(`EAPI=8
 
 DESCRIPTION="Test"

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"bennypowers.dev/larry/internal/atom"
 )
 
 var (
@@ -165,21 +167,27 @@ func ParseEbuildFromFile(path string) (*EbuildInfo, error) {
 		HOMEPAGE: extractVar(content, "HOMEPAGE"),
 	}
 
-	// Derive category from path
-	info.Category = extractCategoryFromPath(path)
+	// Derive category and PN from path
+	pe, err := atom.ParseEbuildPath(path)
+	if err == nil {
+		info.Category = pe.Category
+	} else {
+		// Fallback: category is parent of parent directory
+		info.Category = filepath.Base(filepath.Dir(path))
+	}
 
 	// Extract PN from file or derive from filename
 	if pn := extractVar(content, "PN"); pn != "" {
 		info.Pkg = pn
-	} else {
-		info.Pkg = extractPkgName(path)
+	} else if pe != nil {
+		info.Pkg = pe.PN
 	}
 
 	// Extract PV from file or derive from filename
 	if pv := extractVar(content, "PV"); pv != "" {
 		info.PVVal = pv
-	} else {
-		info.PVVal = extractVersionFromFilename(path)
+	} else if pe != nil {
+		info.PVVal = pe.PV
 	}
 
 	// Extract P if present
@@ -243,44 +251,6 @@ func extractVar(content, name string) string {
 		}
 	}
 	return ""
-}
-
-// extractCategoryFromPath extracts the category from an ebuild file path.
-// e.g., "/path/to/overlay/dev-python/pkg-1.0.ebuild" -> "dev-python"
-func extractCategoryFromPath(path string) string {
-	pkgDir := filepath.Dir(path)        // "/path/to/overlay/dev-python/pkg"
-	catDir := filepath.Dir(pkgDir)      // "/path/to/overlay/dev-python"
-	return filepath.Base(catDir)        // "dev-python"
-}
-
-// extractVersionFromFilename extracts version from ebuild filename.
-// Strips revision suffix (-rN) first. e.g., "pkg-1.2.3-r1.ebuild" -> "1.2.3"
-func extractVersionFromFilename(path string) string {
-	base := filepath.Base(path)
-	base = strings.TrimSuffix(base, ".ebuild")
-	// Strip revision suffix: -rN
-	if idx := strings.LastIndex(base, "-r"); idx > 0 {
-		base = base[:idx]
-	}
-	if idx := strings.LastIndex(base, "-"); idx > 0 {
-		return base[idx+1:]
-	}
-	return base
-}
-
-// extractPkgName extracts package name from ebuild filename.
-// Strips revision suffix (-rN) first. e.g., "pkg-1.2.3-r1.ebuild" -> "pkg"
-func extractPkgName(path string) string {
-	base := filepath.Base(path)
-	base = strings.TrimSuffix(base, ".ebuild")
-	// Strip revision suffix: -rN
-	if idx := strings.LastIndex(base, "-r"); idx > 0 {
-		base = base[:idx]
-	}
-	if idx := strings.LastIndex(base, "-"); idx > 0 {
-		return base[:idx]
-	}
-	return base
 }
 
 // extractInherit extracts the inherit line from ebuild content.

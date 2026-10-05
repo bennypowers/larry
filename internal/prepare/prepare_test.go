@@ -100,8 +100,9 @@ func TestDetectTypeFromInfo(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseEbuildInfo(t *testing.T) {
+	// Structure: <temp>/test/test/test-1.0.0.ebuild → category=test, PN=test
 	catDir := t.TempDir()
-	dir := filepath.Join(catDir, "test")
+	dir := filepath.Join(catDir, "test", "test")
 	os.MkdirAll(dir, 0755)
 	path := filepath.Join(dir, "test-1.0.0.ebuild")
 	content := `EAPI=8
@@ -144,8 +145,9 @@ INHERITED="stdenv"
 }
 
 func TestParseEbuildInfo_Revision(t *testing.T) {
+	// Structure: <temp>/test/test/test-1.0.0-r2.ebuild
 	catDir := t.TempDir()
-	dir := filepath.Join(catDir, "test")
+	dir := filepath.Join(catDir, "test", "test")
 	os.MkdirAll(dir, 0755)
 	path := filepath.Join(dir, "test-1.0.0-r2.ebuild")
 	content := `EAPI=8
@@ -637,8 +639,8 @@ done
 // ---------------------------------------------------------------------------
 
 func TestPrepare_DryRun_SkipsManifest(t *testing.T) {
-	dir := t.TempDir()
-	ebuildPath := filepath.Join(dir, "my-pkg-1.0.0.ebuild")
+	pkgDir := t.TempDir()
+	ebuildPath := filepath.Join(pkgDir, "my-pkg-1.0.0.ebuild")
 	content := `EAPI=8
 PV=1.0.0
 SRC_URI="mirror://test/my-pkg-1.0.0.tar.gz"

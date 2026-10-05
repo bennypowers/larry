@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"sort"
 	"strings"
+
+	"bennypowers.dev/larry/internal/atom"
 )
 
 // CmdRunner abstracts os/exec.Command for testability.
@@ -90,35 +90,17 @@ func resolveEbuild(path string) (string, error) {
 
 // resolveEbuildFromCatPkg finds the latest ebuild for a cat/pkg in an overlay.
 func resolveEbuildFromCatPkg(catPkg string, overlay string) (string, error) {
-	parts := strings.SplitN(catPkg, "/", 2)
-	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid cat/pkg: %s (expected category/name)", catPkg)
-	}
-
-	catDir := filepath.Join(overlay, parts[0], parts[1])
-	entries, err := os.ReadDir(catDir)
+	a, err := atom.ParseAtom(overlay, catPkg)
 	if err != nil {
-		return "", fmt.Errorf("no ebuilds found for %s: %w", catPkg, err)
+		return "", fmt.Errorf("resolving atom %q: %w", catPkg, err)
 	}
-
-	var ebuilds []string
-	pkgName := parts[1] + "-"
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasPrefix(name, pkgName) || !strings.HasSuffix(name, ".ebuild") {
-			continue
-		}
-		ebuilds = append(ebuilds, name)
+	pe, err := atom.FindForAtom(a)
+	if err != nil {
+		return "", fmt.Errorf("finding ebuild for %s: %w", catPkg, err)
 	}
-
-	if len(ebuilds) == 0 {
-		return "", fmt.Errorf("no ebuilds found for %s in %s", catPkg, catDir)
-	}
-
-	// Sort by version descending (highest first)
-	sort.Strings(ebuilds)
-	return filepath.Join(catDir, ebuilds[len(ebuilds)-1]), nil
+	return pe.Path, nil
 }
+
 
 // ---------------------------------------------------------------------------
 // Environment helpers

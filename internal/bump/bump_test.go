@@ -6,21 +6,26 @@ import (
 	"strings"
 	"testing"
 
+	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/provider"
 	"bennypowers.dev/larry/internal/remoteid"
 	"bennypowers.dev/larry/internal/version"
 )
 
-// ─── findLatestEbuild Tests ──────────────────────────────────────────────────
+// ─── findLatestEbuild (delegated to atom.FindLatest) ────────────────────────
 
 func TestFindLatestEbuild_SingleEbuild(t *testing.T) {
 	dir := t.TempDir()
-	ebuildPath := filepath.Join(dir, "my-pkg-1.0.ebuild")
+	pkgDir := filepath.Join(dir, "my-pkg")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	ebuildPath := filepath.Join(pkgDir, "my-pkg-1.0.ebuild")
 	if err := os.WriteFile(ebuildPath, []byte("EAPI=8"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	path, err := findLatestEbuild(dir)
+	path, err := FindLatestEbuild(pkgDir)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -31,23 +36,26 @@ func TestFindLatestEbuild_SingleEbuild(t *testing.T) {
 
 func TestFindLatestEbuild_MultipleEbuilds(t *testing.T) {
 	dir := t.TempDir()
-	// Create ebuilds of different versions
+	pkgDir := filepath.Join(dir, "my-pkg")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	ebuilds := []string{
 		"my-pkg-1.0.ebuild",
 		"my-pkg-2.0.ebuild",
 		"my-pkg-1.5.ebuild",
 	}
 	for _, name := range ebuilds {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("EAPI=8"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(pkgDir, name), []byte("EAPI=8"), 0644); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	path, err := findLatestEbuild(dir)
+	path, err := FindLatestEbuild(pkgDir)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	expected := filepath.Join(dir, "my-pkg-2.0.ebuild")
+	expected := filepath.Join(pkgDir, "my-pkg-2.0.ebuild")
 	if path != expected {
 		t.Errorf("expected %q, got %q", expected, path)
 	}
@@ -55,8 +63,12 @@ func TestFindLatestEbuild_MultipleEbuilds(t *testing.T) {
 
 func TestFindLatestEbuild_NoEbuilds(t *testing.T) {
 	dir := t.TempDir()
+	pkgDir := filepath.Join(dir, "my-pkg")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := findLatestEbuild(dir)
+	_, err := FindLatestEbuild(pkgDir)
 	if err == nil {
 		t.Fatal("expected error for no ebuilds, got nil")
 	}
@@ -64,19 +76,22 @@ func TestFindLatestEbuild_NoEbuilds(t *testing.T) {
 
 func TestFindLatestEbuild_LiveExcluded(t *testing.T) {
 	dir := t.TempDir()
-	// Live version ebuilds should be excluded
-	if err := os.WriteFile(filepath.Join(dir, "my-pkg-9999.ebuild"), []byte("EAPI=8"), 0644); err != nil {
+	pkgDir := filepath.Join(dir, "my-pkg")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "my-pkg-1.0.ebuild"), []byte("EAPI=8"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(pkgDir, "my-pkg-9999.ebuild"), []byte("EAPI=8"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "my-pkg-1.0.ebuild"), []byte("EAPI=8"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	path, err := findLatestEbuild(dir)
+	path, err := FindLatestEbuild(pkgDir)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	expected := filepath.Join(dir, "my-pkg-1.0.ebuild")
+	expected := filepath.Join(pkgDir, "my-pkg-1.0.ebuild")
 	if path != expected {
 		t.Errorf("expected %q (live excluded), got %q", expected, path)
 	}
@@ -84,7 +99,10 @@ func TestFindLatestEbuild_LiveExcluded(t *testing.T) {
 
 func TestFindLatestEbuild_MixedLiveStable(t *testing.T) {
 	dir := t.TempDir()
-	// Multiple live + stable — should pick highest stable
+	pkgDir := filepath.Join(dir, "my-pkg")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	ebuilds := []string{
 		"my-pkg-9999.ebuild",
 		"my-pkg-1.0.ebuild",
@@ -92,16 +110,16 @@ func TestFindLatestEbuild_MixedLiveStable(t *testing.T) {
 		"my-pkg-1.0-r1.ebuild",
 	}
 	for _, name := range ebuilds {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("EAPI=8"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(pkgDir, name), []byte("EAPI=8"), 0644); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	path, err := findLatestEbuild(dir)
+	path, err := FindLatestEbuild(pkgDir)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	expected := filepath.Join(dir, "my-pkg-2.0.ebuild")
+	expected := filepath.Join(pkgDir, "my-pkg-2.0.ebuild")
 	if path != expected {
 		t.Errorf("expected %q, got %q", expected, path)
 	}
@@ -109,78 +127,37 @@ func TestFindLatestEbuild_MixedLiveStable(t *testing.T) {
 
 func TestFindLatestEbuild_RevisionsOnly(t *testing.T) {
 	dir := t.TempDir()
-	// Only revision bumps exist, no base ebuild
-	if err := os.WriteFile(filepath.Join(dir, "my-pkg-1.0.ebuild"), []byte("EAPI=8"), 0644); err != nil {
+	pkgDir := filepath.Join(dir, "my-pkg")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "my-pkg-1.0-r1.ebuild"), []byte("EAPI=8"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(pkgDir, "my-pkg-1.0.ebuild"), []byte("EAPI=8"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "my-pkg-1.0-r3.ebuild"), []byte("EAPI=8"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(pkgDir, "my-pkg-1.0-r1.ebuild"), []byte("EAPI=8"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "my-pkg-1.0-r3.ebuild"), []byte("EAPI=8"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	path, err := findLatestEbuild(dir)
+	path, err := FindLatestEbuild(pkgDir)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	// Should return highest revision
-	expected := filepath.Join(dir, "my-pkg-1.0-r3.ebuild")
+	expected := filepath.Join(pkgDir, "my-pkg-1.0-r3.ebuild")
 	if path != expected {
 		t.Errorf("expected %q, got %q", expected, path)
 	}
 }
 
-// ─── incrementRevision Tests ─────────────────────────────────────────────────
-
-func TestIncrementRevision_None(t *testing.T) {
-	dir := t.TempDir()
-	// Only one ebuild, no revisions
-	if err := os.WriteFile(filepath.Join(dir, "my-pkg-1.0.ebuild"), []byte("EAPI=8"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	n := incrementRevision(dir)
-	if n != 1 {
-		t.Errorf("expected 1, got %d", n)
-	}
-}
-
-func TestIncrementRevision_Increment(t *testing.T) {
-	dir := t.TempDir()
-	// Has revisions up to -r3
-	if err := os.WriteFile(filepath.Join(dir, "my-pkg-1.0.ebuild"), []byte("EAPI=8"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "my-pkg-1.0-r1.ebuild"), []byte("EAPI=8"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "my-pkg-1.0-r3.ebuild"), []byte("EAPI=8"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	n := incrementRevision(dir)
-	if n != 4 {
-		t.Errorf("expected 4, got %d", n)
-	}
-}
-
-func TestIncrementRevision_SingleRevision(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "my-pkg-1.0-r2.ebuild"), []byte("EAPI=8"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	n := incrementRevision(dir)
-	if n != 3 {
-		t.Errorf("expected 3, got %d", n)
-	}
-}
-
-// ─── bumpFromEbuild Tests ────────────────────────────────────────────────────
+// ─── Bump Tests ──────────────────────────────────────────────────────────────
 
 func TestBump_VersionBump(t *testing.T) {
-	dir := t.TempDir()
+	pkgDir := filepath.Join(t.TempDir(), "my-pkg")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	oldName := "my-pkg-1.0.0.ebuild"
 	content := `EAPI=8
 PV=1.0.0
@@ -189,29 +166,33 @@ SRC_URI="mirror://test/my-pkg-1.0.0.tar.gz"
 cat() {
 	tar xzf ${A}
 }
-` 
-	if err := os.WriteFile(filepath.Join(dir, oldName), []byte(content), 0644); err != nil {
+`
+	if err := os.WriteFile(filepath.Join(pkgDir, oldName), []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	result, err := Bump(BumpConfig{
-		Dir:     dir,
+		Dir:     pkgDir,
 		Mode:    BumpModeVersion,
 		Version: "2.0.0",
 	})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if result.NewFile != filepath.Join(dir, "my-pkg-2.0.0.ebuild") {
-		t.Errorf("expected new file %q, got %q", filepath.Join(dir, "my-pkg-2.0.0.ebuild"), result.NewFile)
+	if result.NewFile != filepath.Join(pkgDir, "my-pkg-2.0.0.ebuild") {
+		t.Errorf("expected new file %q, got %q", filepath.Join(pkgDir, "my-pkg-2.0.0.ebuild"), result.NewFile)
 	}
 }
 
 func TestBump_VersionBump_Variables(t *testing.T) {
-	dir := t.TempDir()
+	pkgDir := filepath.Join(t.TempDir(), "my-pkg")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	oldName := "my-pkg-1.0.0.ebuild"
 	content := `EAPI=8
 PV=1.0.0
+P=${PN}-${PV}
 SRC_URI="mirror://test/${P}.tar.gz"
 
 MYVAR="1.0.0-locked"
@@ -219,13 +200,13 @@ MYVAR="1.0.0-locked"
 src_unpack() {
 	einfo "unpacking ${P}"
 }
-` 
-	if err := os.WriteFile(filepath.Join(dir, oldName), []byte(content), 0644); err != nil {
+`
+	if err := os.WriteFile(filepath.Join(pkgDir, oldName), []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	result, err := Bump(BumpConfig{
-		Dir:     dir,
+		Dir:     pkgDir,
 		Mode:    BumpModeVersion,
 		Version: "2.0.0",
 	})
@@ -233,49 +214,40 @@ src_unpack() {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	// Read the new file
 	newContent, err := os.ReadFile(result.NewFile)
 	if err != nil {
 		t.Fatalf("failed to read new file: %v", err)
 	}
 
-	// PV should be updated to new version
 	if !strings.Contains(string(newContent), "PV=2.0.0") {
 		t.Errorf("expected PV=2.0.0 in new file, got:\n%s", string(newContent))
 	}
-
-	// ${P} references in other places should be preserved (not replaced with version)
 	if !strings.Contains(string(newContent), `${P}`) {
 		t.Errorf("expected ${P} reference preserved in new file")
 	}
-
-	// ${P} should be preserved
-	if !strings.Contains(string(newContent), `${P}`) {
-		t.Errorf("expected ${P} reference preserved in new file")
-	}
-
-	// Hardcoded string "1.0.0-locked" should be untouched
 	if !strings.Contains(string(newContent), `1.0.0-locked`) {
 		t.Errorf("expected hardcoded string 1.0.0-locked to be preserved")
 	}
 }
 
 func TestBump_RevisionBump(t *testing.T) {
-	dir := t.TempDir()
+	pkgDir := filepath.Join(t.TempDir(), "my-pkg")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	oldName := "my-pkg-1.0.0.ebuild"
-	if err := os.WriteFile(filepath.Join(dir, oldName), []byte("EAPI=8"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(pkgDir, oldName), []byte("EAPI=8"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	result, err := Bump(BumpConfig{
-		Dir:  dir,
+		Dir:  pkgDir,
 		Mode: BumpModeRevision,
 	})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	// Should be -r1 since no existing revisions
-	if result.NewFile != filepath.Join(dir, "my-pkg-1.0.0-r1.ebuild") {
+	if result.NewFile != filepath.Join(pkgDir, "my-pkg-1.0.0-r1.ebuild") {
 		t.Errorf("expected my-pkg-1.0.0-r1.ebuild, got %q", result.NewFile)
 	}
 	if result.Revision != 1 {
@@ -284,21 +256,23 @@ func TestBump_RevisionBump(t *testing.T) {
 }
 
 func TestBump_RevisionBump_Increment(t *testing.T) {
-	dir := t.TempDir()
-	// Existing ebuild with -r2
+	pkgDir := filepath.Join(t.TempDir(), "my-pkg")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	oldName := "my-pkg-1.0.0-r2.ebuild"
-	if err := os.WriteFile(filepath.Join(dir, oldName), []byte("EAPI=8"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(pkgDir, oldName), []byte("EAPI=8"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	result, err := Bump(BumpConfig{
-		Dir:  dir,
+		Dir:  pkgDir,
 		Mode: BumpModeRevision,
 	})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if result.NewFile != filepath.Join(dir, "my-pkg-1.0.0-r3.ebuild") {
+	if result.NewFile != filepath.Join(pkgDir, "my-pkg-1.0.0-r3.ebuild") {
 		t.Errorf("expected my-pkg-1.0.0-r3.ebuild, got %q", result.NewFile)
 	}
 	if result.Revision != 3 {
@@ -307,14 +281,16 @@ func TestBump_RevisionBump_Increment(t *testing.T) {
 }
 
 func TestBump_LiveExcluded(t *testing.T) {
-	dir := t.TempDir()
-	// Only live version exists
-	if err := os.WriteFile(filepath.Join(dir, "my-pkg-9999.ebuild"), []byte("EAPI=8"), 0644); err != nil {
+	pkgDir := filepath.Join(t.TempDir(), "my-pkg")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "my-pkg-9999.ebuild"), []byte("EAPI=8"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	_, err := Bump(BumpConfig{
-		Dir:  dir,
+		Dir:  pkgDir,
 		Mode: BumpModeAuto,
 	})
 	if err == nil {
@@ -323,18 +299,19 @@ func TestBump_LiveExcluded(t *testing.T) {
 }
 
 func TestBump_NoEbuilds(t *testing.T) {
-	dir := t.TempDir()
+	pkgDir := filepath.Join(t.TempDir(), "my-pkg")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := Bump(BumpConfig{
-		Dir:  dir,
+		Dir:  pkgDir,
 		Mode: BumpModeRevision,
 	})
 	if err == nil {
 		t.Fatal("expected error for empty directory, got nil")
 	}
 }
-
-// ─── BumpConfig Valid Tests ──────────────────────────────────────────────────
 
 func TestBumpConfig_Validation(t *testing.T) {
 	_, err := Bump(BumpConfig{})
@@ -343,12 +320,47 @@ func TestBumpConfig_Validation(t *testing.T) {
 	}
 }
 
+// ─── D8 Fix: Revision from latest, not directory max ─────────────────────────
+
+func TestBump_NextRevisionFromLatestNotDirMax(t *testing.T) {
+	// Temp package dir with foo-1.0.0-r3.ebuild and foo-2.0.0.ebuild.
+	// A revision bump via Bump() should create foo-2.0.0-r1.ebuild
+	// (revision of latest non-live = 2.0.0, not max over all files).
+	pkgDir := filepath.Join(t.TempDir(), "foo")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "foo-1.0.0-r3.ebuild"), []byte("EAPI=8"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "foo-2.0.0.ebuild"), []byte("EAPI=8"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Bump(BumpConfig{
+		Dir:  pkgDir,
+		Mode: BumpModeRevision,
+	})
+	if err != nil {
+		t.Fatalf("Bump error = %v", err)
+	}
+	// Latest non-live is foo-2.0.0 (no revision), bump → foo-2.0.0-r1
+	expected := filepath.Join(pkgDir, "foo-2.0.0-r1.ebuild")
+	if result.NewFile != expected {
+		t.Errorf("NewFile = %q, want %q", result.NewFile, expected)
+	}
+	if result.Revision != 1 {
+		t.Errorf("Revision = %d, want 1", result.Revision)
+	}
+}
+
 // ─── Integration Tests ───────────────────────────────────────────────────────
 
-// TestBump_AutoVersionWithProvider tests the full auto-version bump with a mock provider.
 func TestBump_AutoVersionWithProvider(t *testing.T) {
-	dir := t.TempDir()
-	// Create a test ebuild with PV=1.0.0
+	pkgDir := filepath.Join(t.TempDir(), "example")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	content := `EAPI=8
 PV=1.0.0
 P=${PN}-${PV}
@@ -357,12 +369,11 @@ SRC_URI="mirror://github/example/example-1.0.0.tar.gz"
 cat() {
 	tar xzf ${A}
 }
-` 
-	if err := os.WriteFile(filepath.Join(dir, "example-1.0.0.ebuild"), []byte(content), 0644); err != nil {
+`
+	if err := os.WriteFile(filepath.Join(pkgDir, "example-1.0.0.ebuild"), []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Create a mock provider that reports latest version 2.0.0
 	mockP := &mockUpstreamProvider{
 		latestVersion: func(rid remoteid.RemoteId, allowPrereleases bool) (*version.Version, error) {
 			return version.Parse("2.0.0")
@@ -373,7 +384,7 @@ cat() {
 	registry.Register(mockP)
 
 	result, err := Bump(BumpConfig{
-		Dir:             dir,
+		Dir:             pkgDir,
 		Mode:            BumpModeAuto,
 		ProviderReg:     registry,
 		AllowPrerelease: false,
@@ -382,11 +393,36 @@ cat() {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	if result.NewFile != filepath.Join(dir, "example-2.0.0.ebuild") {
+	if result.NewFile != filepath.Join(pkgDir, "example-2.0.0.ebuild") {
 		t.Errorf("expected example-2.0.0.ebuild, got %q", result.NewFile)
 	}
 	if result.NewVersion != "2.0.0" {
 		t.Errorf("expected new version 2.0.0, got %q", result.NewVersion)
+	}
+}
+
+// ─── atom.Integration helper tests ──────────────────────────────────────────
+
+func TestAtom_ParseEbuildPath_HyphenatedName(t *testing.T) {
+	// Verify atom correctly handles hyphenated package names (D1-D5 regression)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dev-python", "kornia-rs", "kornia-rs-0.1.14.ebuild")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("EAPI=8"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pe, err := atom.ParseEbuildPath(path)
+	if err != nil {
+		t.Fatalf("ParseEbuildPath error = %v", err)
+	}
+	if pe.PN != "kornia-rs" {
+		t.Errorf("PN = %q, want %q", pe.PN, "kornia-rs")
+	}
+	if pe.PV != "0.1.14" {
+		t.Errorf("PV = %q, want %q", pe.PV, "0.1.14")
 	}
 }
 
