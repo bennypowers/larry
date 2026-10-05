@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	gogit "github.com/go-git/go-git/v5"
+	gitcfg "github.com/go-git/go-git/v5/config"
+
 	"bennypowers.dev/larry/internal/git"
 )
 
@@ -505,4 +508,159 @@ func findSubstr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// --- ResolveGitHubRepo tests (plan 13b) ---
+
+func TestResolveGitHubRepo_PreservesCase(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if _, err := repo.CreateRemote(&gitcfg.RemoteConfig{Name: "origin", URLs: []string{"git@github.com:BennyPowers/Overlay.git"}}); err != nil {
+		t.Fatalf("create remote: %v", err)
+	}
+
+	c := &Config{Remote: "origin"}
+	got, err := c.ResolveGitHubRepo(dir, "")
+	if err != nil {
+		t.Fatalf("ResolveGitHubRepo error = %v", err)
+	}
+	if got != "BennyPowers/Overlay" {
+		t.Errorf("ResolveGitHubRepo = %q, want %q", got, "BennyPowers/Overlay")
+	}
+}
+
+func TestResolveGitHubRepo_HTTPSUrl(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if _, err := repo.CreateRemote(&gitcfg.RemoteConfig{Name: "origin", URLs: []string{"https://github.com/BennyPowers/Overlay.git"}}); err != nil {
+		t.Fatalf("create remote: %v", err)
+	}
+
+	c := &Config{Remote: "origin"}
+	got, err := c.ResolveGitHubRepo(dir, "")
+	if err != nil {
+		t.Fatalf("ResolveGitHubRepo error = %v", err)
+	}
+	if got != "BennyPowers/Overlay" {
+		t.Errorf("ResolveGitHubRepo = %q, want %q", got, "BennyPowers/Overlay")
+	}
+}
+
+func TestResolveGitHubRepo_HonoursRemoteName(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if _, err := repo.CreateRemote(&gitcfg.RemoteConfig{Name: "origin", URLs: []string{"git@github.com:a/one.git"}}); err != nil {
+		t.Fatalf("create origin remote: %v", err)
+	}
+	if _, err := repo.CreateRemote(&gitcfg.RemoteConfig{Name: "upstream", URLs: []string{"git@github.com:b/two.git"}}); err != nil {
+		t.Fatalf("create upstream remote: %v", err)
+	}
+
+	// With remote="", should use cfg.Remote which defaults to "origin".
+	c := &Config{Remote: "origin"}
+	got, err := c.ResolveGitHubRepo(dir, "")
+	if err != nil {
+		t.Fatalf("ResolveGitHubRepo(dir, \"\") error = %v", err)
+	}
+	if got != "a/one" {
+		t.Errorf("ResolveGitHubRepo(dir, \"\") = %q, want %q", got, "a/one")
+	}
+
+	// With remote="upstream" should pick that one.
+	got, err = c.ResolveGitHubRepo(dir, "upstream")
+	if err != nil {
+		t.Fatalf("ResolveGitHubRepo(dir, \"upstream\") error = %v", err)
+	}
+	if got != "b/two" {
+		t.Errorf("ResolveGitHubRepo(dir, \"upstream\") = %q, want %q", got, "b/two")
+	}
+}
+
+func TestResolveGitHubRepo_UsesGoGit(t *testing.T) {
+	// Verify we work purely through go-git — no assumptions about .git/config text.
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if _, err := repo.CreateRemote(&gitcfg.RemoteConfig{Name: "origin", URLs: []string{"https://github.com/SomeOwner/some-repo.git"}}); err != nil {
+		t.Fatalf("create remote: %v", err)
+	}
+
+	c := &Config{Remote: "origin"}
+	got, err := c.ResolveGitHubRepo(dir, "")
+	if err != nil {
+		t.Fatalf("ResolveGitHubRepo error = %v", err)
+	}
+	if got != "SomeOwner/some-repo" {
+		t.Errorf("ResolveGitHubRepo = %q, want %q", got, "SomeOwner/some-repo")
+	}
+}
+
+func TestResolveGitHubRepo_ConfigKeyWins(t *testing.T) {
+	// Even when the git remote says something different, an explicit config value wins.
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if _, err := repo.CreateRemote(&gitcfg.RemoteConfig{Name: "origin", URLs: []string{"https://github.com/remote/owner.git"}}); err != nil {
+		t.Fatalf("create remote: %v", err)
+	}
+
+	c := &Config{GitHubRepo: "Explicit/Repo", Remote: "origin"}
+	got, err := c.ResolveGitHubRepo(dir, "origin")
+	if err != nil {
+		t.Fatalf("ResolveGitHubRepo error = %v", err)
+	}
+	if got != "Explicit/Repo" {
+		t.Errorf("ResolveGitHubRepo = %q, want %q", got, "Explicit/Repo")
+	}
+}
+
+func TestResolveGitHubRepo_NoRemoteIsError(t *testing.T) {
+	dir := t.TempDir()
+	_, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	// No remotes created.
+
+	c := &Config{Remote: "origin"}
+	got, err := c.ResolveGitHubRepo(dir, "")
+	if err == nil {
+		t.Fatal("ResolveGitHubRepo on repo with no remotes: expected error, got nil")
+	}
+	if got != "" {
+		t.Errorf("ResolveGitHubRepo returned non-empty string on error: %q", got)
+	}
+}
+
+func TestResolveGitHubRepo_NonGitHubRemoteIsError(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if _, err := repo.CreateRemote(&gitcfg.RemoteConfig{Name: "origin", URLs: []string{"https://gitlab.com/a/b.git"}}); err != nil {
+		t.Fatalf("create remote: %v", err)
+	}
+
+	c := &Config{Remote: "origin"}
+	got, err := c.ResolveGitHubRepo(dir, "")
+	if err == nil {
+		t.Fatal("ResolveGitHubRepo on GitLab remote: expected error, got nil")
+	}
+	if got != "" {
+		t.Errorf("ResolveGitHubRepo returned non-empty string on error: %q", got)
+	}
 }

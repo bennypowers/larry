@@ -3,90 +3,100 @@ package output
 import (
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 )
 
-// Logger wraps slog with structured output and verbosity control.
+// Logger wraps simple formatted output with verbosity control, quiet mode,
+// colour, injectable writers, and the script's >>> / *** / !!! prefixes.
 type Logger struct {
 	verbose int
 	quiet   bool
 	color   *ColorHelper
-	info    *slog.Logger
-	debug   *slog.Logger
-	error   *slog.Logger
-	warn    *slog.Logger
-	output  io.Writer
+	out     io.Writer // default os.Stdout
+	errw    io.Writer // default os.Stderr
 }
 
 // NewLogger creates a new Logger with the given verbosity, quiet mode, and color helper.
 func NewLogger(verbose int, quiet bool, color *ColorHelper) (*Logger, error) {
-	writer := os.Stderr
-	l := &Logger{
+	return &Logger{
 		verbose: verbose,
 		quiet:   quiet,
 		color:   color,
-		output:  writer,
-	}
-
-	infoHandler := slog.NewTextHandler(writer, &slog.HandlerOptions{Level: slog.LevelInfo, AddSource: false})
-	debugHandler := slog.NewTextHandler(writer, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})
-	errorHandler := slog.NewTextHandler(writer, &slog.HandlerOptions{Level: slog.LevelError, AddSource: false})
-	warnHandler := slog.NewTextHandler(writer, &slog.HandlerOptions{Level: slog.LevelWarn, AddSource: false})
-
-	l.info = slog.New(infoHandler)
-	l.debug = slog.New(debugHandler)
-	l.error = slog.New(errorHandler)
-	l.warn = slog.New(warnHandler)
-
-	return l, nil
+		out:     os.Stdout,
+		errw:    os.Stderr,
+	}, nil
 }
 
-// Info logs at info level.
-func (l *Logger) Info(msg string, args ...any) {
-	if !l.quiet {
-		if l.color != nil && l.color.Enabled() {
-			msg = l.color.Blue(msg)
-		}
-		l.info.InfoContext(nil, msg, args...)
-	}
+// SetOut sets the writer used for Msg/Info/Debug (when verbose >= 2).
+func (l *Logger) SetOut(w io.Writer) {
+	l.out = w
 }
 
-// Debug logs at debug level (only when verbose >= 2).
-func (l *Logger) Debug(msg string, args ...any) {
-	if !l.quiet && l.verbose >= 2 {
-		l.debug.DebugContext(nil, msg, args...)
-	}
+// SetErr sets the writer used for Warn/Error/Debug.
+func (l *Logger) SetErr(w io.Writer) {
+	l.errw = w
 }
 
-// Warn logs a warning.
-func (l *Logger) Warn(msg string, args ...any) {
-	if !l.quiet {
-		if l.color != nil && l.color.Enabled() {
-			msg = l.color.Yellow(msg)
-		}
-		l.warn.WarnContext(nil, msg, args...)
+// Msg writes a message with the ">>> " prefix to the output writer.
+// Suppressed by --quiet.
+func (l *Logger) Msg(format string, args ...any) {
+	if l.quiet {
+		return
 	}
+	msg := fmt.Sprintf(format, args...)
+	if l.color != nil && l.color.Enabled() {
+		msg = l.color.Blue(msg)
+	}
+	fmt.Fprintf(l.out, ">>> %s\n", msg)
 }
 
-// Error logs an error.
-func (l *Logger) Error(msg string, args ...any) {
-	if !l.quiet {
-		if l.color != nil && l.color.Enabled() {
-			msg = l.color.Red(msg)
-		}
-		l.error.ErrorContext(nil, msg, args...)
+// Debug writes a message with the ">>> " prefix to the error writer.
+// Suppressed by --quiet; additionally gated on verbose >= 2.
+func (l *Logger) Debug(format string, args ...any) {
+	if l.quiet || l.verbose < 2 {
+		return
 	}
+	msg := fmt.Sprintf(format, args...)
+	if l.color != nil && l.color.Enabled() {
+		msg = l.color.Blue(msg)
+	}
+	fmt.Fprintf(l.errw, ">>> %s\n", msg)
 }
 
-// Infof is like Info but uses format specifiers.
+// Warn writes a warning with the "*** " prefix to the error writer.
+// Suppressed by --quiet.
+func (l *Logger) Warn(format string, args ...any) {
+	if l.quiet {
+		return
+	}
+	msg := fmt.Sprintf(format, args...)
+	if l.color != nil && l.color.Enabled() {
+		msg = l.color.Yellow(msg)
+	}
+	fmt.Fprintf(l.errw, "*** %s\n", msg)
+}
+
+// Error writes an error with the "!!! " prefix to the error writer.
+// NEVER suppressed — even --quiet does not silence errors.
+func (l *Logger) Error(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if l.color != nil && l.color.Enabled() {
+		msg = l.color.Red(msg)
+	}
+	fmt.Fprintf(l.errw, "!!! %s\n", msg)
+}
+
+// Info is a thin alias of Msg.
+func (l *Logger) Info(format string, args ...any) {
+	l.Msg(format, args...)
+}
+
+// Infof is a thin alias of Msg using fmt.Sprintf internally.
 func (l *Logger) Infof(format string, args ...any) {
-	l.Info(fmt.Sprintf(format, args...))
+	l.Msg(format, args...)
 }
 
-// Debugf is like Debug but uses format specifiers.
+// Debugf is a thin alias of Debug using fmt.Sprintf internally.
 func (l *Logger) Debugf(format string, args ...any) {
-	if !l.quiet && l.verbose >= 2 {
-		l.debug.DebugContext(nil, fmt.Sprintf(format, args...))
-	}
+	l.Debug(format, args...)
 }

@@ -4,10 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"bennypowers.dev/larry/internal/ebuild"
-	"bennypowers.dev/larry/internal/output"
 	"bennypowers.dev/larry/internal/prepare"
 
 	"github.com/spf13/cobra"
@@ -91,7 +89,7 @@ Flags:
 
 		// Resolve GitHub repo from overlay git remote (for release uploads).
 		if overlay != "" {
-			if repo, err := resolveGitHubRepo(overlay); err == nil && repo != "" {
+			if repo, err := cfg.ResolveGitHubRepo(overlay, cfg.Remote); err == nil && repo != "" {
 				pcfg.GitHubRepo = repo
 			}
 		}
@@ -174,34 +172,4 @@ func resolvePrepareTarget(path, overlay string) (*ebuild.EbuildInfo, os.FileInfo
 	return info, fi, nil
 }
 
-// printPrepareResult prints the result of a prepare operation.
-func printPrepareResult(color *output.ColorHelper, path string, err error) error {
-	if err != nil {
-		return fmt.Errorf("prepare failed: %w", err)
-	}
-	fmt.Fprintf(os.Stdout, "Prepared: %s\n", path)
-	return nil
-}
 
-// resolveGitHubRepo extracts the owner/repo from the overlay's git remote URL.
-func resolveGitHubRepo(overlay string) (string, error) {
-	out, err := os.ReadFile(filepath.Join(overlay, ".git", "config"))
-	if err != nil {
-		return "", fmt.Errorf("read git config: %w", err)
-	}
-	// Match: url = git@github.com:owner/repo.git or url = https://github.com/owner/repo.git.
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(strings.ToLower(line))
-		if strings.HasPrefix(line, "url = git@github.com:") {
-			repo := strings.TrimPrefix(line, "url = git@github.com:")
-			repo = strings.TrimSuffix(repo, ".git")
-			return repo, nil
-		}
-		if strings.HasPrefix(line, "url = https://github.com/") {
-			repo := strings.TrimPrefix(line, "url = https://github.com/")
-			repo = strings.TrimSuffix(repo, ".git")
-			return repo, nil
-		}
-	}
-	return "", nil
-}

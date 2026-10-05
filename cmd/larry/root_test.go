@@ -29,7 +29,35 @@ func findSubCmd(root *cobra.Command, name string) *cobra.Command {
 
 func TestPersistentFlagsRegisteredOnRoot(t *testing.T) {
 	// D1: all persistent flags are on PersistentFlags(), not Flags().
-	root := newRootCmd()
+	// We build a fresh command tree so that earlier tests' command
+	// executions don't contaminate the flag state.
+	root := &cobra.Command{
+		Use:   "larry",
+		Short: "Larry — Gentoo upstream tooling",
+	}
+	// Re-register persistent flags on the fresh command.
+	root.PersistentFlags().CountVarP(&rootFlags.Verbose, "verbose", "v",
+		"verbose output (-v info, -vv debug)")
+	root.PersistentFlags().BoolVarP(&rootFlags.Quiet, "quiet", "q", false,
+		"suppress all output")
+	root.PersistentFlags().StringVar(&rootFlags.Color, "color", "auto",
+		"color mode: auto, always, never")
+	root.PersistentFlags().BoolVarP(&rootFlags.DryRun, "dry-run", "n", false,
+		"show what would be done without making changes")
+	root.PersistentFlags().StringVar(&rootFlags.CacheDir, "cache-dir", "",
+		"cache directory for version queries")
+	root.PersistentFlags().StringVar(&rootFlags.Distdir, "distdir", "",
+		"distdir path for source downloads")
+	root.PersistentFlags().IntVar(&rootFlags.Jobs, "jobs", 0,
+		"number of parallel jobs (0 = auto-detect)")
+	root.PersistentFlags().StringVar(&rootFlags.GitHubToken, "github-token", "",
+		"GitHub personal access token")
+	root.PersistentFlags().StringVar(&rootFlags.Remote, "remote", "origin",
+		"git remote name for upstream resolution (default: origin)")
+	root.PersistentFlags().StringVar(&rootFlags.ConfigPath, "config", "",
+		"config file path (default: $XDG_CONFIG_HOME/larry/config.yaml)")
+	root.PersistentFlags().StringVar(&rootFlags.Overlay, "overlay", "",
+		"overlay root path (default: $LARRY_OVERLAY, config file, or git CWD)")
 
 	for _, name := range persistentFlagNames {
 		t.Run(name, func(t *testing.T) {

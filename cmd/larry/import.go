@@ -74,23 +74,23 @@ Examples:
 		}
 
 		if importDry {
-			fmt.Printf("Would import:\n")
-			fmt.Printf("  Source: %s\n", result.SourcePath)
-			fmt.Printf("  Target: %s\n", result.EbuildPath)
+			log.Msg("Would import:")
+			log.Msg("  Source: %s", result.SourcePath)
+			log.Msg("  Target: %s", result.EbuildPath)
 			if result.MetaPath != "" {
-				fmt.Printf("  Metadata: %s\n", result.MetaPath)
+				log.Msg("  Metadata: %s", result.MetaPath)
 			}
 			return nil
 		}
 
-		fmt.Printf("Imported %s:\n", catPkg)
-		fmt.Printf("  Ebuild: %s\n", result.EbuildPath)
-		fmt.Printf("  Metadata: %s\n", result.MetaPath)
+		log.Msg("Imported %s:", catPkg)
+		log.Msg("  Ebuild: %s", result.EbuildPath)
+		log.Msg("  Metadata: %s", result.MetaPath)
 
 		// Print next steps
 		ebuildDir := filepath.Dir(result.EbuildPath)
 		ebuildRel := ebuildDir
-		fmt.Printf("\nRun 'larry prepare %s' to prepare the ebuild for commit.\n", ebuildRel)
+		log.Msg("Run 'larry prepare %s' to prepare the ebuild for commit.", ebuildRel)
 
 		return nil
 	},

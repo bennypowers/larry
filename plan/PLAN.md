@@ -30,6 +30,8 @@ Hard facts at audit time:
 | `config.Load()` | ✅ wired in `PersistentPreRunE` (plan 13a) |
 | global flags | ✅ persistent flags registered on root (plan 13a) |
 | bare `larry` | ✅ exits 1, no "hello" (plan 13a) |
+| `internal/output` | ✅ rewritten: `Msg`/`Warn`/`Error` prefixes, injectable writers, `--quiet`/`--color` now functional (plan 13b) |
+| `ResolveGitHubRepo` | ✅ added to `config.Config`, replaces `prepare.resolveGitHubRepo` (plan 13b) |
 
 Phase 2 is therefore **parity and correctness**, not new surface area.
 
@@ -76,7 +78,7 @@ stated acceptance check. Respect preconditions — the first four unblock the re
 | ---- | ---- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
 | 12   | ✅   | `12-PLAN-ATOM.md`                   | `internal/atom`: one atom/filename parser; kill 5 duplicates                                                                                                                                                                                                                     | —                     |
 | 13a  | ✅   | `13a-PLAN-CLI-HARNESS.md`           | `ExitError`+`main.go`, the `cmd/larry` test harness (`execCmd`/`fixtureOverlay`), persistent flags incl. a root `--overlay`, `config.Load()` wiring, `ResolveOverlay`/`ResolveDistdir`/`ResolveCacheDir`, maintainer keys                                                        | —                     |
-| 13b  |      | `13b-PLAN-CLI-OUTPUT.md`            | `internal/output` rewrite (`Msg`/`Warn`/`Error` prefixes, injectable writers), replace bare `fmt.Printf` in the commands, `(*Config).ResolveGitHubRepo` via go-git, read `--remote`                                                                                              | 13a                   |
+| 13b  | ✅   | `13b-PLAN-CLI-OUTPUT.md`            | `internal/output` rewrite (`Msg`/`Warn`/`Error` prefixes, injectable writers), replace bare `fmt.Printf` in the commands, `(*Config).ResolveGitHubRepo` via go-git, read `--remote`                                                                                              | 13a                   |
 | 14   |      | `14-PLAN-VERSION.md`                | Gentoo suffix order (`_p`, `_pre`), `IsPrerelease`, lenient parse, `v`-prefix                                                                                                                                                                                                    | —                     |
 | 15   |      | `15-PLAN-REMOTEID.md`               | `metadata.xml` parsing; GitLab/SourceHut/`.git` repo extraction                                                                                                                                                                                                                  | —                     |
 | 16   |      | `16-PLAN-UPSTREAM-DISCOVERY.md`     | `-rN` ebuilds, live-vs-versioned, ordering, positional **atom** filters, `MY_PN`, npm names, `HAS-RELEASE`. **Creates `cmd/larry/upstream_test.go`**                                                                                                                             | 12, 13a, 14, 15       |

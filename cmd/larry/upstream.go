@@ -100,9 +100,9 @@ Examples:
 
 				// Render output.
 				if len(results) == 0 {
-					fmt.Println("All packages are up-to-date.")
-					fmt.Println("\nCheck complete. Cache stored in: " + upstream.DefaultCachePath() + " (expires after 6h)")
-					fmt.Println("Use --fresh to force a refresh.")
+					log.Msg("All packages are up-to-date.")
+					log.Msg("Check complete. Cache stored in: %s (expires after 6h)", upstream.DefaultCachePath())
+					log.Msg("Use --fresh to force a refresh.")
 					return ""
 				}
 
@@ -133,7 +133,7 @@ Examples:
 		}
 
 		if len(results) == 0 {
-			fmt.Println("All packages are up-to-date.")
+			log.Msg("All packages are up-to-date.")
 			return nil
 		}
 
@@ -146,3 +146,5 @@ Examples:
 		return err
 	},
 }
+
+

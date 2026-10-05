@@ -141,6 +141,10 @@ func persistentPreRunE(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("initializing logger: %w", err)
 	}
 
+	// Wire injectable writers so test harnesses can capture output.
+	log.SetOut(cmd.OutOrStdout())
+	log.SetErr(cmd.ErrOrStderr())
+
 	return nil
 }
 

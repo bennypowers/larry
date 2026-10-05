@@ -97,7 +97,7 @@ Examples:
 			if err != nil {
 				return fmt.Errorf("container test failed: %w", err)
 			}
-			fmt.Println("Container test completed successfully.")
+			log.Msg("Container test completed successfully.")
 		} else {
 			// Local mode.
 			runner := test.NewCmdRunner()
@@ -105,7 +105,7 @@ Examples:
 			if err != nil {
 				return fmt.Errorf("test failed: %w", err)
 			}
-			fmt.Println("Test completed successfully.")
+			log.Msg("Test completed successfully.")
 		}
 		return nil
 	},

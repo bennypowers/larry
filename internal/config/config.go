@@ -27,6 +27,7 @@ type Config struct {
 	GitHubToken   string
 	Remote        string
 	Overlay       string
+	GitHubRepo    string
 	MaintainerName  string
 	MaintainerEmail string
 }
@@ -44,6 +45,7 @@ func DefaultConfig() *Config {
 		Distdir:       "",
 		Overlay:       "",
 		GitHubToken:   "",
+		GitHubRepo:    "",
 		MaintainerName:  "",
 		MaintainerEmail: "",
 	}
@@ -126,6 +128,9 @@ func applyConfig(v *viper.Viper, c *Config) error {
 	if v.Get("maintainer.email") != nil {
 		c.MaintainerEmail = v.GetString("maintainer.email")
 	}
+	if v.Get("github_repo") != nil {
+		c.GitHubRepo = v.GetString("github_repo")
+	}
 	return nil
 }
 
@@ -169,6 +174,9 @@ func applyEnvOverrides(c *Config) {
 	}
 	if v := os.Getenv("LARRY_MAINTAINER_EMAIL"); v != "" {
 		c.MaintainerEmail = v
+	}
+	if v := os.Getenv("LARRY_GITHUB_REPO"); v != "" {
+		c.GitHubRepo = v
 	}
 }
 
@@ -236,6 +244,42 @@ func (c *Config) ResolveCacheDir(override string) string {
 		return c.CacheDir
 	}
 	return defaultCacheDir()
+}
+
+// ResolveGitHubRepo returns "owner/repo" for the overlay's GitHub remote.
+// Order: c.GitHubRepo (config key `github_repo` / $LARRY_GITHUB_REPO)
+//        -> git remote `remote` on `overlay`.
+// When remote is empty, uses c.Remote (default "origin").
+func (c *Config) ResolveGitHubRepo(overlay, remote string) (string, error) {
+	// 1. Explicit config/env value takes priority.
+	if c.GitHubRepo != "" {
+		return c.GitHubRepo, nil
+	}
+
+	// 2. Fall back to git remote.
+	if remote == "" {
+		remote = c.Remote
+	}
+	if remote == "" {
+		remote = "origin"
+	}
+
+	repo, err := git.Open(overlay)
+	if err != nil {
+		return "", fmt.Errorf("open overlay %q as git repo: %w", overlay, err)
+	}
+
+	url, err := repo.RemoteURL(remote)
+	if err != nil {
+		return "", fmt.Errorf("remote %q on %q: %w", remote, overlay, err)
+	}
+
+	owner, name, err := git.ParseRemoteURL(url)
+	if err != nil {
+		return "", fmt.Errorf("parse remote %q (%q): %w", remote, url, err)
+	}
+
+	return owner + "/" + name, nil
 }
 
 func defaultCacheDir() string {

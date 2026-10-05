@@ -155,7 +155,14 @@ func runBump(cmd *cobra.Command, args []string) error {
 		RevisionBump:            mode == bump.BumpModeRevision,
 	}
 
-	log.Debug("prepare distdir=" + distdir + " forceType=" + string(forceType))
+	// Resolve GitHub repo for release uploads (non-fatal for non-upload types).
+	if repo, err := cfg.ResolveGitHubRepo(overlayRoot, cfg.Remote); err == nil && repo != "" {
+		pcfg.GitHubRepo = repo
+	} else if err != nil {
+		log.Warn("resolve GitHub repo: %v (uploads may fail)", err)
+	}
+
+	log.Debug("prepare distdir=%s forceType=%s", distdir, string(forceType))
 	fmt.Fprintf(cmd.OutOrStdout(), "\nPreparing %s...\n", result.NewFile)
 	if err := prepare.PrepareFromFile(result.NewFile, pcfg); err != nil {
 			// Delete the stale new ebuild — prepare rollback restores from backup
@@ -188,7 +195,7 @@ func runBump(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("commit: %w", err)
 		}
-		log.Debug("committed " + commitHash[:7] + ": " + msg)
+		log.Debug("committed %s: %s", commitHash[:7], msg)
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "Done.")
