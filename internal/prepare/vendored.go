@@ -1,7 +1,6 @@
 package prepare
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
 )
@@ -29,15 +29,15 @@ type DepSpec struct {
 	Type           DepType // npm | cargo | go
 	SourcePath     string  // relative to S, e.g. "src/web-app"
 	DistName       string  // distfile name, e.g. "pkg-1.0.0-npm-deps.tar.xz"
-	TarballContent string  // "node_modules" or "vendor"
+	TarballContent string  // "npm-cache", "vendor"
 }
 
 // ---------------------------------------------------------------------------
 // parseDepSpec — infer DepSpec from distfile name
 // ---------------------------------------------------------------------------
 
-// parseDepSpec infers a DepSpec from a distfile name and package version string.
-func parseDepSpec(distName, pVal string) DepSpec {
+// parseDepSpec infers a DepSpec from a distfile name.
+func parseDepSpec(distName string) DepSpec {
 	var depType DepType
 	var tarballContent string
 
@@ -67,12 +67,12 @@ func parseDepSpec(distName, pVal string) DepSpec {
 }
 
 // parseDepSpecsFromURI extracts DepSpecs from a SRC_URI containing
-// "releases/download/${PN}/" entries.
-func parseDepSpecsFromURI(srcURI, pVal string) []DepSpec {
-	distNames := extractSRCURIForPN(srcURI, filepath.Base(strings.Split(pVal, "-")[0]))
+// "releases/download/${PN}/" entries. PN comes from *atom.ParsedEbuild.
+func parseDepSpecsFromURI(srcURI string, pe *atom.ParsedEbuild) []DepSpec {
+	distNames := extractSRCURIForPN(srcURI, pe.PN)
 	deps := make([]DepSpec, 0, len(distNames))
 	for _, dn := range distNames {
-		ds := parseDepSpec(dn, pVal)
+		ds := parseDepSpec(dn)
 		if ds.Type != "" {
 			deps = append(deps, ds)
 		}
@@ -254,16 +254,19 @@ func ghUploadAsset(tag, tarballPath, repo string, runner github.CmdRunner) error
 }
 
 // ---------------------------------------------------------------------------
-// sha256OfFile — compute SHA-256 hash of a file
-// ---------------------------------------------------------------------------
-
-// sha256OfFile computes the SHA-256 hex digest of a file.
-func sha256OfFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
+// resolveBuildDir returns the working directory for a vendored dep spec.
+// When vendor_dirs is configured for this package, it uses the first entry;
+// otherwise it falls back to the extract root.
+func resolveBuildDir(extractDir string, pe *atom.ParsedEbuild, pkgCfg *Config, ds DepSpec) string {
+	if pkgCfg != nil {
+		if dirs, ok := pkgCfg.VendorDirs[pe.PN]; ok && len(dirs) > 0 {
+			return filepath.Join(extractDir, dirs[0])
+		}
 	}
-	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
+	if ds.SourcePath != "" {
+		return filepath.Join(extractDir, ds.SourcePath)
+	}
+	return extractDir
 }
 
 // ---------------------------------------------------------------------------
@@ -278,8 +281,20 @@ func PrepareVendored(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 
 	distdir := cfg.Distdir
 
-	// 1. Extract dep specs from SRC_URI
-	depSpecs := parseDepSpecsFromURI(ei.SRC_URI, ei.P())
+	// 1. Parse ebuild path to get PN from directory name
+	pe, err := atom.ParseEbuildPath(ei.Path)
+	if err != nil {
+		return fmt.Errorf("parse ebuild path: %w", err)
+	}
+
+	// 2. Load per-package config for vendor_dirs
+	pkgCfg, err := LoadConfig(ei.Path)
+	if err != nil {
+		return fmt.Errorf("vendored: read .larry.yaml: %w", err)
+	}
+
+	// 3. Extract dep specs from SRC_URI
+	depSpecs := parseDepSpecsFromURI(ei.SRC_URI, pe)
 	if len(depSpecs) == 0 {
 		return fmt.Errorf("no vendored deps found in SRC_URI")
 	}
@@ -307,11 +322,11 @@ func PrepareVendored(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 		return fmt.Errorf("extract source: %w", err)
 	}
 
-	// 4. For each dep, run vendor command, create tarball, upload
+	// 4. For each dep, resolve build dir, run vendor command, create tarball, upload
 	gh := github.NewClient()
 	for _, ds := range depSpecs {
-		// Run vendor command in source dir
-		buildDir := filepath.Join(extractDir, ds.SourcePath)
+		// Resolve working directory (uses vendor_dirs from .larry.yaml when present)
+		buildDir := resolveBuildDir(extractDir, pe, pkgCfg, ds)
 		if err := runVendorCommand(ds.Type, buildDir); err != nil {
 			return fmt.Errorf("vendor %s: %w", ds.Type, err)
 		}

@@ -1,7 +1,6 @@
 package prepare
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
 )
@@ -30,7 +30,7 @@ func TestVendored_ParseDepSpec_Npm(t *testing.T) {
 		{"pkg-1.0.0-npm-deps.tar.zst", DepNPM, "npm-cache"},
 	}
 	for _, tt := range tests {
-		ds := parseDepSpec(tt.distName, "pkg-1.0.0")
+		ds := parseDepSpec(tt.distName)
 		if ds.Type != tt.wantType {
 			t.Errorf("parseDepSpec(%q) type = %q, want %q", tt.distName, ds.Type, tt.wantType)
 		}
@@ -41,8 +41,8 @@ func TestVendored_ParseDepSpec_Npm(t *testing.T) {
 }
 
 func TestVendored_ParseDepSpec_Cargo(t *testing.T) {
-	ds := parseDepSpec("pkg-1.0.0-cargo-deps.tar.xz", "pkg-1.0.0")
-	if ds.Type != DepCargo {
+	ds := parseDepSpec("pkg-1.0.0-cargo-deps.tar.xz")
+	if ds.Type != DepCargo{
 		t.Errorf("parseDepSpec cargo type = %q, want %q", ds.Type, DepCargo)
 	}
 	if ds.TarballContent != "vendor" {
@@ -51,7 +51,7 @@ func TestVendored_ParseDepSpec_Cargo(t *testing.T) {
 }
 
 func TestVendored_ParseDepSpec_Go(t *testing.T) {
-	ds := parseDepSpec("pkg-1.0.0-go-deps.tar.gz", "pkg-1.0.0")
+	ds := parseDepSpec("pkg-1.0.0-go-deps.tar.gz")
 	if ds.Type != DepGo {
 		t.Errorf("parseDepSpec go type = %q, want %q", ds.Type, DepGo)
 	}
@@ -61,14 +61,14 @@ func TestVendored_ParseDepSpec_Go(t *testing.T) {
 }
 
 func TestVendored_ParseDepSpec_Unknown(t *testing.T) {
-	ds := parseDepSpec("pkg-1.0.0-foo-deps.tar.xz", "pkg-1.0.0")
+	ds := parseDepSpec("pkg-1.0.0-foo-deps.tar.xz")
 	if ds.Type != "" {
 		t.Errorf("parseDepSpec unknown type = %q, want empty", ds.Type)
 	}
 }
 
 func TestVendored_ParseDepSpec_DistName(t *testing.T) {
-	ds := parseDepSpec("pkg-1.0.0-npm-deps.tar.xz", "pkg-1.0.0")
+	ds := parseDepSpec("pkg-1.0.0-npm-deps.tar.xz")
 	expected := "pkg-1.0.0-npm-deps.tar.xz"
 	if ds.DistName != expected {
 		t.Errorf("parseDepSpec distname = %q, want %q", ds.DistName, expected)
@@ -335,26 +335,6 @@ func TestVendored_GhUpload_MissingFile(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// sha256Hash tests
-// ---------------------------------------------------------------------------
-
-func TestVendored_SHA256Hash(t *testing.T) {
-	tmpDir := t.TempDir()
-	file := filepath.Join(tmpDir, "test.txt")
-	os.WriteFile(file, []byte("hello"), 0644)
-
-	hash, err := sha256OfFile(file)
-	if err != nil {
-		t.Fatalf("sha256OfFile failed: %v", err)
-	}
-
-	expected := fmt.Sprintf("%x", sha256.Sum256([]byte("hello")))
-	if hash != expected {
-		t.Errorf("sha256OfFile = %q, want %q", hash, expected)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // dry-run behavior
 // ---------------------------------------------------------------------------
 
@@ -401,7 +381,7 @@ func TestVendored_MultipleDeps(t *testing.T) {
 
 	deps := make([]DepSpec, 0, len(distNames))
 	for _, dn := range distNames {
-		ds := parseDepSpec(dn, "pkg-1.0.0")
+		ds := parseDepSpec(dn)
 		deps = append(deps, ds)
 	}
 
@@ -418,6 +398,165 @@ func TestVendored_MultipleDeps(t *testing.T) {
 	}
 	if deps[2].Type != DepGo {
 		t.Errorf("dep[2] type = %q, want %q", deps[2].Type, DepGo)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// parseDepSpecsFromURI tests — PN from atom.ParsedEbuild (C1)
+// ---------------------------------------------------------------------------
+
+func TestParseDepSpecs_HyphenatedPackageName(t *testing.T) {
+	pe := &atom.ParsedEbuild{
+		PN:  "fish-lsp",
+		PV:  "1.1.3",
+		P:   "fish-lsp-1.1.3",
+		Path: t.TempDir(),
+	}
+	srcURI := "https://github.com/bennypowers/overlay/releases/download/fish-lsp/fish-lsp-1.1.3-npm-deps.tar.xz"
+
+	deps := parseDepSpecsFromURI(srcURI, pe)
+	if len(deps) != 1 {
+		t.Fatalf("expected 1 dep, got %d", len(deps))
+	}
+	if deps[0].Type != DepNPM {
+		t.Errorf("type = %q, want %q", deps[0].Type, DepNPM)
+	}
+	if deps[0].DistName != "fish-lsp-1.1.3-npm-deps.tar.xz" {
+		t.Errorf("DistName = %q, want %q", deps[0].DistName, "fish-lsp-1.1.3-npm-deps.tar.xz")
+	}
+	if deps[0].TarballContent != "npm-cache" {
+		t.Errorf("TarballContent = %q, want npm-cache", deps[0].TarballContent)
+	}
+}
+
+func TestParseDepSpecs_SimpleName(t *testing.T) {
+	pe := &atom.ParsedEbuild{
+		PN:   "javy",
+		PV:   "9.1.0",
+		P:    "javy-9.1.0",
+		Path: t.TempDir(),
+	}
+	srcURI := "https://github.com/bennypowers/overlay/releases/download/javy/javy-9.1.0-cargo-deps.tar.xz"
+
+	deps := parseDepSpecsFromURI(srcURI, pe)
+	if len(deps) != 1 {
+		t.Fatalf("expected 1 dep, got %d", len(deps))
+	}
+	if deps[0].Type != DepCargo {
+		t.Errorf("type = %q, want %q", deps[0].Type, DepCargo)
+	}
+	if deps[0].TarballContent != "vendor" {
+		t.Errorf("TarballContent = %q, want vendor", deps[0].TarballContent)
+	}
+}
+
+func TestParseDepSpecs_NoMatch(t *testing.T) {
+	pe := &atom.ParsedEbuild{
+		PN:   "javy",
+		PV:   "9.1.0",
+		P:    "javy-9.1.0",
+		Path: t.TempDir(),
+	}
+	srcURI := "https://example.com/javy-9.1.0.tar.gz"
+
+	deps := parseDepSpecsFromURI(srcURI, pe)
+	if len(deps) != 0 {
+		t.Fatalf("expected 0 deps, got %d", len(deps))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Vendor dirs — resolveBuildDir tests (C2)
+// ---------------------------------------------------------------------------
+
+func resolveBuildDirForTest(extractDir string, pe *atom.ParsedEbuild, pkgCfg *Config, ds DepSpec) string {
+	return resolveBuildDir(extractDir, pe, pkgCfg, ds)
+}
+
+func TestVendored_VendorDirsConfigIsHonoured(t *testing.T) {
+	overlayDir := t.TempDir()
+	ep := &atom.ParsedEbuild{
+		Category: "dev-util",
+		PN:       "fish-lsp",
+		PV:       "1.1.3",
+		P:        "fish-lsp-1.1.3",
+		Path:     filepath.Join(overlayDir, "fish-lsp-1.1.3.ebuild"),
+	}
+	pkgCfg := &Config{
+		VendorDirs: map[string][]string{
+			"fish-lsp": {"sub/pkg"},
+		},
+	}
+	ds := DepSpec{}
+
+	result := resolveBuildDirForTest("/extract", ep, pkgCfg, ds)
+	want := filepath.Join("/extract", "sub", "pkg")
+	if result != want {
+		t.Errorf("workDir = %q, want %q", result, want)
+	}
+}
+
+func TestVendored_VendorDirsAbsentMeansExtractRoot(t *testing.T) {
+	ep := &atom.ParsedEbuild{
+		Category: "dev-util",
+		PN:       "fish-lsp",
+		PV:       "1.1.3",
+		P:        "fish-lsp-1.1.3",
+		Path:     t.TempDir(),
+	}
+
+	result := resolveBuildDirForTest("/extract", ep, nil, DepSpec{})
+	if result != "/extract" {
+		t.Errorf("workDir = %q, want /extract", result)
+	}
+}
+
+func TestVendored_VendorDirsForOtherPackageIsIgnored(t *testing.T) {
+	ep := &atom.ParsedEbuild{
+		Category: "dev-util",
+		PN:       "fish-lsp",
+		PV:       "1.1.3",
+		P:        "fish-lsp-1.1.3",
+		Path:     t.TempDir(),
+	}
+	pkgCfg := &Config{
+		VendorDirs: map[string][]string{
+			"some-other-pkg": {"sub/pkg"},
+		},
+	}
+
+	result := resolveBuildDirForTest("/extract", ep, pkgCfg, DepSpec{})
+	if result != "/extract" {
+		t.Errorf("workDir = %q, want /extract", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Manifest catPkg test (C5)
+// ---------------------------------------------------------------------------
+
+func TestVendored_ManifestTargetsCatPkg(t *testing.T) {
+	// Verify that atom.ParseEbuildPath yields correct PN and category,
+	// which PrepareVendored uses to build the catPkg string
+	// "category/PN" for the manifest target.
+	dir := t.TempDir()
+	ebuildPath := filepath.Join(dir, "dev-util", "fish-lsp", "fish-lsp-1.1.3.ebuild")
+	os.MkdirAll(filepath.Dir(ebuildPath), 0755)
+	os.WriteFile(ebuildPath, []byte("EAPI=8\nSRC_URI=\"https://example.com/fish-lsp-1.1.3.tar.gz\"\n"), 0644)
+
+	pe, err := atom.ParseEbuildPath(ebuildPath)
+	if err != nil {
+		t.Fatalf("ParseEbuildPath: %v", err)
+	}
+	wantCatPkg := "dev-util/fish-lsp"
+	gotCatPkg := pe.Category + "/" + pe.PN
+	if gotCatPkg != wantCatPkg {
+		t.Errorf("catPkg = %q, want %q", gotCatPkg, wantCatPkg)
+	}
+
+	// Verify PN came from directory, not filename splitting
+	if pe.PN != "fish-lsp" {
+		t.Errorf("PN = %q, want fish-lsp (from directory, not split)", pe.PN)
 	}
 }
 
@@ -478,7 +617,8 @@ func TestVendored_ExtractSRCURIForPN(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestVendored_ParseDepSpecsFromURI(t *testing.T) {
-	dists := parseDepSpecsFromURI("releases/download/pkg/pkg-1.0.0-npm-deps.tar.xz releases/download/pkg/pkg-1.0.0-cargo-deps.tar.xz", "pkg-1.0.0")
+	pe := &atom.ParsedEbuild{PN: "pkg", PV: "1.0.0", P: "pkg-1.0.0", Path: t.TempDir()}
+	dists := parseDepSpecsFromURI("releases/download/pkg/pkg-1.0.0-npm-deps.tar.xz releases/download/pkg/pkg-1.0.0-cargo-deps.tar.xz", pe)
 	if len(dists) != 2 {
 		t.Fatalf("expected 2 distspecs, got %d", len(dists))
 	}
@@ -494,7 +634,7 @@ func TestVendored_ParseDepSpecsFromURI(t *testing.T) {
 // matches what npmCreateDepsTarball actually produces (npm-cache/).
 // This test follows the existing stub-runner pattern (see TestVendored_GhReleaseView_Exists).
 func TestVendored_NpmAssetContractIsNpmCache(t *testing.T) {
-	ds := parseDepSpec("pkg-1.0.0-npm-deps.tar.xz", "pkg-1.0.0")
+	ds := parseDepSpec("pkg-1.0.0-npm-deps.tar.xz")
 	if ds.TarballContent != "npm-cache" {
 		t.Errorf("npm TarballContent = %q, want npm-cache", ds.TarballContent)
 	}
