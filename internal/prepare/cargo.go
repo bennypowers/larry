@@ -1,7 +1,6 @@
 package prepare
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,18 +8,27 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
+	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
 	"bennypowers.dev/larry/internal/httpclient"
 	"bennypowers.dev/larry/internal/logger"
-	"sort"
 )
 
 // lookPath is exec.LookPath, stubbable so tests can exercise the native parser
 // even on a workstation that has pycargoebuild installed.
 var lookPath = exec.LookPath
+
+// forgeKind identifies the upstream forge for a cargo package.
+type forgeKind int
+
+const (
+	forgeGitHub forgeKind = iota
+	forgeSourceHut
+)
 
 // CargoCrate represents a parsed entry from Cargo.lock.
 type CargoCrate struct {
@@ -38,17 +46,28 @@ func PrepareCargo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 		return nil
 	}
 
-	// 1. Find the upstream repository (owner/repo)
-	owner, repo := findCargoRepo(ei)
-
-	// 2. Find and download Cargo.lock
-	clientGH := github.NewClient()
-	lockPath, err := findCargoLockAndDownload(clientGH, owner, repo, ei.PV())
+	// 1. Find the upstream forge, owner, repo
+	raw, err := os.ReadFile(ei.Path)
 	if err != nil {
-		return fmt.Errorf("cargo: find and download Cargo.lock: %w", err)
+		return fmt.Errorf("cargo: read ebuild: %w", err)
+	}
+	vars := ebuild.BuildVariableMap(string(raw), nil)
+	forge, owner, repo, err := findCargoRepo(string(raw), vars)
+	if err != nil {
+		return fmt.Errorf("cargo: find repo: %w", err)
 	}
 
-	// 3. Parse Cargo.lock
+	// 2. Derive the version tag
+	tag := cargoTag(forge, ei.PN(), ei.PV(), string(raw))
+
+	// 3. Download Cargo.lock
+	lockPath, err := fetchCargoLock(nil, forge, owner, repo, tag)
+	if err != nil {
+		return fmt.Errorf("cargo: failed to download Cargo.lock for %s/%s at tag %s: %w", owner, repo, tag, err)
+	}
+	defer os.Remove(lockPath)
+
+	// 4. Parse Cargo.lock
 	lockContent, err := os.ReadFile(lockPath)
 	if err != nil {
 		return fmt.Errorf("cargo: read Cargo.lock: %w", err)
@@ -58,15 +77,14 @@ func PrepareCargo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 		return fmt.Errorf("cargo: no crates found in Cargo.lock")
 	}
 
-	// 4. Generate CRATES variable and update ebuild
-	cratesStr := formatCRATES(crates)
-	count, err := updateCargoEbuild(ei, cratesStr, crates, cfg)
+	// 5. Generate CRATES variable and update ebuild
+	count, err := updateCargoEbuild(ei, lockPath, crates, cfg, nil)
 	if err != nil {
 		return fmt.Errorf("cargo: update ebuild: %w", err)
 	}
 	logger.Debug("updated CRATES with " + fmt.Sprintf("%d", count) + " crate entries")
 
-	// 5. Generate Manifest
+	// 6. Generate Manifest
 	if err := runManifest(manifestRequest{
 		Overlay:    cfg.Overlay,
 		CatPkg:     ei.Category + "/" + ei.PN(),
@@ -80,139 +98,118 @@ func PrepareCargo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	return nil
 }
 
-// findCargoRepo extracts the GitHub owner/repo from SRC_URI or HOMEPAGE.
-func findCargoRepo(ei *ebuild.EbuildInfo) (owner, repo string) {
-	// Try HOMEPAGE first: https://github.com/owner/repo
-	if ei.HOMEPAGE != "" {
-		re := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)`)
-		matches := re.FindStringSubmatch(ei.HOMEPAGE)
-		if len(matches) == 3 {
-			return strings.TrimSpace(matches[1]), strings.TrimSpace(matches[2])
-		}
-	}
-
-	// Try SRC_URI: mirror://github/${PN}/${P}.tar.gz
-	// or https://github.com/owner/repo/...
-	if ei.SRC_URI != "" {
-		re := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)`)
-		matches := re.FindStringSubmatch(ei.SRC_URI)
-		if len(matches) == 3 {
-			return strings.TrimSpace(matches[1]), strings.TrimSpace(matches[2])
-		}
-	}
-
-	return "", ""
+// fetcher is the minimal HTTP surface fetchCargoLock needs.
+// *httpclient.Client already satisfies it.
+type fetcher interface {
+	Get(url string) (*http.Response, error)
 }
 
-// findCargoLockAndDownload finds and downloads Cargo.lock from upstream.
-// Returns the local path to the downloaded Cargo.lock.
-func findCargoLockAndDownload(client *github.Client, owner, repo, tag string) (lockPath string, err error) {
-	// Try the GitHub tree API for Cargo.lock
-	if owner != "" && repo != "" {
-		return findCargoLockFromTreeAPI(client, owner, repo, tag)
+// findCargoRepo resolves the upstream forge from the variable-expanded ebuild text.
+// owner includes the leading "~" for SourceHut. Returns an error when nothing matches.
+func findCargoRepo(raw string, vars ebuild.VariableMap) (forge forgeKind, owner, repo string, err error) {
+	text := ebuild.ExpandVariables(raw, vars)
+
+	// Pattern 1: github.com
+	if m := regexp.MustCompile(`https://github\.com/([^/\s"]+)/([^/\s"]+)`).FindStringSubmatch(text); m != nil {
+		repo := strings.TrimRight(m[2], "/")
+		repo = strings.TrimSuffix(repo, ".git")
+		return forgeGitHub, m[1], repo, nil
 	}
-	return "", fmt.Errorf("cargo: could not find Cargo.lock: no owner/repo")
+
+	// Pattern 2: git.sr.ht (the URL that actually resolves)
+	if m := regexp.MustCompile(`https://git\.sr\.ht/(~[^/\s"]+)/([^/\s"]+)`).FindStringSubmatch(text); m != nil {
+		repo := strings.TrimRight(m[2], "/")
+		repo = strings.TrimSuffix(repo, ".git")
+		return forgeSourceHut, m[1], repo, nil
+	}
+
+	// Pattern 3: sr.ht (HOMEPAGE form — rewrite implicit in URL template)
+	if m := regexp.MustCompile(`https://sr\.ht/(~[^/\s"]+)/([^/\s"]+)`).FindStringSubmatch(text); m != nil {
+		repo := strings.TrimRight(m[2], "/")
+		repo = strings.TrimSuffix(repo, ".git")
+		return forgeSourceHut, m[1], repo, nil
+	}
+
+	return 0, "", "", fmt.Errorf("cargo: no github.com or sr.ht URL in ebuild")
 }
 
-// findCargoLockFromTreeAPI tries to find Cargo.lock in the GitHub tree API.
-// The tag parameter is used as the ref when querying the GitHub API to ensure
-// the correct version's Cargo.lock is fetched (critical for version bumps and revisions).
-// It handles common tag naming conventions: with or without the "v" prefix (e.g., "0.3.3" → "v0.3.3").
-func findCargoLockFromTreeAPI(client *github.Client, owner, repo, tag string) (string, error) {
-	// Common paths to try
-	fallbackPaths := []string{
-		"Cargo.lock",
-		"src/Cargo.lock",
-		"rust/Cargo.lock",
-		"lib/Cargo.lock",
-		"crates/Cargo.lock",
+// cargoTag derives the version tag for a cargo package on the given forge.
+func cargoTag(forge forgeKind, pn, pv, expandedText string) string {
+	switch forge {
+	case forgeGitHub:
+		return "v" + atom.StripRevision(pv)
+	case forgeSourceHut:
+		// Try archive/ tag from expanded SRC_URI
+		if m := regexp.MustCompile(`archive/([^/\s"]+)\.tar(\.[A-Za-z0-9]+)?`).FindStringSubmatch(expandedText); m != nil {
+			return m[1]
+		}
+		// Fall back to PN-PV
+		return pn + "-" + atom.StripRevision(pv)
+	}
+	return ""
+}
+
+// buildURL builds the raw URL for fetching Cargo.lock.
+func buildURL(forge forgeKind, owner, repo, tag, subdir string) string {
+	switch forge {
+	case forgeGitHub:
+		return "https://raw.githubusercontent.com/" + owner + "/" + repo + "/" + tag + "/" + subdir + "Cargo.lock"
+	case forgeSourceHut:
+		return "https://git.sr.ht/" + owner + "/" + repo + "/blob/" + tag + "/" + subdir + "Cargo.lock"
+	}
+	return ""
+}
+
+// fetchCargoLock downloads Cargo.lock for the given forge/owner/repo/tag into a fresh
+// temp dir and returns the file path. fetch may be nil, in which case
+// httpclient.NewClient() is used.
+func fetchCargoLock(fetch fetcher, forge forgeKind, owner, repo, tag string) (string, error) {
+	if fetch == nil {
+		fetch = httpclient.NewClient()
 	}
 
-	// Determine the ref to try, with common tag naming conventions.
-	var refs []string
-	if tag != "" {
-		refs = append(refs, tag)
-		// Try with "v" prefix if the tag doesn't already have it
-		if !strings.HasPrefix(tag, "v") && !strings.HasPrefix(tag, "V") {
-			refs = append(refs, "v"+tag)
+	for _, subdir := range []string{"", "bindings/python/"} {
+		url := buildURL(forge, owner, repo, tag, subdir)
+		resp, err := fetch.Get(url)
+		if err != nil {
+			continue
 		}
-		// Also try without "v" prefix (in case tag has it)
-		if strings.HasPrefix(tag, "v") || strings.HasPrefix(tag, "V") {
-			refs = append(refs, tag[1:])
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			continue
 		}
-	}
-	refs = append(refs, "") // empty string = default branch (no ?ref= param)
 
-	for _, ref := range refs {
-		for _, path := range fallbackPaths {
-			// Build the API call
-			refParam := ""
-			if ref != "" {
-				refParam = "?ref=" + ref
-			}
-			apiCall := "repos/" + owner + "/" + repo + "/contents/" + path + refParam
+		tmpDir, err := os.MkdirTemp("", "larry-cargo-*")
+		if err != nil {
+			resp.Body.Close()
+			continue
+		}
 
-			// Use "repos/" prefix required by gh api for the contents endpoint.
-			output, err := client.Gh("api", apiCall)
+		destPath := filepath.Join(tmpDir, "Cargo.lock")
+		if err := func() error {
+			defer resp.Body.Close()
+			data, err := io.ReadAll(resp.Body)
 			if err != nil {
-				continue
+				return fmt.Errorf("read Cargo.lock: %w", err)
 			}
-
-			// Parse JSON to get download URL
-			var result struct {
-				Name        string `json:"name"`
-				DownloadURL string `json:"download_url"`
+			if err := os.WriteFile(destPath, data, 0644); err != nil {
+				return fmt.Errorf("write Cargo.lock: %w", err)
 			}
-			if err := json.Unmarshal(output, &result); err != nil {
-				continue
-			}
-
-			// If download_url is empty, the response may be a base64-encoded blob.
-			// In that case, decode the "content" field as fallback.
-			if result.DownloadURL == "" {
-				var blobResult struct {
-					Content  string `json:"content"`
-					Encoding string `json:"encoding"`
-				}
-				if json.Unmarshal(output, &blobResult) == nil && blobResult.Content != "" {
-					tmpDir, err := os.MkdirTemp("", "larry-cargo-*")
-					if err != nil {
-						continue
-					}
-					destPath := filepath.Join(tmpDir, "Cargo.lock")
-					if err := os.WriteFile(destPath, []byte(blobResult.Content), 0644); err != nil {
-						continue
-					}
-					return destPath, nil
-				}
-				continue
-			}
-
-			// Download the Cargo.lock
-			tmpDir, err := os.MkdirTemp("", "larry-cargo-*")
-			if err != nil {
-				continue
-			}
-			destPath := filepath.Join(tmpDir, "Cargo.lock")
-			clientHTTP := httpclient.NewClient()
-			if err := downloadCargoLock(result.DownloadURL, destPath, clientHTTP); err != nil {
-				continue
-			}
-			return destPath, nil
+			return nil
+		}(); err != nil {
+			os.RemoveAll(tmpDir)
+			continue
 		}
+
+		return destPath, nil
 	}
 
-	return "", fmt.Errorf("cargo: Cargo.lock not found in %s/%s", owner, repo)
+	return "", fmt.Errorf("cargo: failed to download Cargo.lock for %s/%s at tag %s", owner, repo, tag)
 }
 
-// findCargoLockFromTree is the exported version for testing (same as tree API above).
-func findCargoLockFromTree(client *github.Client, owner, repo, tag string) (string, error) {
-	return findCargoLockFromTreeAPI(client, owner, repo, tag)
-}
-
-// downloadCargoLock downloads a Cargo.lock from a URL.
+// downloadCargoLock downloads a Cargo.lock from a URL using the given client.
+// Used by standalone HTTP download tests.
 func downloadCargoLock(url, dest string, client *httpclient.Client) error {
-	// Create directory if needed
 	dir := filepath.Dir(dest)
 	if dir != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -322,53 +319,66 @@ func formatCRATES(crates []CargoCrate) string {
 }
 
 // updateCargoEbuild updates the CRATES variable in an ebuild file.
-// Returns the number of crate entries written.
-func updateCargoEbuild(ei *ebuild.EbuildInfo, cratesStr string, crates []CargoCrate, cfg *PrepareConfig) (int, error) {
+// If pycargoebuild is available, it runs in an isolated temp dir with the Cargo.lock
+// and a synthetic Cargo.toml. On failure it falls back to the native parser.
+// runner may be nil (uses github.NewClient().Runner()).
+func updateCargoEbuild(ei *ebuild.EbuildInfo, lockPath string, crates []CargoCrate,
+	cfg *PrepareConfig, runner github.CmdRunner) (int, error) {
+
 	ebuildPath := ei.Path
 
 	if cfg.DryRun {
 		return 0, nil
 	}
 
-	// Check if pycargoebuild is available for better update
+	// Check if pycargoebuild is available
 	_, pycargoErr := lookPath("pycargoebuild")
 	if pycargoErr == nil {
-		// Try pycargoebuild --inplace update
-		tmpDir := filepath.Dir(ebuildPath)
-		// Create a minimal Cargo.toml for pycargoebuild
+		// Run pycargoebuild in an isolated temp dir — never in the overlay.
+		work, err := os.MkdirTemp("", "larry-cargo-*")
+		if err != nil {
+			// Fall through to native parsing
+			return updateCargoEbuildNative(ebuildPath, crates)
+		}
+		defer os.RemoveAll(work)
+
+		// Copy the downloaded Cargo.lock into the work dir.
+		lockData, err := os.ReadFile(lockPath)
+		if err != nil {
+			return updateCargoEbuildNative(ebuildPath, crates)
+		}
+		if err := os.WriteFile(filepath.Join(work, "Cargo.lock"), lockData, 0644); err != nil {
+			return updateCargoEbuildNative(ebuildPath, crates)
+		}
+
+		// Write a synthetic Cargo.toml for pycargoebuild.
 		cargoToml := fmt.Sprintf(`[package]
 name = "%s"
 version = "%s"
 edition = "2021"
 `, ei.Pkg, ei.PV())
-		cargoTomlPath := filepath.Join(tmpDir, "Cargo.toml")
-		if err := os.WriteFile(cargoTomlPath, []byte(cargoToml), 0644); err != nil {
-			// Fall through to native parsing
-		} else {
-			defer os.Remove(cargoTomlPath)
-
-			// pycargoebuild requires Cargo.lock in the working directory.
-			// If it's not present, fall through to native parsing.
-			cargoLockPath := filepath.Join(tmpDir, "Cargo.lock")
-			if _, err := os.Stat(cargoLockPath); err != nil {
-				// No Cargo.lock — native parsing will handle it
-			} else {
-				runner := github.NewClient().Runner()
-				if err := runPycargoebuild(tmpDir, ebuildPath, runner); err != nil {
-					// pycargoebuild failed, fall through to native
-					count, err := updateCargoEbuildNative(ebuildPath, crates)
-					return count, err
-				}
-				return 0, nil
-			}
+		if err := os.WriteFile(filepath.Join(work, "Cargo.toml"), []byte(cargoToml), 0644); err != nil {
+			return updateCargoEbuildNative(ebuildPath, crates)
 		}
+
+		if runner == nil {
+			runner = github.NewClient().Runner()
+		}
+		if err := runPycargoebuild(work, ebuildPath, runner); err != nil {
+			// pycargoebuild failed, fall through to native
+			return updateCargoEbuildNative(ebuildPath, crates)
+		}
+		// pycargoebuild ran successfully — the ebuild was updated in place.
+		return 0, nil
 	}
 
-	// Native parsing fallback
+	// pycargoebuild not available — native fallback
 	return updateCargoEbuildNative(ebuildPath, crates)
 }
 
 // runPycargoebuild runs pycargoebuild --inplace on the ebuild.
+// The command's working directory is set to dir (typically a temp dir holding
+// Cargo.lock and a synthetic Cargo.toml).
 func runPycargoebuild(dir, ebuildPath string, runner github.CmdRunner) error {
 	cmd := exec.Command("pycargoebuild", dir, "--no-write-crate-tarball", "--no-manifest", "--inplace", ebuildPath)
 	cmd.Dir = dir

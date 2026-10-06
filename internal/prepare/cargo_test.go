@@ -2,6 +2,7 @@ package prepare
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,179 +13,372 @@ import (
 	"testing"
 
 	"bennypowers.dev/larry/internal/ebuild"
-	"bennypowers.dev/larry/internal/github"
 	"bennypowers.dev/larry/internal/httpclient"
 )
 
 // ---------------------------------------------------------------------------
-// Cargo pipeline: find repo
+// findCargoRepo — new signature: (raw string, vars VariableMap) → (forge, owner, repo, error)
 // ---------------------------------------------------------------------------
 
-func TestCargo_Pipeline_FindRepo(t *testing.T) {
-	tests := []struct {
-		name      string
-		srcURI    string
-		homepage  string
-		wantOwner string
-		wantRepo  string
-	}{
-		{
-			name:      "github_mirror",
-			srcURI:    "mirror://github/${PN}/${P}.tar.gz",
-			homepage:  "https://example.com/rust-cli",
-			wantOwner: "",
-			wantRepo:  "",
-		},
-		{
-			name:      "homepage_github",
-			srcURI:    "https://github.com/rust-cli/rust-cli/releases/download/v0.1.0/rust-cli-0.1.0.tar.gz",
-			homepage:  "https://github.com/rust-cli/rust-cli",
-			wantOwner: "rust-cli",
-			wantRepo:  "rust-cli",
-		},
-		{
-			name:      "no_repo_info",
-			srcURI:    "https://example.com/download.tar.gz",
-			homepage:  "https://example.com",
-			wantOwner: "",
-			wantRepo:  "",
-		},
+func TestFindCargoRepo_GitHub(t *testing.T) {
+	raw := `EAPI=8
+
+HOMEPAGE="https://github.com/yioneko/vtsls"
+SRC_URI="https://github.com/yioneko/vtsls/archive/v0.7.0.tar.gz"
+`
+	forge, owner, repo, err := findCargoRepo(raw, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ei := &ebuild.EbuildInfo{
-				Category: "dev-rust",
-				Pkg:      "rust-cli",
-				PVVal:    "0.1.0",
-				PVal:     "rust-cli-0.1.0",
-				SRC_URI:  tt.srcURI,
-				HOMEPAGE: tt.homepage,
-			}
-
-			owner, repo := findCargoRepo(ei)
-			if owner != tt.wantOwner || repo != tt.wantRepo {
-				t.Errorf("findCargoRepo() = (%q, %q), want (%q, %q)", owner, repo, tt.wantOwner, tt.wantRepo)
-			}
-		})
+	if forge != forgeGitHub {
+		t.Errorf("forge = %d, want forgeGitHub", forge)
+	}
+	if owner != "yioneko" {
+		t.Errorf("owner = %q, want %q", owner, "yioneko")
+	}
+	if repo != "vtsls" {
+		t.Errorf("repo = %q, want %q", repo, "vtsls")
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Cargo pipeline: find Cargo.lock
-// ---------------------------------------------------------------------------
-
-func TestCargo_Pipeline_FindCargoLock_GitHubTree(t *testing.T) {
-	// StubRunner's Output method is used by client.Gh() when calling gh api.
-	// The key is built from cmd.Args joined with spaces.
-	// With tag, the API call should include repos/ prefix and ?ref= parameter.
-	runner := github.NewStubRunner()
-	runner.Outputs["gh api repos/owner/repo/contents/Cargo.lock?ref=v0.1.0"] = []byte(`{"name":"Cargo.lock","download_url":"https://example.com/Cargo.lock"}`)
-	client := github.NewClientWithRunner(runner)
-
-	_, err := findCargoLockFromTree(client, "owner", "repo", "v0.1.0")
-	// May fail to download (no real HTTP server), but the tree lookup succeeded
-	// The key test is that the API call was made correctly
-	_ = err
-
-	// Verify the correct API key was used
-	if _, ok := runner.Outputs["gh api repos/owner/repo/contents/Cargo.lock?ref=v0.1.0"]; !ok {
-		t.Error("expected API call with repos/ prefix and ?ref=v0.1.0")
+func TestFindCargoRepo_GitSrHt(t *testing.T) {
+	raw := `EAPI=8
+SRC_URI="https://git.sr.ht/~tsdh/nirius/archive/nirius-0.7.1.tar.gz"
+`
+	forge, owner, repo, err := findCargoRepo(raw, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if forge != forgeSourceHut {
+		t.Errorf("forge = %d, want forgeSourceHut", forge)
+	}
+	if owner != "~tsdh" {
+		t.Errorf("owner = %q, want %q", owner, "~tsdh")
+	}
+	if repo != "nirius" {
+		t.Errorf("repo = %q, want %q", repo, "nirius")
 	}
 }
 
-func TestCargo_Pipeline_FindCargoLock_NoTag(t *testing.T) {
-	// When no tag is provided, the API call should use repos/ prefix but no ?ref=
-	runner := github.NewStubRunner()
-	runner.Outputs["gh api repos/owner/repo/contents/Cargo.lock"] = []byte(`{"name":"Cargo.lock","download_url":"https://example.com/Cargo.lock"}`)
-	client := github.NewClientWithRunner(runner)
-
-	_, err := findCargoLockFromTree(client, "owner", "repo", "")
-	_ = err
+func TestFindCargoRepo_SrHtHomepageRewrite(t *testing.T) {
+	raw := `EAPI=8
+HOMEPAGE="https://sr.ht/~tsdh/nirius/"
+`
+	forge, owner, repo, err := findCargoRepo(raw, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if forge != forgeSourceHut {
+		t.Errorf("forge = %d, want forgeSourceHut", forge)
+	}
+	if owner != "~tsdh" {
+		t.Errorf("owner = %q, want %q", owner, "~tsdh")
+	}
+	if repo != "nirius" {
+		t.Errorf("repo = %q, want %q", repo, "nirius")
+	}
 }
 
-func TestCargo_Pipeline_FindCargoLock_FallbackPaths(t *testing.T) {
-	runner := github.NewStubRunner()
-	// When tag has 'v' prefix, try v0.1.0 first, then 0.1.0, then default branch
-	// First path with all tag variants fails
-	runner.Errors["gh api repos/owner/repo/contents/Cargo.lock?ref=v0.1.0"] = os.ErrNotExist
-	runner.Errors["gh api repos/owner/repo/contents/Cargo.lock?ref=0.1.0"] = os.ErrNotExist
-	runner.Errors["gh api repos/owner/repo/contents/Cargo.lock"] = os.ErrNotExist
-	// Second path with v0.1.0 succeeds
-	runner.Outputs["gh api repos/owner/repo/contents/src/Cargo.lock?ref=v0.1.0"] = []byte(`{"name":"Cargo.lock","download_url":"https://example.com/src/Cargo.lock"}`)
-	client := github.NewClientWithRunner(runner)
-
-	_, err := findCargoLockFromTree(client, "owner", "repo", "v0.1.0")
-	// May fail to download (no real HTTP server), but fallback succeeded
-	_ = err
+func TestFindCargoRepo_SrcUriBeatsHomepage(t *testing.T) {
+	raw := `EAPI=8
+HOMEPAGE="https://sr.ht/~tsdh/nirius/"
+SRC_URI="https://git.sr.ht/~tsdh/nirius/archive/nirius-0.7.1.tar.gz"
+`
+	forge, owner, repo, err := findCargoRepo(raw, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if forge != forgeSourceHut {
+		t.Errorf("forge = %d, want forgeSourceHut", forge)
+	}
+	if owner != "~tsdh" {
+		t.Errorf("owner = %q, want %q", owner, "~tsdh")
+	}
+	if repo != "nirius" {
+		t.Errorf("repo = %q, want %q", repo, "nirius")
+	}
 }
 
-func TestCargo_Pipeline_FindCargoLock_Fail(t *testing.T) {
-	runner := github.NewStubRunner()
-	// With tag "v0.1.0", code tries v0.1.0, 0.1.0, then default branch
-	runner.Errors["gh api repos/owner/repo/contents/Cargo.lock?ref=v0.1.0"] = os.ErrNotExist
-	runner.Errors["gh api repos/owner/repo/contents/Cargo.lock?ref=0.1.0"] = os.ErrNotExist
-	runner.Errors["gh api repos/owner/repo/contents/Cargo.lock"] = os.ErrNotExist
-	client := github.NewClientWithRunner(runner)
-
-	_, err := findCargoLockFromTree(client, "owner", "repo", "v0.1.0")
+func TestFindCargoRepo_NoMatchIsError(t *testing.T) {
+	raw := `EAPI=8
+HOMEPAGE="https://example.com/foo"
+SRC_URI="mirror://pypi/foo-1.0.tar.gz"
+`
+	forge, owner, repo, err := findCargoRepo(raw, nil)
 	if err == nil {
-		t.Fatal("expected error when Cargo.lock not found")
+		t.Fatal("expected error, got nil")
+	}
+	if forge != 0 {
+		t.Errorf("forge = %d, want 0", forge)
+	}
+	if owner != "" || repo != "" {
+		t.Errorf("owner/repo = (%q, %q), want (\"\", \"\")", owner, repo)
 	}
 }
 
-func TestCargo_Pipeline_FindCargoLock_Base64Blob(t *testing.T) {
-	// When Cargo.lock is large and returned as base64 blob, the API response
-	// contains "content" and "encoding" instead of "download_url".
-	// The code should decode the base64 content.
-	// However, the gh api returns base64 content as-is (not decoded), so we
-	// test the fallback path that uses raw content from the JSON.
-	runner := github.NewStubRunner()
-	// gh api with repos/ prefix returns JSON metadata
-	runner.Outputs["gh api repos/owner/repo/contents/Cargo.lock?ref=v0.1.0"] = []byte(`{"name":"Cargo.lock","download_url":"https://example.com/Cargo.lock"}`)
-	client := github.NewClientWithRunner(runner)
+// ---------------------------------------------------------------------------
+// cargoTag
+// ---------------------------------------------------------------------------
 
-	_, err := findCargoLockFromTree(client, "owner", "repo", "v0.1.0")
-	_ = err
+func TestCargoTag_GitHubStripsRevision(t *testing.T) {
+	tag := cargoTag(forgeGitHub, "rustfmt", "1.2.3-r1", "")
+	if tag != "v1.2.3" {
+		t.Errorf("tag = %q, want %q", tag, "v1.2.3")
+	}
 }
 
-func TestCargo_Pipeline_FindCargoLock_TagFallbackToDefaultBranch(t *testing.T) {
-	// When tag-specific query fails, the code should fall back to
-	// the default branch (no ?ref= parameter).
-	runner := github.NewStubRunner()
-	// All tag variants fail (nonexistent-tag -> vnonexistent-tag, nonexistent-tag-, then default branch)
-	runner.Errors["gh api repos/owner/repo/contents/Cargo.lock?ref=nonexistent-tag"] = os.ErrNotExist
-	runner.Errors["gh api repos/owner/repo/contents/Cargo.lock?ref=vnonexistent-tag"] = os.ErrNotExist
-	runner.Errors["gh api repos/owner/repo/contents/Cargo.lock?ref=nonexistent-tag-"] = os.ErrNotExist
-	// Default branch succeeds
-	runner.Outputs["gh api repos/owner/repo/contents/Cargo.lock"] = []byte(`{"name":"Cargo.lock","download_url":"https://example.com/Cargo.lock"}`)
-	client := github.NewClientWithRunner(runner)
-
-	_, err := findCargoLockFromTree(client, "owner", "repo", "nonexistent-tag")
-	// Should succeed via fallback to default branch
-	_ = err
+func TestCargoTag_GitHubNoRevision(t *testing.T) {
+	tag := cargoTag(forgeGitHub, "rustfmt", "1.2.3", "")
+	if tag != "v1.2.3" {
+		t.Errorf("tag = %q, want %q", tag, "v1.2.3")
+	}
 }
 
-func TestCargo_Pipeline_FindCargoLock_TagWithoutVPrefix(t *testing.T) {
-	// When tag doesn't have 'v' prefix (e.g., "0.3.3" from PV),
-	// the code should also try with 'v' prefix (e.g., "v0.3.3").
-	runner := github.NewStubRunner()
-	// Plain tag fails
-	runner.Errors["gh api repos/owner/repo/contents/Cargo.lock?ref=0.1.0"] = os.ErrNotExist
-	// With 'v' prefix succeeds
-	runner.Outputs["gh api repos/owner/repo/contents/Cargo.lock?ref=v0.1.0"] = []byte(`{"name":"Cargo.lock","download_url":"https://example.com/Cargo.lock"}`)
-	client := github.NewClientWithRunner(runner)
+func TestCargoTag_SourceHutFromArchiveURL(t *testing.T) {
+	expanded := `SRC_URI="https://git.sr.ht/~tsdh/nirius/archive/nirius-0.7.1.tar.gz"`
+	tag := cargoTag(forgeSourceHut, "nirius", "0.7.1", expanded)
+	if tag != "nirius-0.7.1" {
+		t.Errorf("tag = %q, want %q", tag, "nirius-0.7.1")
+	}
+}
 
-	_, err := findCargoLockFromTree(client, "owner", "repo", "0.1.0")
-	// Should succeed via 'v' prefix fallback
-	_ = err
+func TestCargoTag_SourceHutFallsBackToPnPv(t *testing.T) {
+	tag := cargoTag(forgeSourceHut, "nirius", "0.7.1-r2", "no archive URL here")
+	if tag != "nirius-0.7.1" {
+		t.Errorf("tag = %q, want %q", tag, "nirius-0.7.1")
+	}
 }
 
 // ---------------------------------------------------------------------------
-// Cargo pipeline: download Cargo.lock
+// fetchCargoLock
 // ---------------------------------------------------------------------------
 
-func TestCargo_Pipeline_DownloadCargoLock(t *testing.T) {
+// httptestFetcher wraps an *httptest.Server to satisfy the fetcher interface.
+type httptestFetcher struct {
+	server   *httptest.Server
+	requests []string
+}
+
+func newHttptestFetcher(t *testing.T) *httptestFetcher {
+	t.Helper()
+	f := &httptestFetcher{}
+	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.requests = append(f.requests, r.URL.Path)
+		// Default: 404
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(f.server.Close)
+	return f
+}
+
+// rewriteRoundTripper rewrites requests to the test server.
+type rewriteRoundTripper struct {
+	base   http.RoundTripper
+	server *httptest.Server
+}
+
+func (rt *rewriteRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.URL.Host = rt.server.Listener.Addr().String()
+	req.URL.Scheme = "http"
+	return rt.base.RoundTrip(req)
+}
+
+// fetcherImpl satisfies the fetcher interface via the test server.
+func (f *httptestFetcher) Get(url string) (*http.Response, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{
+		Transport: &rewriteRoundTripper{
+			base:   http.DefaultTransport,
+			server: f.server,
+		},
+	}
+	return client.Do(req)
+}
+
+// ---------------------------------------------------------------------------
+// TestFetchCargoLock_WritesRawBody (D4)
+// ---------------------------------------------------------------------------
+
+func TestFetchCargoLock_WritesRawBody(t *testing.T) {
+	f := newHttptestFetcher(t)
+	body := []byte(`[[package]]
+name = "a"
+version = "1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+`)
+
+	f.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.requests = append(f.requests, r.URL.Path)
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write(body)
+	})
+
+	path, err := fetchCargoLock(f, forgeGitHub, "tsdh", "x", "v1.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if string(data) != string(body) {
+		t.Errorf("body mismatch:\ngot:  %q\nwant: %q", data, body)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestFetchCargoLock_GitHubRawURL
+// ---------------------------------------------------------------------------
+
+func TestFetchCargoLock_GitHubRawURL(t *testing.T) {
+	f := newHttptestFetcher(t)
+	f.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.requests = append(f.requests, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+
+	_, err := fetchCargoLock(f, forgeGitHub, "tsdh", "x", "v1.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(f.requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(f.requests))
+	}
+	if f.requests[0] != "/tsdh/x/v1.0/Cargo.lock" {
+		t.Errorf("request path = %q, want /tsdh/x/v1.0/Cargo.lock", f.requests[0])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestFetchCargoLock_SourceHutBlobURL
+// ---------------------------------------------------------------------------
+
+func TestFetchCargoLock_SourceHutBlobURL(t *testing.T) {
+	f := newHttptestFetcher(t)
+	f.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.requests = append(f.requests, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+
+	_, err := fetchCargoLock(f, forgeSourceHut, "~tsdh", "nirius", "nirius-0.7.1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(f.requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(f.requests))
+	}
+	if f.requests[0] != "/~tsdh/nirius/blob/nirius-0.7.1/Cargo.lock" {
+		t.Errorf("request path = %q, want /~tsdh/nirius/blob/nirius-0.7.1/Cargo.lock", f.requests[0])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestFetchCargoLock_NoDefaultBranchFallback (D5)
+// ---------------------------------------------------------------------------
+
+func TestFetchCargoLock_NoDefaultBranchFallback(t *testing.T) {
+	f := newHttptestFetcher(t)
+	// Server 404s everything.
+	_, err := fetchCargoLock(f, forgeGitHub, "tsdh", "x", "v1.0")
+	if err == nil {
+		t.Fatal("expected error when all requests 404, got nil")
+	}
+	// Both requests should contain the tag.
+	if len(f.requests) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(f.requests))
+	}
+	for _, p := range f.requests {
+		if !strings.Contains(p, "v1.0") {
+			t.Errorf("request %q does not contain tag v1.0 (would indicate empty-ref fallback)", p)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestFetchCargoLock_BindingsPythonSubdir (D7)
+// ---------------------------------------------------------------------------
+
+func TestFetchCargoLock_BindingsPythonSubdir(t *testing.T) {
+	f := newHttptestFetcher(t)
+	callCount := 0
+	f.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.requests = append(f.requests, r.URL.Path)
+		callCount++
+		if strings.Contains(r.URL.Path, "bindings/python") {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("python subdir lock"))
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+
+	path, err := fetchCargoLock(f, forgeGitHub, "tsdh", "x", "v1.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if string(data) != "python subdir lock" {
+		t.Errorf("body = %q, want %q", data, "python subdir lock")
+	}
+	if len(f.requests) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(f.requests))
+	}
+	// First request is root (no bindings/python prefix)
+	if strings.Contains(f.requests[0], "bindings/python") {
+		t.Errorf("first request %q should be root path, not bindings/python", f.requests[0])
+	}
+	// Second request contains bindings/python
+	if !strings.Contains(f.requests[1], "bindings/python") {
+		t.Errorf("second request %q should contain bindings/python", f.requests[1])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestFetchCargoLock_NoOtherSubdirsProbed (D7)
+// ---------------------------------------------------------------------------
+
+func TestFetchCargoLock_NoOtherSubdirsProbed(t *testing.T) {
+	f := newHttptestFetcher(t)
+	f.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.requests = append(f.requests, r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	_, _ = fetchCargoLock(f, forgeGitHub, "tsdh", "x", "v1.0")
+
+	// Exactly two requests should have been made.
+	if len(f.requests) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(f.requests))
+	}
+
+	// None should contain the old subdirs.
+	for _, p := range f.requests {
+		for _, bad := range []string{"/src/", "/rust/", "/lib/", "/crates/"} {
+			if strings.Contains(p, bad) {
+				t.Errorf("request %q contains old subdir pattern %q", p, bad)
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cargo pipeline: find repo (old tests deleted — replaced above)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Cargo pipeline: download Cargo.lock (replaced by fetchCargoLock tests)
+// ---------------------------------------------------------------------------
+
+func TestDownloadCargoLock_HttpClient(t *testing.T) {
 	lockContent := `[[package]]
 name = "test"
 version = "1.0.0"
@@ -385,7 +579,160 @@ func TestCargo_Pipeline_AllToolsUnavailable(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Cargo pipeline: update ebuild
+// D8 — pycargoebuild runs in os.MkdirTemp, not in the package dir
+// ---------------------------------------------------------------------------
+
+func TestCargo_PycargoebuildRunsInTempDir(t *testing.T) {
+	// Copy the plan 23a testdata ebuild into t.TempDir.
+	fixturesDir := filepath.Join("testdata", "ebuilds")
+	src, err := os.ReadFile(filepath.Join(fixturesDir, "cargo-literal-crates.ebuild"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	// Package dir (simulated overlay).
+	pkgDir := t.TempDir()
+	ebuildPath := filepath.Join(pkgDir, "nirius-0.7.1.ebuild")
+	if err := os.WriteFile(ebuildPath, src, 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	// A real Cargo.lock (served via a small temp dir).
+	lockDir := t.TempDir()
+	lockData := `[[package]]
+name = "aho-corasick"
+version = "1.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+`
+	lockPath := filepath.Join(lockDir, "Cargo.lock")
+	if err := os.WriteFile(lockPath, []byte(lockData), 0644); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+
+	// Stub lookPath to report pycargoebuild is available.
+	orig := lookPath
+	lookPath = func(name string) (string, error) {
+		if name == "pycargoebuild" {
+			return "/fake/pycargoebuild", nil
+		}
+		return orig(name)
+	}
+	t.Cleanup(func() { lookPath = orig })
+
+	// Stub runner that records the command.
+	var gotDir string
+	runner := &mockCmdRunner{
+		runFn: func(cmd *exec.Cmd) error {
+			gotDir = cmd.Dir
+			// Verify Cargo.lock and Cargo.toml exist in the dir.
+			if _, err := os.Stat(filepath.Join(cmd.Dir, "Cargo.lock")); err != nil {
+				return fmt.Errorf("Cargo.lock missing in %s: %w", cmd.Dir, err)
+			}
+			if _, err := os.Stat(filepath.Join(cmd.Dir, "Cargo.toml")); err != nil {
+				return fmt.Errorf("Cargo.toml missing in %s: %w", cmd.Dir, err)
+			}
+			return nil
+		},
+	}
+
+	cfg := &PrepareConfig{}
+	ei := &ebuild.EbuildInfo{
+		Category: "gui-apps",
+		Pkg:      "nirius",
+		PVVal:    "0.7.1",
+		PVal:     "nirius-0.7.1",
+	}
+
+	_, err = updateCargoEbuild(ei, lockPath, nil, cfg, runner)
+	if err != nil {
+		t.Fatalf("updateCargoEbuild returned error: %v", err)
+	}
+
+	// Assert the runner was called with a temp dir, not the package dir.
+	if gotDir == "" {
+		t.Fatal("runner was never invoked")
+	}
+	if !strings.Contains(gotDir, "larry-cargo-") {
+		t.Errorf("cmd.Dir = %q, should contain 'larry-cargo-'", gotDir)
+	}
+	if gotDir == pkgDir || gotDir == filepath.Dir(ebuildPath) {
+		t.Errorf("cmd.Dir = %q should NOT be the package dir", gotDir)
+	}
+
+	// Verify no Cargo.toml or Cargo.lock leaked into the package dir.
+	if _, err := os.Stat(filepath.Join(pkgDir, "Cargo.toml")); !os.IsNotExist(err) {
+		t.Error("Cargo.toml leaked into package dir")
+	}
+	if _, err := os.Stat(filepath.Join(pkgDir, "Cargo.lock")); !os.IsNotExist(err) {
+		t.Error("Cargo.lock leaked into package dir")
+	}
+}
+
+func TestCargo_PycargoebuildFailureFallsBackToNative(t *testing.T) {
+	fixturesDir := filepath.Join("testdata", "ebuilds")
+	src, err := os.ReadFile(filepath.Join(fixturesDir, "cargo-no-crates.ebuild"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	ebuildPath := filepath.Join(tmpDir, "test-1.0.0.ebuild")
+	if err := os.WriteFile(ebuildPath, src, 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	lockPath := filepath.Join(tmpDir, "Cargo.lock")
+	lockData := `[[package]]
+name = "aho-corasick"
+version = "1.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+`
+	if err := os.WriteFile(lockPath, []byte(lockData), 0644); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+
+	// Stub lookPath to report pycargoebuild available.
+	orig := lookPath
+	lookPath = func(name string) (string, error) {
+		if name == "pycargoebuild" {
+			return "/fake/pycargoebuild", nil
+		}
+		return orig(name)
+	}
+	t.Cleanup(func() { lookPath = orig })
+
+	// Stub runner that always fails.
+	runner := &mockCmdRunner{
+		runFn: func(cmd *exec.Cmd) error {
+			return fmt.Errorf("pycargoebuild: command not found")
+		},
+	}
+
+	ei := &ebuild.EbuildInfo{
+		Category: "dev-rust",
+		Pkg:      "test-pkg",
+		PVVal:    "1.0.0",
+		PVal:     "test-pkg-1.0.0",
+		Path:     ebuildPath,
+	}
+	cfg := &PrepareConfig{}
+
+	_, err = updateCargoEbuild(ei, lockPath, []CargoCrate{{Name: "a", Version: "1.0"}}, cfg, runner)
+	if err != nil {
+		t.Fatalf("updateCargoEbuild returned error: %v", err)
+	}
+
+	updated, err := os.ReadFile(ebuildPath)
+	if err != nil {
+		t.Fatalf("read updated: %v", err)
+	}
+	if !strings.Contains(string(updated), "CRATES=\"") {
+		t.Error("native fallback did not update CRATES block")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cargo pipeline: update ebuild (native path)
 // ---------------------------------------------------------------------------
 
 func TestCargo_Pipeline_UpdateEbuild(t *testing.T) {
@@ -499,7 +846,7 @@ func TestCargo_Pipeline_ManifestGeneration(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Cargo pipeline: full integration tests
+// Cargo pipeline: dry-run
 // ---------------------------------------------------------------------------
 
 func TestCargo_Pipeline_DryRun_SkipsAllMutations(t *testing.T) {
@@ -538,9 +885,9 @@ KEYWORDS="~amd64"
 	}
 
 	// Dry-run should not modify the ebuild
-	err := prepareCargo(ei, cfg)
+	err := PrepareCargo(ei, cfg)
 	if err != nil {
-		t.Fatalf("prepareCargo returned error: %v", err)
+		t.Fatalf("PrepareCargo returned error: %v", err)
 	}
 
 	// Ebuild should be unchanged
@@ -552,6 +899,10 @@ KEYWORDS="~amd64"
 		t.Error("Dry-run modified the ebuild")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Cargo pipeline: failure rollback
+// ---------------------------------------------------------------------------
 
 func TestCargo_Pipeline_Failure_Rollback(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -637,55 +988,6 @@ func TestCargo_Pipeline_RevisionBump_SkipUpload(t *testing.T) {
 
 	if !isRevisionBump(basePV, rev) {
 		t.Error("1.0.0-r1 should be a revision bump")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Cargo pipeline: find repo with various SRC_URI patterns
-// ---------------------------------------------------------------------------
-
-func TestCargo_FindRepoVariousSrcUris(t *testing.T) {
-	tests := []struct {
-		name      string
-		srcURI    string
-		homepage  string
-		wantOwner string
-		wantRepo  string
-	}{
-		{
-			name:      "github_mirror",
-			srcURI:    "mirror://github/${PN}/${P}.tar.gz",
-			homepage:  "",
-			wantOwner: "",
-			wantRepo:  "",
-		},
-		{
-			name:      "github_homepage",
-			srcURI:    "https://github.com/rust-lang/rust-clippy/archive/v0.0.1.tar.gz",
-			homepage:  "https://github.com/rust-lang/rust-clippy",
-			wantOwner: "rust-lang",
-			wantRepo:  "rust-clippy",
-		},
-		{
-			name:      "sourcehut",
-			srcURI:    "https://git.sr.ht/~user/rust-tool/releases/download/v1.0/rust-tool-1.0.tar.gz",
-			homepage:  "https://git.sr.ht/~user/rust-tool",
-			wantOwner: "",
-			wantRepo:  "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ei := &ebuild.EbuildInfo{
-				SRC_URI:  tt.srcURI,
-				HOMEPAGE: tt.homepage,
-			}
-			owner, repo := findCargoRepo(ei)
-			if owner != tt.wantOwner || repo != tt.wantRepo {
-				t.Errorf("findCargoRepo() = (%q, %q), want (%q, %q)", owner, repo, tt.wantOwner, tt.wantRepo)
-			}
-		})
 	}
 }
 
@@ -788,9 +1090,9 @@ KEYWORDS="~amd64"
 	}
 
 	// Full mock: dry-run should skip all mutations
-	err := prepareCargo(ei, cfg)
+	err := PrepareCargo(ei, cfg)
 	if err != nil {
-		t.Fatalf("prepareCargo returned error: %v", err)
+		t.Fatalf("PrepareCargo returned error: %v", err)
 	}
 
 	// Ebuild should be unchanged in dry-run
@@ -842,19 +1144,19 @@ checksum = "abc123"
 }
 
 // ---------------------------------------------------------------------------
-// Cargo pipeline: Cargo lock JSON parsing
+// Cargo lock JSON parsing
 // ---------------------------------------------------------------------------
 
 func TestCargo_ParseCargoLockJSON(t *testing.T) {
 	jsonStr := `{"name":"Cargo.lock","path":"Cargo.lock","sha":"abc123","download_url":"https://raw.githubusercontent.com/owner/repo/v1.0.0/Cargo.lock"}`
 
 	var result struct {
-		Name         string `json:"name"`
-		Path         string `json:"path"`
-		SHA          string `json:"sha"`
-		DownloadURL  string `json:"download_url"`
+		Name        string `json:"name"`
+		Path        string `json:"path"`
+		SHA         string `json:"sha"`
+		DownloadURL string `json:"download_url"`
 	}
-	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+	if err := jsonUnmarshal([]byte(jsonStr), &result); err != nil {
 		t.Fatalf("failed to parse JSON: %v", err)
 	}
 	if result.Name != "Cargo.lock" {
@@ -1286,4 +1588,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 func diffStrings(a, b string) string {
 	return "=== want ===\n" + a + "\n=== got ===\n" + b
+}
+
+// jsonUnmarshal is a test helper alias for json.Unmarshal.
+func jsonUnmarshal(data []byte, v interface{}) error {
+	return json.Unmarshal(data, v)
 }
