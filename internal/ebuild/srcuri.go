@@ -2,6 +2,7 @@ package ebuild
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -449,4 +450,73 @@ func ResolveNpmDistfile(uri string, vars VariableMap) (string, error) {
 	}
 
 	return "", fmt.Errorf("cannot resolve npm URI: %s", uri)
+}
+
+// SrcUriEntry is one downloadable item parsed out of a SRC_URI value.
+type SrcUriEntry struct {
+	URL      string // variable-expanded, MIRROR-UNRESOLVED (still "mirror://npm/…")
+	Filename string // the "-> name" target, else path.Base(URL)
+	UseFlag  string // "webui" for `webui? ( … )`, "!foo" for `!foo? ( … )`, "" when unconditional
+}
+
+// useFlagRe matches tokens like "foo?", "!bar?", "my-flag?".
+var useFlagRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_+-]*?$`)
+
+// ParseSrcUri splits a SRC_URI value into entries, stripping USE-conditional
+// wrappers and resolving `->` renames.
+func ParseSrcUri(s string, vars VariableMap) []SrcUriEntry {
+	// 1. Expand variables first.
+	s = ExpandVariables(s, vars)
+
+	// 2. Join backslash continuations.
+	s = strings.ReplaceAll(s, "\\\n", " ")
+
+	// 3. Tokenise on whitespace.
+	tokens := strings.Fields(s)
+
+	var entries []SrcUriEntry
+	currentFlag := ""
+
+	// 4. Walk tokens left to right.
+	for i := 0; i < len(tokens); i++ {
+		tok := tokens[i]
+
+		// Skip pure assignment entries.
+		if isPureAssignment(tok) {
+			continue
+		}
+
+		// Check for USE-conditional group opening: "flag?" followed by "(".
+		if strings.HasSuffix(tok, "?") && i+1 < len(tokens) && tokens[i+1] == "(" {
+			currentFlag = strings.TrimSuffix(tok, "?")
+			i++ // skip the "("
+			continue
+		}
+
+		// Check for group closing.
+		if tok == ")" {
+			currentFlag = ""
+			continue
+		}
+
+		// Check for rename target.
+		if tok == "->" {
+			if i+1 < len(tokens) {
+				if len(entries) > 0 {
+					entries[len(entries)-1].Filename = tokens[i+1]
+				}
+				i++ // consume the filename token
+			}
+			continue
+		}
+
+		// Ordinary token: emit a new entry.
+		entries = append(entries, SrcUriEntry{
+			URL:      tok,
+			Filename: path.Base(tok),
+			UseFlag:  currentFlag,
+		})
+	}
+
+	return entries
 }

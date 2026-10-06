@@ -1,6 +1,7 @@
 package ebuild
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -900,5 +901,180 @@ MY_NPM_NAME="right"
 
 	if vars["MY_NPM_NAME"] != "right" {
 		t.Errorf("vars[MY_NPM_NAME] = %q, want %q", vars["MY_NPM_NAME"], "right")
+	}
+}
+
+// ---- TestParseSrcUri_* (plan 22a) ----
+
+// ParseSrcUriTestVars is the shared VariableMap fixture for all TestParseSrcUri_* tests.
+var ParseSrcUriTestVars = VariableMap{
+	"PN":           "vtsls",
+	"PV":           "0.3.0",
+	"P":            "vtsls-0.3.0",
+	"MY_NPM_NAME":  "language-server",
+	"MY_NPM_SCOPE": "@earendil-works",
+	"MY_WEBUI_P":   "pi-web-ui-0.75.3",
+}
+
+func TestParseSrcUri_Unconditional(t *testing.T) {
+	input := "\n\tmirror://npm/${PN}/-/${P}.tgz\n"
+	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1: %v", len(entries), entries)
+	}
+	want := SrcUriEntry{
+		URL:      "mirror://npm/vtsls/-/vtsls-0.3.0.tgz",
+		Filename: "vtsls-0.3.0.tgz",
+		UseFlag:  "",
+	}
+	if entries[0] != want {
+		t.Errorf("= %v, want %v", entries[0], want)
+	}
+}
+
+func TestParseSrcUri_RenameTarget(t *testing.T) {
+	input := "mirror://npm/@vtsls/${MY_NPM_NAME}/-/${MY_NPM_NAME}-${PV}.tgz -> ${P}.tgz"
+	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1: %v", len(entries), entries)
+	}
+	want := SrcUriEntry{
+		URL:      "mirror://npm/@vtsls/language-server/-/language-server-0.3.0.tgz",
+		Filename: "vtsls-0.3.0.tgz",
+		UseFlag:  "",
+	}
+	if entries[0] != want {
+		t.Errorf("= %v, want %v", entries[0], want)
+	}
+}
+
+func TestParseSrcUri_UseConditional(t *testing.T) {
+	input := "webui? ( mirror://npm/a/-/a-1.0.tgz -> a.tgz )"
+	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1: %v", len(entries), entries)
+	}
+	want := SrcUriEntry{
+		URL:      "mirror://npm/a/-/a-1.0.tgz",
+		Filename: "a.tgz",
+		UseFlag:  "webui",
+	}
+	if entries[0] != want {
+		t.Errorf("= %v, want %v", entries[0], want)
+	}
+}
+
+func TestParseSrcUri_MultiEntryUseGroup(t *testing.T) {
+	input := `
+	mirror://npm/${MY_NPM_SCOPE}/${PN}/-/${P}.tgz -> ${P}.tgz
+	https://github.com/o/r/releases/download/pi/${P}-deps.tar.xz
+	webui? ( mirror://npm/${MY_NPM_SCOPE}/pi-web-ui/-/${MY_WEBUI_P}.tgz -> ${MY_WEBUI_P}.tgz
+		https://github.com/o/r/releases/download/pi/${MY_WEBUI_P}-deps.tar.xz )`
+	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	if len(entries) != 4 {
+		t.Fatalf("got %d entries, want 4: %v", len(entries), entries)
+	}
+	// Entry 1: unconditional npm
+	if entries[0].UseFlag != "" {
+		t.Errorf("entry[0].UseFlag = %q, want empty", entries[0].UseFlag)
+	}
+	if entries[0].Filename != "vtsls-0.3.0.tgz" {
+		t.Errorf("entry[0].Filename = %q, want vtsls-0.3.0.tgz", entries[0].Filename)
+	}
+	// Entry 2: unconditional https
+	if entries[1].UseFlag != "" {
+		t.Errorf("entry[1].UseFlag = %q, want empty", entries[1].UseFlag)
+	}
+	// Entries 3 and 4: both inside webui? ( … )
+	if entries[2].UseFlag != "webui" {
+		t.Errorf("entry[2].UseFlag = %q, want webui", entries[2].UseFlag)
+	}
+	if entries[3].UseFlag != "webui" {
+		t.Errorf("entry[3].UseFlag = %q, want webui", entries[3].UseFlag)
+	}
+	// Entry 4 has no -> so Filename = path.Base
+	if entries[3].Filename != "pi-web-ui-0.75.3-deps.tar.xz" {
+		t.Errorf("entry[3].Filename = %q, want pi-web-ui-0.75.3-deps.tar.xz", entries[3].Filename)
+	}
+}
+
+func TestParseSrcUri_NegatedUseFlag(t *testing.T) {
+	input := `!minimal? ( https://e.com/x-1.0.tar.gz )`
+	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1: %v", len(entries), entries)
+	}
+	if entries[0].UseFlag != "!minimal" {
+		t.Errorf("UseFlag = %q, want !minimal", entries[0].UseFlag)
+	}
+}
+
+func TestParseSrcUri_ScopedNpm(t *testing.T) {
+	input := "mirror://npm/@vtsls/language-server/-/language-server-0.3.0.tgz"
+	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1: %v", len(entries), entries)
+	}
+	if entries[0].Filename != "language-server-0.3.0.tgz" {
+		t.Errorf("Filename = %q, want language-server-0.3.0.tgz", entries[0].Filename)
+	}
+}
+
+func TestParseSrcUri_MultipleEntriesMixedProviders(t *testing.T) {
+	input := "mirror://npm/pkg/pkg-1.0.tgz https://github.com/o/r/releases/download/v1.0/deps.tar.gz"
+	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	if len(entries) != 2 {
+		t.Fatalf("got %d entries, want 2: %v", len(entries), entries)
+	}
+	if entries[0].UseFlag != "" || entries[1].UseFlag != "" {
+		t.Errorf("both UseFlags should be empty, got %v", entries)
+	}
+	if entries[0].URL != "mirror://npm/pkg/pkg-1.0.tgz" {
+		t.Errorf("entry[0].URL = %q, want mirror://npm/pkg/pkg-1.0.tgz", entries[0].URL)
+	}
+}
+
+func TestParseSrcUri_UrlIsMirrorUnresolved(t *testing.T) {
+	input := "mirror://npm/@scope/pkg/-/pkg-1.0.0.tgz"
+	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1: %v", len(entries), entries)
+	}
+	if !strings.HasPrefix(entries[0].URL, "mirror://npm/") {
+		t.Errorf("URL should be mirror-unresolved, got %q", entries[0].URL)
+	}
+}
+
+func TestParseSrcUri_IgnoresBareAssignment(t *testing.T) {
+	input := `MY_P="x" mirror://npm/a/-/a.tgz`
+	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1: %v", len(entries), entries)
+	}
+	if entries[0].URL != "mirror://npm/a/-/a.tgz" {
+		t.Errorf("URL = %q, want mirror://npm/a/-/a.tgz", entries[0].URL)
+	}
+}
+
+func TestParseSrcUri_Continuation(t *testing.T) {
+	input := "mirror://npm/a/-/a.tgz \\\n\thttps://e.com/b.tar.gz"
+	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	if len(entries) != 2 {
+		t.Fatalf("got %d entries, want 2: %v", len(entries), entries)
+	}
+	if entries[0].URL != "mirror://npm/a/-/a.tgz" {
+		t.Errorf("entry[0].URL = %q, want mirror://npm/a/-/a.tgz", entries[0].URL)
+	}
+	if entries[1].URL != "https://e.com/b.tar.gz" {
+		t.Errorf("entry[1].URL = %q, want https://e.com/b.tar.gz", entries[1].URL)
+	}
+}
+
+func TestParseSrcUri_Empty(t *testing.T) {
+	entries := ParseSrcUri("", ParseSrcUriTestVars)
+	if entries == nil || len(entries) != 0 {
+		if entries != nil && len(entries) != 0 {
+			t.Errorf("got %d entries, want 0", len(entries))
+		}
 	}
 }

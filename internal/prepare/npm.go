@@ -23,8 +23,8 @@ import (
 
 // npmPrepare implements the npm type-specific prepare pipeline.
 // Steps:
-// 1. Resolve SRC_URI → npm registry URL
-// 2. Download distfile to DISTDIR
+// 1. Parse SRC_URI entries, apply the ${P} tag guard, download all npm entries
+// 2. Upload vendored deps to GitHub release if SRC_URI references one
 // 3. Run pkgdev manifest
 // On failure: restore from backup.
 func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
@@ -37,45 +37,65 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 		distDir = getEnv("PORTAGE_DISTDIR")
 	}
 
+	// Guard (D4): reject ${P} in release tag before any work.
+	if strings.Contains(ei.Raw, "releases/download/${P}/") {
+		return fmt.Errorf("npm: SRC_URI uses ${P} as release tag but deps upload to the ${PN} tag; change releases/download/${P}/ to releases/download/${PN}/")
+	}
+
 	// Backup before mutations
 	if err := Backup(ei.Path); err != nil {
 		return fmt.Errorf("backup: %w", err)
 	}
 	defer os.Remove(ei.Path + ".bak")
 
-	// 1. Resolve SRC_URI
-	resolvedURL := npmFirstRegistryURL(ei)
-	if resolvedURL == "" {
-		Restore(ei.Path)
-		return fmt.Errorf("npm: could not resolve SRC_URI to npm registry URL")
-	}
-
-	// 2. Download distfile to distdir
-	client := httpclient.NewClient()
-	downloaded, err := npmDownloadDistfile(resolvedURL, distDir, client)
+	// 1. Parse SRC_URI entries using the shared expander.
+	pe, err := atom.ParseEbuildPath(ei.Path)
 	if err != nil {
-		Restore(ei.Path)
-		return fmt.Errorf("download distfile: %w", err)
+		pe = nil
 	}
+	vars := ebuild.BuildVariableMap(ei.Raw, pe)
+	entries := ebuild.ParseSrcUri(ei.SRC_URI, vars)
 
-	// Skip copy if download already saved directly to distdir
-	downloadedBase := filepath.Base(downloaded)
-	if distDir != "" && downloadedBase != "" {
-		distPath := filepath.Join(distDir, downloadedBase)
-		if distPath != downloaded {
-			if err := npmCopyToDistdir(downloaded, distDir); err != nil {
-				Restore(ei.Path)
-				return fmt.Errorf("copy to distdir: %w", err)
-			}
+	// Filter to npm entries.
+	var npmEntries []ebuild.SrcUriEntry
+	for _, e := range entries {
+		if strings.HasPrefix(e.URL, "mirror://npm/") {
+			npmEntries = append(npmEntries, e)
 		}
 	}
+	if len(npmEntries) == 0 {
+		Restore(ei.Path)
+		return fmt.Errorf("npm: no mirror://npm/ entries in SRC_URI")
+	}
+
+	// Download every npm entry to distdir/<Filename>.
+	var client *httpclient.Client
+	if cfg.HTTPClient != nil {
+		client = httpclient.NewClientWithTransport(cfg.HTTPClient.Transport)
+	} else {
+		client = httpclient.NewClient()
+	}
+	for _, e := range npmEntries {
+		destPath := filepath.Join(distDir, e.Filename)
+		// Skip if file already exists and is non-empty.
+		if info, err := os.Stat(destPath); err == nil && info.Size() > 0 {
+			continue
+		}
+		rewritten := "https://registry.npmjs.org/" + strings.TrimPrefix(e.URL, "mirror://npm/")
+		if _, err := npmDownloadDistfile(rewritten, distDir, e.Filename, client); err != nil {
+			Restore(ei.Path)
+			return fmt.Errorf("download distfile: %w", err)
+		}
+	}
+
+	// The "main" distfile for the rest of the pipeline is entries[0].Filename.
+	mainDistfile := npmEntries[0].Filename
 
 	// 2b. Upload vendored deps to GitHub release if SRC_URI references one
 	releasesURL := extractReleaseURL(ei.SRC_URI)
 	if releasesURL != "" {
 		logger.Debug("found release URL: " + releasesURL)
 		rawTag, rawAssetName := parseReleaseURL(releasesURL)
-		vars := npmVars(ei)
 		tag := ebuild.ExpandVariables(rawTag, vars)
 		assetName := ebuild.ExpandVariables(rawAssetName, vars)
 		logger.Debug("release tag: " + tag + " asset: " + assetName)
@@ -88,7 +108,7 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 				// with `npm --offline --cache` in the ebuild. Regenerate if needed.
 				if !npmDepsTarballHasCache(assetPath) {
 					logger.Debug("asset has wrong format (node_modules instead of npm-cache), regenerating...")
-					if err := npmCreateDepsTarball(downloaded, distDir, assetName); err != nil {
+					if err := npmCreateDepsTarball(mainDistfile, distDir, assetName); err != nil {
 						Restore(ei.Path)
 						return fmt.Errorf("npm: create deps tarball: %w", err)
 					}
@@ -114,18 +134,15 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 			} else {
 				// Asset not in distdir — create it from npm package
 				logger.Debug("asset not in distdir, creating...")
-				if err := npmCreateDepsTarball(downloaded, distDir, assetName); err != nil {
+				if err := npmCreateDepsTarball(mainDistfile, distDir, assetName); err != nil {
 					Restore(ei.Path)
 					return fmt.Errorf("npm: create deps tarball: %w", err)
 				}
 				logger.Debug("asset created, uploading...")
 				if err := npmUploadAsset(tag, assetName, distDir, cfg.GitHubRepo, gh.Runner()); err != nil {
 					Restore(ei.Path)
-					return fmt.Errorf("npm: upload asset: %w", err)
+					return fmt.Errorf("npm: upload asset %s: %w", assetName, err)
 				}
-				// Remove stale Manifest (first run failed before fetching)
-				manifestPath := filepath.Join(filepath.Dir(ei.Path), "Manifest")
-				_ = os.Remove(manifestPath)
 			}
 		}
 	} else {
@@ -146,6 +163,7 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 
 	return nil
 }
+
 
 // releaseURLPattern matches GitHub releases download URLs.
 // Example: https://github.com/owner/repo/releases/download/tag/file.tar.xz
@@ -172,66 +190,9 @@ func parseReleaseURL(url string) (tag, assetName string) {
 	return matches[3], matches[4]
 }
 
-// npmVars builds a VariableMap from the ebuild info using the shared expander.
-func npmVars(ei *ebuild.EbuildInfo) ebuild.VariableMap {
-	pe, err := atom.ParseEbuildPath(ei.Path)
-	if err != nil {
-		pe = nil
-	}
-	vars := ebuild.BuildVariableMap(ei.Raw, pe)
-	// Fallback: when pe is nil (e.g. test fixtures without a real path),
-	// set core vars from EbuildInfo fields so expansion still works.
-	if pe == nil {
-		if _, ok := vars["PN"]; !ok {
-			vars["PN"] = ei.PN()
-		}
-		if _, ok := vars["PV"]; !ok {
-			vars["PV"] = ei.PV()
-		}
-		if _, ok := vars["P"]; !ok {
-			vars["P"] = ei.P()
-		}
-	}
-	return vars
-}
-
-// npmFirstRegistryURL reproduces the observable behaviour of the old
-// npmResolveSRCURI on top of the shared expander. Plan 22a replaces
-// this with ParseSrcUri.
-func npmFirstRegistryURL(ei *ebuild.EbuildInfo) string {
-	vars := npmVars(ei)
-	expanded := strings.TrimSpace(ebuild.ExpandVariables(ei.SRC_URI, vars))
-	if idx := strings.Index(expanded, "\n"); idx >= 0 {
-		expanded = strings.TrimSpace(expanded[:idx])
-	}
-	const prefix = "mirror://npm/"
-	if !strings.HasPrefix(expanded, prefix) {
-		return ""
-	}
-	path := strings.TrimPrefix(expanded, prefix)
-	if idx := strings.Index(path, " -> "); idx >= 0 {
-		path = path[:idx]
-	}
-	return "https://registry.npmjs.org/" + path
-}
-
-// npmExtractDistfileName extracts the distfile name from an npm registry URL.
-func npmExtractDistfileName(url string) string {
-	// Handle npm scoped packages:
-	// https://registry.npmjs.org/@scope/pkg/-/@scope/pkg-1.0.0.tgz
-	if idx := strings.LastIndex(url, "/-"); idx >= 0 {
-		return strings.TrimPrefix(url[idx+2:], "/")
-	}
-	// Fallback: take last path segment
-	parts := strings.Split(url, "/")
-	if len(parts) > 0 {
-		return strings.TrimPrefix(parts[len(parts)-1], "/")
-	}
-	return ""
-}
-
 // npmDownloadDistfile downloads a distfile from the resolved URL to destDir.
-func npmDownloadDistfile(url, destDir string, client *httpclient.Client) (string, error) {
+// The filename is the DISTDIR basename to use (not derived from the URL).
+func npmDownloadDistfile(url, destDir, filename string, client *httpclient.Client) (string, error) {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return "", fmt.Errorf("npm: unsupported URL scheme: %s", url)
 	}
@@ -246,12 +207,6 @@ func npmDownloadDistfile(url, destDir string, client *httpclient.Client) (string
 		return "", fmt.Errorf("npm: HTTP %d for %s", resp.StatusCode, url)
 	}
 
-	// Determine destination filename
-	distName := npmExtractDistfileName(url)
-	if distName == "" {
-		distName = "downloaded.tgz"
-	}
-
 	// Create destDir if it doesn't exist
 	if destDir != "" {
 		if err := os.MkdirAll(destDir, 0755); err != nil {
@@ -263,7 +218,7 @@ func npmDownloadDistfile(url, destDir string, client *httpclient.Client) (string
 		destDir = cwd
 	}
 
-	destPath := filepath.Join(destDir, distName)
+	destPath := filepath.Join(destDir, filename)
 
 	out, err := os.Create(destPath)
 	if err != nil {
