@@ -21,6 +21,19 @@ import (
 	"bennypowers.dev/larry/internal/logger"
 )
 
+// npmRunner executes the npm subprocess. Tests replace it.
+var npmRunner = func(cmd *exec.Cmd) error {
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprint(os.Stderr, string(out))
+		return err
+	}
+	return nil
+}
+
+// archiveRunner executes the tar subprocess. Tests replace it.
+var archiveRunner = func(cmd *exec.Cmd) error { return cmd.Run() }
+
 // npmPrepare implements the npm type-specific prepare pipeline.
 // Steps:
 // 1. Parse SRC_URI entries, apply the ${P} tag guard, download all npm entries
@@ -88,6 +101,12 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 		}
 	}
 
+	// Collect all distfile names for manifest verification.
+	var distfileNames []string
+	for _, e := range entries {
+		distfileNames = append(distfileNames, e.Filename)
+	}
+
 	// The "main" distfile for the rest of the pipeline is entries[0].Filename.
 	mainDistfile := npmEntries[0].Filename
 
@@ -122,7 +141,7 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 					return fmt.Errorf("npm: check release %s: %w", tag, err)
 				}
 				if !exists {
-					if err := ghReleaseCreate(tag, cfg.GitHubRepo, gh.Runner()); err != nil {
+					if err := ghReleaseCreate(tag, cfg.GitHubRepo, ei.PN(), gh.Runner()); err != nil {
 						Restore(ei.Path)
 						return fmt.Errorf("npm: create release %s: %w", tag, err)
 					}
@@ -139,7 +158,7 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 					return fmt.Errorf("npm: create deps tarball: %w", err)
 				}
 				logger.Debug("asset created, uploading...")
-				if err := npmUploadAsset(tag, assetName, distDir, cfg.GitHubRepo, gh.Runner()); err != nil {
+				if err := npmUploadAsset(tag, assetName, distDir, cfg.GitHubRepo, ei.PN(), gh.Runner()); err != nil {
 					Restore(ei.Path)
 					return fmt.Errorf("npm: upload asset %s: %w", assetName, err)
 				}
@@ -155,7 +174,8 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 		CatPkg:     ei.Category + "/" + ei.PN(),
 		Distdir:    distDir,
 		EbuildPath: ei.Path,
-		Prefetch:   nil,
+		Distfiles:  distfileNames,
+		Prefetch:   npmPrefetchPackage,
 	}); err != nil {
 		Restore(ei.Path)
 		return fmt.Errorf("npm: manifest: %w", err)
@@ -276,14 +296,14 @@ func npmCopyToDistdir(srcPath, distDir string) error {
 }
 
 // npmUploadAsset uploads a deps tarball to the GitHub release.
-func npmUploadAsset(tag, assetName, distDir, repo string, runner github.CmdRunner) error {
+func npmUploadAsset(tag, assetName, distDir, repo, pn string, runner github.CmdRunner) error {
 	// Check if release exists
 	exists, err := ghReleaseViewExists(tag, repo, runner)
 	if err != nil {
 		return fmt.Errorf("check release %s: %w", tag, err)
 	}
 	if !exists {
-		if err := ghReleaseCreate(tag, repo, runner); err != nil {
+		if err := ghReleaseCreate(tag, repo, pn, runner); err != nil {
 			return fmt.Errorf("create release %s: %w", tag, err)
 		}
 	}
@@ -367,20 +387,17 @@ func npmCreateDepsTarball(npmTarball, distDir, assetName string) error {
 	// from inside the tarball and resolves all transitive dependencies through the cache.
 	// Unlike extracting first (which triggers shrinkwrap's resolved URLs to bypass cache),
 	// passing the .tgz directly causes npm to resolve from the registry cache.
-	var cmd *exec.Cmd
-	cmd = exec.Command("npm", "install", "--ignore-scripts", "--cache", npmCacheDir, npmTarball)
+	cmd := exec.Command("npm", "--cache", npmCacheDir, "install", npmTarball)
 	cmd.Dir = tmpDir
 	logger.Debug("running: " + strings.Join(cmd.Args, " "))
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		fmt.Fprint(os.Stderr, string(output))
+	if err := npmRunner(cmd); err != nil {
 		return fmt.Errorf("npm install: %w", err)
 	}
 
 	// Create deps tarball from the npm cache directory
 	outputTarball := filepath.Join(tmpDir, assetName)
-	cmd = exec.Command("tar", "cJf", outputTarball, "-C", tmpDir, "npm-cache")
-	if err := cmd.Run(); err != nil {
+	cmd = exec.Command("tar", "-caf", outputTarball, "-C", tmpDir, "npm-cache")
+	if err := archiveRunner(cmd); err != nil {
 		return fmt.Errorf("create deps tarball: %w", err)
 	}
 
@@ -399,6 +416,84 @@ func npmCreateDepsTarball(npmTarball, distDir, assetName string) error {
 	}
 	if err := os.WriteFile(destPath, data, 0644); err != nil {
 		return fmt.Errorf("write distfile: %w", err)
+	}
+
+	return nil
+}
+
+// npmPrefetchPackage downloads, into distdir, every mirror://npm/ distfile declared by
+// every *.ebuild in pkgDir. Files already present and non-empty are skipped.
+// Errors on individual ebuilds are logged and skipped; only a download failure for a
+// file that is genuinely missing aborts.
+func npmPrefetchPackage(pkgDir, distdir string) error {
+	// Create distdir if it doesn't exist
+	if err := os.MkdirAll(distdir, 0755); err != nil {
+		return fmt.Errorf("create distdir: %w", err)
+	}
+
+	// Glob for *.ebuild files (not .bak)
+	files, err := filepath.Glob(filepath.Join(pkgDir, "*.ebuild"))
+	if err != nil {
+		return fmt.Errorf("glob ebuilds: %w", err)
+	}
+	if len(files) == 0 {
+		return nil
+	}
+
+	// Create HTTP client for downloads
+	client := httpclient.NewClient()
+
+	for _, ebuildPath := range files {
+		// Skip .bak files
+		if strings.HasSuffix(ebuildPath, ".ebuild.bak") {
+			continue
+		}
+
+		// Read raw content
+		data, err := os.ReadFile(ebuildPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[larry] npm prefetch: skip %s: %v\n", ebuildPath, err)
+			continue
+		}
+
+		// Parse ebuild path for PN/PV/P (Portage core variables)
+		pe, pathErr := atom.ParseEbuildPath(ebuildPath)
+		if pathErr != nil {
+			fmt.Fprintf(os.Stderr, "[larry] npm prefetch: skip %s: %v\n", ebuildPath, pathErr)
+			continue
+		}
+
+		// Parse ebuild to extract SRC_URI and variables
+		info, err := ebuild.ParseEbuildFromFile(ebuildPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[larry] npm prefetch: skip %s: %v\n", ebuildPath, err)
+			continue
+		}
+
+		// Build variable map with core Portage variables from ebuild path
+		vars := ebuild.BuildVariableMap(string(data), pe)
+
+		// Parse SRC_URI
+		entries := ebuild.ParseSrcUri(info.SRC_URI, vars)
+
+		// Download every npm entry that's missing
+		for _, entry := range entries {
+			if !strings.HasPrefix(entry.URL, "mirror://npm/") {
+				continue
+			}
+
+			// Skip if already exists and is non-empty
+			destPath := filepath.Join(distdir, entry.Filename)
+			if info, err := os.Stat(destPath); err == nil && info.Size() > 0 {
+				continue
+			}
+
+			// Download
+			rewritten := "https://registry.npmjs.org/" + strings.TrimPrefix(entry.URL, "mirror://npm/")
+			if _, err := npmDownloadDistfile(rewritten, distdir, entry.Filename, client); err != nil {
+				fmt.Fprintf(os.Stderr, "[larry] npm prefetch: %s: %v\n", entry.Filename, err)
+			}
+		}
 	}
 
 	return nil

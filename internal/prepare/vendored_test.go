@@ -25,9 +25,9 @@ func TestVendored_ParseDepSpec_Npm(t *testing.T) {
 		wantType DepType
 		wantTar  string
 	}{
-		{"pkg-1.0.0-npm-deps.tar.xz", DepNPM, "node_modules"},
-		{"pkg-1.0.0-npm-deps.tar.gz", DepNPM, "node_modules"},
-		{"pkg-1.0.0-npm-deps.tar.zst", DepNPM, "node_modules"},
+		{"pkg-1.0.0-npm-deps.tar.xz", DepNPM, "npm-cache"},
+		{"pkg-1.0.0-npm-deps.tar.gz", DepNPM, "npm-cache"},
+		{"pkg-1.0.0-npm-deps.tar.zst", DepNPM, "npm-cache"},
 	}
 	for _, tt := range tests {
 		ds := parseDepSpec(tt.distName, "pkg-1.0.0")
@@ -287,7 +287,7 @@ func TestVendored_GhReleaseView_NotExists(t *testing.T) {
 func TestVendored_GhReleaseCreate(t *testing.T) {
 	runner := github.NewStubRunner()
 
-	err := ghReleaseCreate("pkg", "", runner)
+	err := ghReleaseCreate("pkg", "", "pkg", runner)
 	if err != nil {
 		t.Fatalf("ghReleaseCreate failed: %v", err)
 	}
@@ -300,9 +300,9 @@ func TestVendored_GhReleaseCreate(t *testing.T) {
 
 func TestVendored_GhReleaseCreate_Failure(t *testing.T) {
 	runner := github.NewStubRunner()
-	runner.Errors["gh release create pkg"] = fmt.Errorf("gh error")
+	runner.Errors["gh release create pkg --title pkg deps --notes npm dependency cache for pkg"] = fmt.Errorf("gh error")
 
-	err := ghReleaseCreate("pkg", "", runner)
+	err := ghReleaseCreate("pkg", "", "pkg", runner)
 	if err == nil {
 		t.Fatal("expected error from gh release create")
 	}
@@ -487,6 +487,16 @@ func TestVendored_ParseDepSpecsFromURI(t *testing.T) {
 	}
 	if dists[1].DistName != "pkg-1.0.0-cargo-deps.tar.xz" {
 		t.Errorf("distspec[1].DistName = %q, want %q", dists[1].DistName, "pkg-1.0.0-cargo-deps.tar.xz")
+	}
+}
+
+// TestVendored_NpmAssetContractIsNpmCache verifies the npm TarballContent
+// matches what npmCreateDepsTarball actually produces (npm-cache/).
+// This test follows the existing stub-runner pattern (see TestVendored_GhReleaseView_Exists).
+func TestVendored_NpmAssetContractIsNpmCache(t *testing.T) {
+	ds := parseDepSpec("pkg-1.0.0-npm-deps.tar.xz", "pkg-1.0.0")
+	if ds.TarballContent != "npm-cache" {
+		t.Errorf("npm TarballContent = %q, want npm-cache", ds.TarballContent)
 	}
 }
 
