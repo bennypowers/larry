@@ -4,270 +4,93 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 
+	"bennypowers.dev/larry/internal/atom"
+	"bennypowers.dev/larry/internal/version"
 	"bennypowers.dev/larry/internal/remoteid"
 )
 
 // ImportConfig holds configuration for the import command.
 type ImportConfig struct {
-	SourceOverlay string // --from flag: explicit source overlay path
+	SourceOverlay string // --from flag: raw value (path, repo name, or empty)
 	TargetOverlay string // --overlay flag: target overlay path (default: empty = local)
 	DryRun        bool   // skip write operations
-	Force         bool   // overwrite even if target is newer
+	Force         bool   // overwrite even if target is newer or equal
+	ReposRoot     string // base dir for repo scan; defaults to /var/db/repos
 }
 
 // ImportResult holds the result of an import operation.
 type ImportResult struct {
-	EbuildPath  string // path to imported ebuild in target
-	MetaPath    string // path to metadata.xml in target
-	SourcePath  string // path to source ebuild
+	EbuildPath  string              // path to imported ebuild in target
+	MetaPath    string              // path to metadata.xml in target
+	SourcePath  string              // path to source ebuild
+	RepoName    string              // source repo name for provenance
 	SourceMeta  *remoteid.Metadata
-	Prepared    bool // whether prepare was called
-	Warned      string // warning message (if any)
+	Prepared    bool                // whether prepare was called
+	Warned      string              // warning message (if any)
 }
 
 // ---------------------------------------------------------------------------
-// findSourceOverlay — locate the source overlay
+// resolveSourceOverlay — locate the source overlay
 // ---------------------------------------------------------------------------
 
-// findSourceOverlay returns the source overlay path.
-// If cfg.SourceOverlay is set, use it directly.
-// Otherwise, search /var/db/repos/ for an overlay containing the package.
-func findSourceOverlay(catPkg string, cfg *ImportConfig) (string, error) {
-	// Explicit --from takes precedence
-	if cfg.SourceOverlay != "" {
-		if _, err := os.Stat(cfg.SourceOverlay); err != nil {
-			return "", fmt.Errorf("source overlay %s not found: %w", cfg.SourceOverlay, err)
+// resolveSourceOverlay returns the overlay root holding catPkg and the repo name
+// (the overlay directory's base name) for the provenance line.
+// Resolution order:
+//  1. --from <path> that os.Stat's as a directory → use it;
+//  2. --from <name> that does not stat → /var/db/repos/<name>; if that does not stat, error;
+//  3. no --from → scan /var/db/repos/*, skipping any entry whose Clean equals targetOverlay,
+//     first match containing <category>/<package> wins;
+//  4. nothing found → error naming --from.
+func resolveSourceOverlay(from, targetOverlay, catPkg, reposRoot string) (overlayPath, repoName string, err error) {
+	if reposRoot == "" {
+		reposRoot = "/var/db/repos"
+	}
+	targetClean := filepath.Clean(targetOverlay)
+
+	// Explicit --from: path or repo name
+	if from != "" {
+		if _, err := os.Stat(from); err == nil {
+			// --from is a directory path
+			return from, filepath.Base(from), nil
 		}
-		return cfg.SourceOverlay, nil
+		// --from might be a repo name; try /var/db/repos/<name>
+		candidate := filepath.Join(reposRoot, from)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, from, nil
+		}
+		return "", "", fmt.Errorf("source not found: %s", from)
 	}
 
-	// Auto-detect: search /var/db/repos/ for overlay containing package
-	reposDir := "/var/db/repos"
-	if _, err := os.Stat(reposDir); err != nil {
-		return "", fmt.Errorf("no source overlay specified and %s not found: use --from to specify", reposDir)
-	}
-
-	entries, err := os.ReadDir(reposDir)
+	// Auto-detect: scan /var/db/repos/*
+	entries, err := os.ReadDir(reposRoot)
 	if err != nil {
-		return "", fmt.Errorf("reading %s: %w", reposDir, err)
+		return "", "", fmt.Errorf("no source overlay specified and %s not found: use --from to specify", reposRoot)
 	}
+
+	parts := strings.SplitN(catPkg, "/", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("invalid catpkg %q: expected category/name", catPkg)
+	}
+	catPkgPath := filepath.Join(parts[0], parts[1])
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		overlayPath := filepath.Join(reposDir, entry.Name())
-		catDir := findCatDirInOverlay(overlayPath, catPkg)
-		if catDir != "" {
-			return overlayPath, nil
-		}
-	}
-
-	return "", fmt.Errorf("no source overlay found for %s in %s: use --from to specify", catPkg, reposDir)
-}
-
-// findCatDirInOverlay checks if the category/package directory exists in an overlay.
-func findCatDirInOverlay(overlayPath, catPkg string) string {
-	parts := strings.SplitN(catPkg, "/", 2)
-	if len(parts) != 2 {
-		return ""
-	}
-	catDir := filepath.Join(overlayPath, parts[0], parts[1])
-	if _, err := os.Stat(catDir); err == nil {
-		return catDir
-	}
-	return ""
-}
-
-// ---------------------------------------------------------------------------
-// findEbuild — find the latest (or live) ebuild in a category directory
-// ---------------------------------------------------------------------------
-
-// findEbuild returns the path to the latest ebuild for the package in catDir.
-// If liveOnly is true, only return live ebuilds (PV=9999 or PV=*_p*). Otherwise,
-// skip live ebuilds and return the highest stable version.
-func findEbuild(catDir string, catPkg string, liveOnly bool) (string, error) {
-	parts := strings.SplitN(catPkg, "/", 2)
-	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid catpkg %q: expected category/name", catPkg)
-	}
-
-	entries, err := os.ReadDir(catDir)
-	if err != nil {
-		return "", fmt.Errorf("reading %s: %w", catDir, err)
-	}
-
-	var ebuilds []ebInfo
-	for _, entry := range entries {
-		if entry.IsDir() {
+		overlayPath := filepath.Join(reposRoot, entry.Name())
+		// Skip own overlay
+		if filepath.Clean(overlayPath) == targetClean {
 			continue
 		}
-		name := entry.Name()
-		if !strings.HasPrefix(name, parts[1]+"-") || !strings.HasSuffix(name, ".ebuild") {
-			continue
-		}
-
-		ei := extractEbuildInfo(name, parts[1])
-		if ei == nil {
-			continue
-		}
-
-		if liveOnly && !ei.isLive() {
-			continue
-		}
-		if ei != nil {
-			ebuilds = append(ebuilds, *ei)
+		if _, err := os.Stat(filepath.Join(overlayPath, catPkgPath)); err == nil {
+			return overlayPath, entry.Name(), nil
 		}
 	}
 
-	if len(ebuilds) == 0 {
-		if liveOnly {
-			return "", fmt.Errorf("no live ebuilds found for %s in %s", catPkg, catDir)
-		}
-		return "", fmt.Errorf("no ebuilds found for %s in %s", catPkg, catDir)
-	}
-
-	// Sort by version descending and return the highest
-	sort.Slice(ebuilds, func(i, j int) bool {
-		return compareVersions(ebuilds[i].pv, ebuilds[j].pv) > 0
-	})
-
-	return filepath.Join(catDir, ebuilds[0].name), nil
-}
-
-// ebInfo holds parsed info from an ebuild filename.
-type ebInfo struct {
-	name string // full filename, e.g. "foo-2.0.0.ebuild"
-	pv   string // version part, e.g. "2.0.0"
-}
-
-func (e *ebInfo) isLive() bool {
-	return e.pv == "9999" || strings.Contains(e.pv, "_p")
-}
-
-// extractEbuildInfo parses PN-PV.ebuild into ebInfo.
-func extractEbuildInfo(filename, pkgName string) *ebInfo {
-	// Strip .ebuild suffix
-	if !strings.HasSuffix(filename, ".ebuild") {
-		return nil
-	}
-	base := strings.TrimSuffix(filename, ".ebuild")
-
-	// Strip PN- prefix
-	prefix := pkgName + "-"
-	if !strings.HasPrefix(base, prefix) {
-		return nil
-	}
-	pv := strings.TrimPrefix(base, prefix)
-
-	// Must not be empty
-	if pv == "" {
-		return nil
-	}
-
-	return &ebInfo{
-		name: filename,
-		pv:   pv,
-	}
-}
-
-// ---------------------------------------------------------------------------
-// compareVersions — semantic-ish version comparison
-// ---------------------------------------------------------------------------
-
-// compareVersions returns >0 if a > b, <0 if a < b, 0 if equal.
-// Handles dotted numeric versions (1.2.3) and ebuild-style (9999, _p20240101).
-func compareVersions(a, b string) int {
-	// Handle live versions: 9999 and *_p* are always latest
-	if isLiveVersion(a) && !isLiveVersion(b) {
-		return 1
-	}
-	if !isLiveVersion(a) && isLiveVersion(b) {
-		return -1
-	}
-	if isLiveVersion(a) && isLiveVersion(b) {
-		// Both live — compare the _p suffix or treat as equal
-		aSuffix := extractLiveSuffix(a)
-		bSuffix := extractLiveSuffix(b)
-		if aSuffix != bSuffix {
-			return strings.Compare(aSuffix, bSuffix)
-		}
-		return 0
-	}
-
-	// Normal version comparison
-	aParts := splitVersion(a)
-	bParts := splitVersion(b)
-
-	maxLen := len(aParts)
-	if len(bParts) > maxLen {
-		maxLen = len(bParts)
-	}
-
-	for i := 0; i < maxLen; i++ {
-		var aVal, bVal int
-		if i < len(aParts) {
-			aVal = parseIntOrZero(aParts[i])
-		}
-		if i < len(bParts) {
-			bVal = parseIntOrZero(bParts[i])
-		}
-		if aVal != bVal {
-			return aVal - bVal
-		}
-	}
-	return 0
-}
-
-func isLiveVersion(v string) bool {
-	return v == "9999" || strings.Contains(v, "_p")
-}
-
-func extractLiveSuffix(v string) string {
-	if idx := strings.Index(v, "_p"); idx >= 0 {
-		return v[idx:]
-	}
-	return v
-}
-
-func splitVersion(v string) []string {
-	parts := strings.Split(v, ".")
-	for i, p := range parts {
-		// Strip any non-numeric suffixes
-		num := ""
-		for _, c := range p {
-			if c >= '0' && c <= '9' {
-				num += string(c)
-			} else {
-				break
-			}
-		}
-		parts[i] = num
-	}
-	return parts
-}
-
-func parseIntOrZero(s string) int {
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0
-		}
-	}
-	n := 0
-	for _, c := range s {
-		n = n*10 + int(c-'0')
-	}
-	return n
-}
-
-// isVersionNewer reports whether sourcePV is newer than targetPV.
-func isVersionNewer(sourcePV, targetPV string) bool {
-	return compareVersions(sourcePV, targetPV) > 0
+	return "", "", fmt.Errorf("no source overlay found for %s: use --from to specify", catPkg)
 }
 
 // ---------------------------------------------------------------------------
@@ -447,42 +270,6 @@ func rString(r *remoteid.RemoteId) string {
 }
 
 // ---------------------------------------------------------------------------
-// autoDetectOverlay — find which overlay contains a package
-// ---------------------------------------------------------------------------
-
-// autoDetectOverlay searches a list of overlay paths for the given catpkg.
-func autoDetectOverlay(overlays []string, catPkg string) string {
-	for _, overlay := range overlays {
-		if findCatDirInOverlay(overlay, catPkg) != "" {
-			return overlay
-		}
-	}
-	return ""
-}
-
-// autoDetectOverlayDirs returns a list of overlay directories from /var/db/repos/.
-func autoDetectOverlayDirs() []string {
-	var overlays []string
-	reposDir := "/var/db/repos"
-	if _, err := os.Stat(reposDir); err != nil {
-		return overlays
-	}
-
-	entries, err := os.ReadDir(reposDir)
-	if err != nil {
-		return overlays
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			overlays = append(overlays, filepath.Join(reposDir, entry.Name()))
-		}
-	}
-
-	return overlays
-}
-
-// ---------------------------------------------------------------------------
 // Import — main entry point
 // ---------------------------------------------------------------------------
 
@@ -494,69 +281,91 @@ func Import(catPkg string, cfg *ImportConfig) (*ImportResult, error) {
 		cfg = &ImportConfig{}
 	}
 
-	// 1. Find source overlay
-	sourceOverlay, err := findSourceOverlay(catPkg, cfg)
+	// 1. Resolve source overlay
+	sourceOverlay, repoName, err := resolveSourceOverlay(
+		cfg.SourceOverlay,
+		cfg.TargetOverlay,
+		catPkg,
+		cfg.ReposRoot,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("find source overlay: %w", err)
+		return nil, fmt.Errorf("resolve source overlay: %w", err)
 	}
 
-	// 2. Locate source ebuild
-	srcCatDir := findCatDirInOverlay(sourceOverlay, catPkg)
-	if srcCatDir == "" {
+	// 2. Locate source package directory
+	srcPkgDir := filepath.Join(sourceOverlay, catPkg)
+	if _, err := os.Stat(srcPkgDir); err != nil {
 		return nil, fmt.Errorf("package %s not found in overlay %s", catPkg, sourceOverlay)
 	}
 
-	srcEbuildPath, err := findEbuild(srcCatDir, catPkg, false)
+	// 3. Find latest non-live ebuild using atom.FindLatest
+	srcParsed, err := atom.FindLatest(srcPkgDir)
 	if err != nil {
 		return nil, fmt.Errorf("find ebuild: %w", err)
 	}
+	srcEbuildPath := srcParsed.Path
 
-	// 3. Parse source metadata
-	srcMetaPath := filepath.Join(filepath.Dir(srcEbuildPath), "metadata.xml")
+	// 4. Parse source metadata
+	srcMetaPath := filepath.Join(srcPkgDir, "metadata.xml")
 	var srcMeta *remoteid.Metadata
 	if meta, err := remoteid.ParseMetadataFile(srcMetaPath); err == nil {
 		srcMeta = meta
 	}
 
-	// 4. Determine target directory
+	// 5. Determine target directory from atom.ParseAtom
 	targetOverlay := cfg.TargetOverlay
 	if targetOverlay == "" {
-		// Use current working directory as local overlay
 		targetOverlay, _ = os.Getwd()
 	}
 
-	targetCatDir := filepath.Join(targetOverlay, filepath.Dir(srcEbuildPath))
-	targetPkgDir := filepath.Join(targetCatDir, filepath.Base(srcEbuildPath))
+	targetPkgDir := filepath.Join(targetOverlay, srcParsed.Category, srcParsed.PN)
 
-	if err := os.MkdirAll(targetPkgDir, 0755); err != nil {
-		return nil, fmt.Errorf("create target dir: %w", err)
+	// 6. Version guard — check target dir for equal-or-higher version
+	if !cfg.Force {
+		targetLatest, err := atom.FindLatest(targetPkgDir)
+		if err == nil {
+			// Target has an ebuild — compare PVRs
+			if version.Compare(srcParsed.PVR, targetLatest.PVR) <= 0 {
+				return nil, fmt.Errorf("target already has %s (>= %s); use --force to overwrite", targetLatest.PVR, srcParsed.PVR)
+			}
+		}
+		// atom.ErrNoEbuilds means target dir is empty — proceed
 	}
 
-	// 5. Check version comparison (source vs target)
-	targetEbuild := filepath.Join(targetPkgDir, filepath.Base(srcEbuildPath))
+	// 7. Build result paths
+	resultEbuildPath := filepath.Join(targetPkgDir, srcParsed.PF+".ebuild")
+	resultMetaPath := filepath.Join(targetPkgDir, "metadata.xml")
+
+	// 8. Dry-run: no filesystem writes at all
 	if cfg.DryRun {
 		return &ImportResult{
 			SourcePath:  srcEbuildPath,
-			EbuildPath:  targetEbuild,
+			EbuildPath:  resultEbuildPath,
+			MetaPath:    resultMetaPath,
+			RepoName:    repoName,
 			SourceMeta:  srcMeta,
 		}, nil
 	}
 
-	// 6. Copy ebuild
+	// 9. Create target directory
+	if err := os.MkdirAll(targetPkgDir, 0755); err != nil {
+		return nil, fmt.Errorf("create target dir: %w", err)
+	}
+
+	// 10. Copy ebuild
 	if err := copyEbuild(srcEbuildPath, targetPkgDir); err != nil {
 		return nil, fmt.Errorf("copy ebuild: %w", err)
 	}
 
-	// 7. Copy files/ directory
-	if err := copyFilesDir(filepath.Dir(srcEbuildPath), targetPkgDir); err != nil {
+	// 11. Copy files/ directory
+	if err := copyFilesDir(srcPkgDir, targetPkgDir); err != nil {
 		return nil, fmt.Errorf("copy files/: %w", err)
 	}
 
-	// 8. Create or merge metadata.xml
-	metaPath := filepath.Join(targetPkgDir, "metadata.xml")
-	if _, err := os.Stat(metaPath); err == nil {
+	// 12. Create or merge metadata.xml
+	if _, err := os.Stat(resultMetaPath); err == nil {
 		// Target metadata exists — merge
-		if err := mergeMetadata(metaPath, "", "", srcMeta.GetRemoteIds()); err != nil {
+		if err := mergeMetadata(resultMetaPath, "", "", srcMeta.GetRemoteIds()); err != nil {
 			return nil, fmt.Errorf("merge metadata: %w", err)
 		}
 	} else {
@@ -565,42 +374,16 @@ func Import(catPkg string, cfg *ImportConfig) (*ImportResult, error) {
 		if srcMeta != nil {
 			remoteIds = srcMeta.GetRemoteIds()
 		}
-		if err := createMetadata(metaPath, "", "", remoteIds); err != nil {
+		if err := createMetadata(resultMetaPath, "", "", remoteIds); err != nil {
 			return nil, fmt.Errorf("create metadata: %w", err)
 		}
 	}
 
-	// 9. Determine result paths
-	result := &ImportResult{
+	return &ImportResult{
 		SourcePath:  srcEbuildPath,
-		EbuildPath:  filepath.Join(targetPkgDir, filepath.Base(srcEbuildPath)),
-		MetaPath:    metaPath,
+		EbuildPath:  resultEbuildPath,
+		MetaPath:    resultMetaPath,
+		RepoName:    repoName,
 		SourceMeta:  srcMeta,
-	}
-
-	return result, nil
-}
-
-// ---------------------------------------------------------------------------
-// PortageQ integration — find overlays via portageq
-// ---------------------------------------------------------------------------
-
-// findOverlaysViaPortageq uses portageq to find all available overlays.
-func findOverlaysViaPortageq() ([]string, error) {
-	cmd := exec.Command("portageq", "portage_trees", "/")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("portageq portage_trees: %w", err)
-	}
-
-	var overlays []string
-	for _, line := range strings.Split(strings.TrimSpace(out.String()), " ") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			overlays = append(overlays, line)
-		}
-	}
-	return overlays, nil
+	}, nil
 }

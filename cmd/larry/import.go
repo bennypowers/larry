@@ -10,8 +10,8 @@ import (
 )
 
 var (
-	importFrom string // --from flag: source overlay path
-	importDry  bool   // --dry-run flag
+	importFrom  string // --from flag: raw value (path, repo name, or empty)
+	importDry   bool   // --dry-run flag
 	importForce bool  // --force flag
 )
 
@@ -19,7 +19,7 @@ func init() {
 	rootCmd.AddCommand(&importCmd)
 
 	importCmd.Flags().StringVar(&importFrom, "from", "",
-		"source overlay path (default: /var/db/repos/gentoo)")
+		"source overlay path or repo name (default: auto-search /var/db/repos/*)")
 	importCmd.Flags().BoolVar(&importDry, "dry-run", false,
 		"show what would be done without making changes")
 	importCmd.Flags().BoolVar(&importForce, "force", false,
@@ -31,8 +31,9 @@ var importCmd = cobra.Command{
 	Short: "Import an ebuild from another overlay",
 	Long: `Import an ebuild from a source overlay to the local overlay.
 
-Searches the source overlay (default: /var/db/repos/gentoo, or --from to specify)
-for the latest stable ebuild, copies it along with the files/ directory and
+Searches the source overlay (--from to specify a path or repo name, or
+auto-searches /var/db/repos/* skipping the target overlay) for the latest
+stable ebuild, copies it along with the files/ directory and
 metadata.xml (merging maintainers and preserving upstream remote-ids) into
 the local overlay at the same category/package path.
 
@@ -44,28 +45,26 @@ appropriate type-specific pipeline (npm, cargo, go, vendored, or generic).
 
 Examples:
   larry import dev-lisp/sbcl-unicode-dictionary  # Import to local overlay
-  larry import --from /var/db/repos/guru dev-lisp/foo  # Explicit source
+  larry import --from /var/db/repos/guru dev-lisp/foo  # Explicit source path
+  larry import --from guru dev-lisp/foo  # Repo name
   larry import --dry-run dev-lisp/foo  # Preview only
 `,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		catPkg := args[0]
 
-		// Resolve overlays through config.
-		sourceOverlay, err := cfg.ResolveOverlay(importFrom)
-		if err != nil {
-			return fmt.Errorf("resolving source overlay: %w", err)
-		}
+		// Target overlay through config; source is passed raw to resolveSourceOverlay.
 		targetOverlay, err := cfg.ResolveOverlay("")
 		if err != nil {
 			return fmt.Errorf("resolving target overlay: %w", err)
 		}
 
 		importCfg := &importcmd.ImportConfig{
-			SourceOverlay: sourceOverlay,
+			SourceOverlay: importFrom,
 			TargetOverlay: targetOverlay,
 			DryRun:        importDry,
 			Force:         importForce,
+			// ReposRoot defaults to /var/db/repos inside resolveSourceOverlay.
 		}
 
 		result, err := importcmd.Import(catPkg, importCfg)
