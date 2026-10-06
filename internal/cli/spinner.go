@@ -116,11 +116,11 @@ func (m *spinnerModel) Init() tea.Cmd {
 }
 
 func (m *spinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg.(type) {
+	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.(tea.WindowSizeMsg).Width
+		m.width = msg.Width
 	case tea.KeyMsg:
-		if msg.(tea.KeyMsg).Type == tea.KeyCtrlC {
+		if msg.Type == tea.KeyCtrlC {
 			m.quit = true
 			return m, tea.Quit
 		}

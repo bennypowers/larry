@@ -242,9 +242,10 @@ func TestRenderTable_AllProviders(t *testing.T) {
 	got := normalize(out)
 	want := normalize(string(golden))
 	if got != want {
-		// Write diff to a temp file for debugging.
+		// Write diff to a temp file for debugging — best-effort, test already reports mismatch.
 		tmp := filepath.Join(t.TempDir(), "diff.golden")
-		os.WriteFile(tmp, []byte(got), 0o644)
+		//nolint:errcheck // best-effort debug output
+		_ = os.WriteFile(tmp, []byte(got), 0o644)
 		cmd := exec.Command("diff", "-u", string(goldenPath), tmp)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Errorf("golden mismatch (diff exit=%v):\n%s", err, out)

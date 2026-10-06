@@ -215,7 +215,7 @@ func resolveRepoName(overlay string) string {
 func buildImage(containerfile string, overlay, imageName string, runner CmdRunner) error {
 	// Check if Containerfile exists
 	if _, err := os.Stat(containerfile); err != nil {
-		return fmt.Errorf("Containerfile not found: %s (create with 'larry container init')", containerfile)
+		return fmt.Errorf("containerfile not found: %s (create with 'larry container init')", containerfile)
 	}
 
 	// Resolve repo name

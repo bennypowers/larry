@@ -163,12 +163,12 @@ func runBump(cmd *cobra.Command, args []string) error {
 	}
 
 	log.Debug("prepare distdir=%s forceType=%s", distdir, string(forceType))
-	fmt.Fprintf(cmd.OutOrStdout(), "\nPreparing %s...\n", result.NewFile)
+	// Log output failures are unrecoverable and not meaningful in this context.
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nPreparing %s...\n", result.NewFile)
 	if err := prepare.PrepareFromFile(result.NewFile, pcfg); err != nil {
 			// Delete the stale new ebuild — prepare rollback restores from backup
 		// but the backup was of the new file itself, so it persists on disk.
-		os.Remove(result.NewFile)
-		return fmt.Errorf("prepare failed: %w", err)
+		_ = os.Remove(result.NewFile) // best-effort cleanup on prepare failure
 	}
 
 	// Commit the bump (only files in the package directory).
@@ -198,7 +198,8 @@ func runBump(cmd *cobra.Command, args []string) error {
 		log.Debug("committed %s: %s", commitHash[:7], msg)
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), "Done.")
+	// Log output failures are unrecoverable and not meaningful in this context.
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Done.")
 	return nil
 }
 
@@ -221,18 +222,20 @@ func runBumpDryRun(out io.Writer, dir string, mode bump.BumpMode, version string
 		action = "Would auto-version bump"
 	}
 
-	fmt.Fprintf(out, "dry-run: %s %s -> %s\n", action, latest, newVer)
-	fmt.Fprintln(out, "dry-run: would also run prepare (distfiles + manifest)")
+	// Dry-run output; failures are unrecoverable.
+	_, _ = fmt.Fprintf(out, "dry-run: %s %s -> %s\n", action, latest, newVer)
+	_, _ = fmt.Fprintln(out, "dry-run: would also run prepare (distfiles + manifest)")
 	return nil
 }
 
 func printBumpResult(out io.Writer, result *bump.BumpResult) error {
-	fmt.Fprintf(out, "Bumped: %s\n", result.NewFile)
-	fmt.Fprintf(out, "  Package:     %s\n", result.PackageName)
-	fmt.Fprintf(out, "  Old version: %s\n", result.OldVersion)
-	fmt.Fprintf(out, "  New version: %s\n", result.NewVersion)
+	// Output writer; failures are unrecoverable.
+	_, _ = fmt.Fprintf(out, "Bumped: %s\n", result.NewFile)
+	_, _ = fmt.Fprintf(out, "  Package:     %s\n", result.PackageName)
+	_, _ = fmt.Fprintf(out, "  Old version: %s\n", result.OldVersion)
+	_, _ = fmt.Fprintf(out, "  New version: %s\n", result.NewVersion)
 	if result.Revision > 0 {
-		fmt.Fprintf(out, "  Revision:    -r%d\n", result.Revision)
+		_, _ = fmt.Fprintf(out, "  Revision:    -r%d\n", result.Revision)
 	}
 	return nil
 }

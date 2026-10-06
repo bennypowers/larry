@@ -24,13 +24,21 @@ func fixtureCustomPrepare(t *testing.T, scriptBody string) (ebuildPath, pkgDir s
 	t.Helper()
 	pkgDir = filepath.Join(t.TempDir(), "foo")
 	ebuildPath = filepath.Join(pkgDir, "foo-1.0.0.ebuild")
-	os.MkdirAll(pkgDir, 0755)
-	os.WriteFile(ebuildPath, []byte("EAPI=8\nCOMMIT=\"aaaa\"\n"), 0644)
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\nCOMMIT=\"aaaa\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	filesDir := filepath.Join(pkgDir, "files")
-	os.MkdirAll(filesDir, 0755)
+	if err := os.MkdirAll(filesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	scriptPath := filepath.Join(filesDir, "prepare.sh")
-	os.WriteFile(scriptPath, []byte(scriptBody), 0755)
+	if err := os.WriteFile(scriptPath, []byte(scriptBody), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	rec = newRecorder()
 	orig := ManifestRunner
@@ -38,9 +46,9 @@ func fixtureCustomPrepare(t *testing.T, scriptBody string) (ebuildPath, pkgDir s
 		rec.record(bin, args, dir, env)
 		// Write a valid Manifest so verifyManifestValid passes.
 		manifestPath := filepath.Join(pkgDir, "Manifest")
-		os.WriteFile(manifestPath, []byte(
+		_ = os.WriteFile(manifestPath, []byte(
 			"DIST foo-1.0.0.tar.gz 10 BLAKE2B aa SHA512 bb\n",
-		), 0644)
+		), 0644) // best-effort; goroutine callback may outlive the test
 		return nil
 	}
 
@@ -59,9 +67,9 @@ func TestCustomPrepare_RunsManifest(t *testing.T) {
 	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
 		rec.record(bin, args, dir, env)
 		// Write valid Manifest.
-		os.WriteFile(filepath.Join(filepath.Dir(ebuildPath), "Manifest"), []byte(
+		_ = os.WriteFile(filepath.Join(filepath.Dir(ebuildPath), "Manifest"), []byte(
 			"DIST foo-1.0.0.tar.gz 10 BLAKE2B aa SHA512 bb\n",
-		), 0644)
+		), 0644) // best-effort; goroutine callback may outlive the test
 		return nil
 	}
 	t.Cleanup(func() { ManifestRunner = orig })
@@ -139,13 +147,21 @@ func TestCustomPrepare_RestoresOnManifestFailure(t *testing.T) {
 	// Proper dir structure: <tmpdir>/foo/foo-1.0.0.ebuild
 	pkgDir := filepath.Join(t.TempDir(), "foo")
 	ebuildPath := filepath.Join(pkgDir, "foo-1.0.0.ebuild")
-	os.MkdirAll(pkgDir, 0755)
-	os.WriteFile(ebuildPath, []byte("EAPI=8\nCOMMIT=\"aaaa\"\n"), 0644)
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\nCOMMIT=\"aaaa\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	filesDir := filepath.Join(pkgDir, "files")
-	os.MkdirAll(filesDir, 0755)
+	if err := os.MkdirAll(filesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	scriptPath := filepath.Join(filesDir, "prepare.sh")
 	// Script modifies ebuild in place and exits 0.
-	os.WriteFile(scriptPath, []byte("#!/bin/sh\nsed -i 's/aaaa/bbbb/' foo-1.0.0.ebuild\nexit 0\n"), 0755)
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nsed -i 's/aaaa/bbbb/' foo-1.0.0.ebuild\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	// Stub ManifestRunner to fail.
 	orig := ManifestRunner

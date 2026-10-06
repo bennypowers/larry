@@ -87,7 +87,13 @@ func (p *PortageQ) EnvVar(tree string, varName string) (string, error) {
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		// portageq envvar may exit 1 even on success (some Portage versions);
+		// treat exit 1 as potentially successful — fall through to stderr check.
+		if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+			return "", fmt.Errorf("portageq envvar %s: %w", varName, err)
+		}
+	}
 
 	// Check for actual error conditions in stderr
 	stderrStr := strings.TrimSpace(stderr.String())
@@ -159,7 +165,13 @@ func (p *PortageQ) EnvVarForPkg(tree string, ebuildPath string, varName string) 
 	// Set EBUILD env var so portageq resolves from this specific ebuild
 	cmd.Env = append(os.Environ(), "EBUILD="+ebuildPath)
 
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		// portageq envvar may exit 1 even on success (some Portage versions);
+		// treat exit 1 as potentially successful — fall through to stderr check.
+		if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+			return "", fmt.Errorf("portageq envvar %s (ebuild %s): %w", varName, ebuildPath, err)
+		}
+	}
 
 	// Check for actual error conditions in stderr
 	stderrStr := strings.TrimSpace(stderr.String())

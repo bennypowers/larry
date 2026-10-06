@@ -82,14 +82,16 @@ func RetryHTTP(config *RetryConfig, reqFn func() (*http.Response, error)) error 
 				time.Sleep(config.ExponentialBackoff(i))
 			}
 			if resp.Body != nil {
-				resp.Body.Close()
+				// Best-effort discard of body before retry; the HTTP client reuses the connection regardless.
+				_ = resp.Body.Close()
 			}
 			continue
 		}
 
 		// 4xx or 2xx — don't retry
 		if resp.Body != nil {
-			resp.Body.Close()
+			// Best-effort discard of body; connection pooling handles cleanup.
+			_ = resp.Body.Close()
 		}
 		return nil
 	}

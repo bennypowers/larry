@@ -230,8 +230,7 @@ func TestPortageQ_PortageTreeUnavailable(t *testing.T) {
 
 	// Should be an OverlayUnavailable error (or Portage not available)
 	if _, ok := err.(*ErrOverlayUnavailable); !ok {
-		// May not fail with this error type if portageq is not installed
-		// Just verify it returns some error
+		t.Skip("portageq not installed or error is not *ErrOverlayUnavailable")
 	}
 }
 
@@ -262,10 +261,8 @@ func TestPortageQ_GetRepoPath_NonExistent(t *testing.T) {
 	}
 
 	// Verify it returns an overlay error or portage error
-	var _ *ErrOverlayUnavailable
 	if _, ok := err.(*ErrOverlayUnavailable); !ok {
-		// If portageq is not installed, we get a different error
-		// Just verify it's a non-nil error
+		t.Skip("portageq not installed or error is not *ErrOverlayUnavailable")
 	}
 }
 
@@ -371,7 +368,8 @@ func TestHasPortageq_Availability(t *testing.T) {
 	if q.HasPortageq() != has {
 		t.Error("HasPortageq() returned inconsistent results")
 	}
-	if q.HasEbuild() != q.HasEbuild() {
+	hasEbuild := q.HasEbuild()
+	if q.HasEbuild() != hasEbuild {
 		t.Error("HasEbuild() returned inconsistent results")
 	}
 }
@@ -457,16 +455,8 @@ func TestEnvVar_TreeSpecific(t *testing.T) {
 // ---- TestHasPortageq_NotInstalled: verifies behavior when not installed ----
 
 func TestHasPortageq_NotInstalled(t *testing.T) {
-	// Save the real PATH
-	origPath, origSet := os.LookupEnv("PATH")
-	defer os.Setenv("PATH", origPath)
-
-	if !origSet {
-		os.Setenv("PATH", "/nonexistent/bin:/usr/bin")
-	}
-
 	// Set PATH to a directory with no portageq
-	os.Setenv("PATH", "/nonexistent/bin:/usr/bin")
+	t.Setenv("PATH", "/nonexistent/bin:/usr/bin")
 
 	// Verify the method works without panic
 	q := NewPortageQ()

@@ -317,7 +317,6 @@ func splitOwnerRepo(s string) []string {
 
 // splitPath splits a URL path into segments, ignoring leading/trailing slashes.
 func splitPath(s string) []string {
-	s = s
 	// Remove trailing slash
 	for len(s) > 0 && s[len(s)-1] == '/' {
 		s = s[:len(s)-1]

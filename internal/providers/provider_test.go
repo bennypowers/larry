@@ -11,11 +11,6 @@ import (
 	"bennypowers.dev/larry/internal/ratelimit"
 )
 
-// helper: create an httpclient.Client pointing at the given httptest.Server.
-func newTestClient(srv *httptest.Server) *httpclient.Client {
-	return httpclient.NewClientWithTransport(srv.Client().Transport)
-}
-
 // ---- PyPIProvider (httptest) ----
 
 func TestPyPIProvider_NotFound(t *testing.T) {
@@ -45,7 +40,7 @@ func TestPyPIProvider_FetchLatest(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp) // httptest writer; write cannot fail on in-memory buffer
 	}))
 	defer srv.Close()
 
@@ -75,7 +70,7 @@ func TestPyPIProvider_FetchLatest_Prerelease(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp) // httptest writer; write cannot fail on in-memory buffer
 	}))
 	defer srv.Close()
 
@@ -111,7 +106,7 @@ func TestNpmProvider_FetchLatest(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp) // httptest writer; write cannot fail on in-memory buffer
 	}))
 	defer srv.Close()
 
@@ -138,7 +133,7 @@ func TestNpmProvider_FetchLatest_Prerelease(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp) // httptest writer; write cannot fail on in-memory buffer
 	}))
 	defer srv.Close()
 
@@ -183,7 +178,7 @@ func TestGitLabProvider_FetchLatest(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(releases)
+			_ = json.NewEncoder(w).Encode(releases) // httptest writer; write cannot fail on in-memory buffer
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -222,7 +217,7 @@ func TestGitLabProvider_RateLimited(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(releases)
+		_ = json.NewEncoder(w).Encode(releases) // httptest writer; write cannot fail on in-memory buffer
 	}))
 	defer srv.Close()
 
@@ -267,7 +262,7 @@ func TestCodebergProvider_FetchLatest(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(releases)
+			_ = json.NewEncoder(w).Encode(releases) // httptest writer; write cannot fail on in-memory buffer
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -342,7 +337,7 @@ func TestSourceHutProvider_FetchLatest(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp) // httptest writer; write cannot fail on in-memory buffer
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)

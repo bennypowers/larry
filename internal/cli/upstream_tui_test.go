@@ -144,13 +144,13 @@ func TestTUI_Keybindings_Quit(t *testing.T) {
 	}
 
 	m := newUpstreamModel(results)
-	_, msg := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 
 	if !m.quitting() {
 		t.Error("Ctrl+C should quit")
 	}
 
-	_, msg = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, msg := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if msg == nil {
 		t.Error("should return message on quit")
 	}

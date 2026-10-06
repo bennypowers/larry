@@ -90,7 +90,9 @@ func TestVendored_DownloadSource(t *testing.T) {
 
 	// Create a fake source tarball
 	tarballPath := filepath.Join(dir, "pkg-1.0.0.tar.gz")
-	os.WriteFile(tarballPath, []byte("fake-tarball"), 0644)
+	if err := os.WriteFile(tarballPath, []byte("fake-tarball"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create a test server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -103,9 +105,11 @@ func TestVendored_DownloadSource(t *testing.T) {
 	defer server.Close()
 
 	// Write ebuild with SRC_URI pointing to test server
-	os.WriteFile(ei.Path, []byte(fmt.Sprintf(`EAPI=8
+	if err := os.WriteFile(ei.Path, []byte(fmt.Sprintf(`EAPI=8
 SRC_URI="%s/pkg-1.0.0.tar.gz"
-`, server.URL)), 0644)
+`, server.URL)), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Test the download logic directly
 	targetPath := filepath.Join(dir, "out.tar.gz")
@@ -141,8 +145,12 @@ func TestVendored_ExtractSource(t *testing.T) {
 	// Create a minimal tarball with a file inside
 	dir := t.TempDir()
 	innerDir := filepath.Join(dir, "inner")
-	os.MkdirAll(innerDir, 0755)
-	os.WriteFile(filepath.Join(innerDir, "file.txt"), []byte("hello"), 0644)
+	if err := os.MkdirAll(innerDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(innerDir, "file.txt"), []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	tarballPath := filepath.Join(dir, "source.tar.gz")
 	err := createTestTarball(tarballPath, "inner", dir)
@@ -181,8 +189,12 @@ func TestVendored_CreateTarball(t *testing.T) {
 
 	// Create a vendor directory with files
 	vendorDir := filepath.Join(tmpDir, "node_modules")
-	os.MkdirAll(vendorDir, 0755)
-	os.WriteFile(filepath.Join(vendorDir, "package.json"), []byte(`{"name":"dep"}`), 0644)
+	if err := os.MkdirAll(vendorDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vendorDir, "package.json"), []byte(`{"name":"dep"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	tarballPath := filepath.Join(tmpDir, "output.tar.xz")
 	err := createVendorTarball(tmpDir, "node_modules", tarballPath)
@@ -217,7 +229,9 @@ func TestVendored_CopyToDistdir(t *testing.T) {
 
 	// Create a tarball in srcDir
 	tarballPath := filepath.Join(srcDir, "deps.tar.xz")
-	os.WriteFile(tarballPath, []byte("fake"), 0644)
+	if err := os.WriteFile(tarballPath, []byte("fake"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	err := copyTarballToDistdir(filepath.Join(srcDir, "deps.tar.xz"), dstDir)
 	if err != nil {
@@ -236,7 +250,9 @@ func TestVendored_CopyToDistdir_CreateDistdir(t *testing.T) {
 	dstDir := filepath.Join(tmpDir, "new-distdir")
 
 	srcTarball := filepath.Join(t.TempDir(), "deps.tar.gz")
-	os.WriteFile(srcTarball, []byte("fake"), 0644)
+	if err := os.WriteFile(srcTarball, []byte("fake"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// dstDir doesn't exist — should be created
 	err := copyTarballToDistdir(srcTarball, dstDir)
@@ -292,10 +308,7 @@ func TestVendored_GhReleaseCreate(t *testing.T) {
 		t.Fatalf("ghReleaseCreate failed: %v", err)
 	}
 
-	// Verify the command was called
-	if _, ok := runner.Outputs["gh release create pkg"]; !ok {
-		// StubRunner doesn't track calls, but we can check no error was returned
-	}
+	// StubRunner doesn't populate Outputs; success is verified by err == nil.
 }
 
 func TestVendored_GhReleaseCreate_Failure(t *testing.T) {
@@ -317,7 +330,9 @@ func TestVendored_GhUpload(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	tarballPath := filepath.Join(tmpDir, "deps.tar.xz")
-	os.WriteFile(tarballPath, []byte("fake-tarball"), 0644)
+	if err := os.WriteFile(tarballPath, []byte("fake-tarball"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	err := ghUploadAsset("pkg", tarballPath, "", runner)
 	if err != nil {
@@ -350,11 +365,15 @@ func TestVendored_DryRun(t *testing.T) {
 	}
 
 	// Write a minimal ebuild
-	os.WriteFile(ei.Path, []byte("EAPI=8\nSRC_URI=\"https://example.com/pkg-1.0.0.tar.gz\"\n"), 0644)
+	if err := os.WriteFile(ei.Path, []byte("EAPI=8\nSRC_URI=\"https://example.com/pkg-1.0.0.tar.gz\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create distdir
 	distdir := filepath.Join(tmpDir, "distdir")
-	os.MkdirAll(distdir, 0755)
+	if err := os.MkdirAll(distdir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg := &PrepareConfig{
 		DryRun:  true,
@@ -541,8 +560,12 @@ func TestVendored_ManifestTargetsCatPkg(t *testing.T) {
 	// "category/PN" for the manifest target.
 	dir := t.TempDir()
 	ebuildPath := filepath.Join(dir, "dev-util", "fish-lsp", "fish-lsp-1.1.3.ebuild")
-	os.MkdirAll(filepath.Dir(ebuildPath), 0755)
-	os.WriteFile(ebuildPath, []byte("EAPI=8\nSRC_URI=\"https://example.com/fish-lsp-1.1.3.tar.gz\"\n"), 0644)
+	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\nSRC_URI=\"https://example.com/fish-lsp-1.1.3.tar.gz\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	pe, err := atom.ParseEbuildPath(ebuildPath)
 	if err != nil {

@@ -15,8 +15,6 @@ import (
 var (
 	// keyLineRe matches lines like "KEY="value"" from ebuild info output.
 	keyLineRe = regexp.MustCompile(`^([A-Z_]+)=(.*)$`)
-	// inheritLineRe matches the "INHERITED" line specifically.
-	inheritLineRe = regexp.MustCompile(`^INHERITED=(.+)$`)
 )
 
 // ParseEbuildInfo runs `ebuild <path> info` and parses the output into EbuildInfo.
@@ -35,7 +33,10 @@ func ParseEbuildInfo(path string) (*EbuildInfo, error) {
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		// ebuild info may exit non-zero; fall through to file-based parsing.
+		_ = err
+	}
 
 	info, _ := parseInfoOutput(path, out.String())
 

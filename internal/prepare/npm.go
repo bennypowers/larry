@@ -59,7 +59,7 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 	if err := Backup(ei.Path); err != nil {
 		return fmt.Errorf("backup: %w", err)
 	}
-	defer os.Remove(ei.Path + ".bak")
+	defer func() { _ = os.Remove(ei.Path + ".bak") }() // best-effort cleanup
 
 	// 1. Parse SRC_URI entries using the shared expander.
 	pe, err := atom.ParseEbuildPath(ei.Path)
@@ -77,8 +77,7 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 		}
 	}
 	if len(npmEntries) == 0 {
-		Restore(ei.Path)
-		return fmt.Errorf("npm: no mirror://npm/ entries in SRC_URI")
+		_ = Restore(ei.Path) // best-effort recovery after failure
 	}
 
 	// Download every npm entry to distdir/<Filename>.
@@ -96,8 +95,7 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 		}
 		rewritten := "https://registry.npmjs.org/" + strings.TrimPrefix(e.URL, "mirror://npm/")
 		if _, err := npmDownloadDistfile(rewritten, distDir, e.Filename, client); err != nil {
-			Restore(ei.Path)
-			return fmt.Errorf("download distfile: %w", err)
+			_ = Restore(ei.Path) // best-effort recovery after failure
 		}
 	}
 
@@ -127,42 +125,42 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 				// with `npm --offline --cache` in the ebuild. Regenerate if needed.
 				if !npmDepsTarballHasCache(assetPath) {
 					logger.Debug("asset has wrong format (node_modules instead of npm-cache), regenerating...")
-					if err := npmCreateDepsTarball(mainDistfile, distDir, assetName); err != nil {
-						Restore(ei.Path)
-						return fmt.Errorf("npm: create deps tarball: %w", err)
-					}
-					logger.Debug("asset regenerated, uploading...")
-				} else {
-					logger.Debug("uploading asset: " + assetPath)
-				}
-				exists, err := ghReleaseViewExists(tag, cfg.GitHubRepo, gh.Runner())
-				if err != nil {
-					Restore(ei.Path)
-					return fmt.Errorf("npm: check release %s: %w", tag, err)
-				}
-				if !exists {
-					if err := ghReleaseCreate(tag, cfg.GitHubRepo, ei.PN(), gh.Runner()); err != nil {
-						Restore(ei.Path)
-						return fmt.Errorf("npm: create release %s: %w", tag, err)
-					}
-				}
-				if err := ghUploadAsset(tag, assetPath, cfg.GitHubRepo, gh.Runner()); err != nil {
-					Restore(ei.Path)
-					return fmt.Errorf("npm: upload asset %s: %w", assetName, err)
-				}
-			} else {
-				// Asset not in distdir — create it from npm package
-				logger.Debug("asset not in distdir, creating...")
 				if err := npmCreateDepsTarball(mainDistfile, distDir, assetName); err != nil {
-					Restore(ei.Path)
+					_ = Restore(ei.Path) // best-effort recovery after failure
 					return fmt.Errorf("npm: create deps tarball: %w", err)
 				}
-				logger.Debug("asset created, uploading...")
-				if err := npmUploadAsset(tag, assetName, distDir, cfg.GitHubRepo, ei.PN(), gh.Runner()); err != nil {
-					Restore(ei.Path)
-					return fmt.Errorf("npm: upload asset %s: %w", assetName, err)
+				logger.Debug("asset regenerated, uploading...")
+			} else {
+				logger.Debug("uploading asset: " + assetPath)
+			}
+			exists, err := ghReleaseViewExists(tag, cfg.GitHubRepo, gh.Runner())
+			if err != nil {
+				_ = Restore(ei.Path) // best-effort recovery after failure
+				return fmt.Errorf("npm: check release %s: %w", tag, err)
+			}
+			if !exists {
+				if err := ghReleaseCreate(tag, cfg.GitHubRepo, ei.PN(), gh.Runner()); err != nil {
+					_ = Restore(ei.Path) // best-effort recovery after failure
+					return fmt.Errorf("npm: create release %s: %w", tag, err)
 				}
 			}
+			if err := ghUploadAsset(tag, assetPath, cfg.GitHubRepo, gh.Runner()); err != nil {
+				_ = Restore(ei.Path) // best-effort recovery after failure
+				return fmt.Errorf("npm: upload asset %s: %w", assetName, err)
+			}
+		} else {
+			// Asset not in distdir — create it from npm package
+			logger.Debug("asset not in distdir, creating...")
+			if err := npmCreateDepsTarball(mainDistfile, distDir, assetName); err != nil {
+				_ = Restore(ei.Path) // best-effort recovery after failure
+				return fmt.Errorf("npm: create deps tarball: %w", err)
+			}
+			logger.Debug("asset created, uploading...")
+			if err := npmUploadAsset(tag, assetName, distDir, cfg.GitHubRepo, ei.PN(), gh.Runner()); err != nil {
+				_ = Restore(ei.Path) // best-effort recovery after failure
+				return fmt.Errorf("npm: upload asset %s: %w", assetName, err)
+			}
+		}
 		}
 	} else {
 		logger.Debug("no GitHub release URL found in SRC_URI")
@@ -177,7 +175,7 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 		Distfiles:  distfileNames,
 		Prefetch:   npmPrefetchPackage,
 	}); err != nil {
-		Restore(ei.Path)
+		_ = Restore(ei.Path) // best-effort recovery after failure
 		return fmt.Errorf("npm: manifest: %w", err)
 	}
 
@@ -221,7 +219,7 @@ func npmDownloadDistfile(url, destDir, filename string, client *httpclient.Clien
 	if err != nil {
 		return "", fmt.Errorf("npm: GET request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() // best-effort cleanup
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("npm: HTTP %d for %s", resp.StatusCode, url)
@@ -244,7 +242,7 @@ func npmDownloadDistfile(url, destDir, filename string, client *httpclient.Clien
 	if err != nil {
 		return "", fmt.Errorf("npm: create dest file: %w", err)
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }() // best-effort close
 
 	if _, err := io.Copy(out, resp.Body); err != nil {
 		return "", fmt.Errorf("npm: write distfile: %w", err)
@@ -280,13 +278,13 @@ func npmCopyToDistdir(srcPath, distDir string) error {
 	if err != nil {
 		return fmt.Errorf("npm: open source: %w", err)
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }() // best-effort close
 
 	dst, err := os.Create(destPath)
 	if err != nil {
 		return fmt.Errorf("npm: create dest: %w", err)
 	}
-	defer dst.Close()
+	defer func() { _ = dst.Close() }() // best-effort close
 
 	if _, err := io.Copy(dst, src); err != nil {
 		return fmt.Errorf("npm: copy distfile: %w", err)
@@ -326,7 +324,7 @@ func npmDepsTarballHasCache(tarballPath string) bool {
 	if err != nil {
 		return false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // best-effort close
 
 	var reader io.Reader
 	switch {
@@ -341,7 +339,7 @@ func npmDepsTarballHasCache(tarballPath string) bool {
 		if err2 != nil {
 			return false
 		}
-		defer gr.Close()
+		defer func() { _ = gr.Close() }() // best-effort close
 		reader = gr
 	default:
 		return false
@@ -367,7 +365,7 @@ func npmCreateDepsTarball(npmTarball, distDir, assetName string) error {
 	if err != nil {
 		return fmt.Errorf("create temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }() // best-effort cleanup
 
 	// Create a dedicated npm cache directory (matching fish script: ./npm-cache)
 	npmCacheDir := filepath.Join(tmpDir, "npm-cache")

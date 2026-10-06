@@ -49,7 +49,7 @@ func goFixtureWithGoMod(t *testing.T, owner, repo, tag, dirName, goModContent st
 		}
 		w.Header().Set("Content-Type", "application/gzip")
 		w.WriteHeader(http.StatusOK)
-		w.Write(tarData)
+	_, _ = w.Write(tarData) // httptest writer; a write error cannot occur here
 	}))
 }
 
@@ -97,7 +97,7 @@ func buildTestTarball(t *testing.T, dirName string, files map[string]string) []b
 func makeGoEbuildInfo(t *testing.T, tmpDir, owner, repo string, extraVars ...string) *ebuild.EbuildInfo {
 	t.Helper()
 	pkgDir := filepath.Join(tmpDir, "overlay", "dev-util", "proj")
-	os.MkdirAll(pkgDir, 0o755)
+if err := os.MkdirAll(pkgDir, 0o755); err != nil { t.Fatal(err) }
 	ebuildPath := filepath.Join(pkgDir, "proj-1.0.0.ebuild")
 
 	content := `EAPI=8
@@ -145,7 +145,7 @@ func makeGoEbuildInfoWithPV(t *testing.T, tmpDir, owner, repo, pvVal string, ext
 	pVal := pkgName + "-" + pv
 
 	pkgDir := filepath.Join(tmpDir, "overlay", "dev-util", "proj")
-	os.MkdirAll(pkgDir, 0o755)
+if err := os.MkdirAll(pkgDir, 0o755); err != nil { t.Fatal(err) }
 	ebuildPath := filepath.Join(pkgDir, pkgName+"-"+pv+".ebuild")
 
 	content := `EAPI=8
@@ -303,13 +303,13 @@ func TestPrepareGo_TarballRootIsVendorDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open tarball: %v", err)
 	}
-	defer f.Close()
+defer func() { if err := f.Close(); err != nil { t.Fatal(err) } }()
 
 	gzr, err := gzip.NewReader(f)
 	if err != nil {
 		t.Fatalf("create gzip reader: %v", err)
 	}
-	defer gzr.Close()
+defer func() { _ = gzr.Close() }() // best-effort close in test
 
 	tr := tar.NewReader(gzr)
 	foundVendorX := false
@@ -498,7 +498,7 @@ func TestPrepareGo_TagStripsRevision(t *testing.T) {
 		tarData := buildTestTarball(t, "proj-1.0.0", map[string]string{"go.mod": "module example.com/proj\n\ngo 1.22\n"})
 		w.Header().Set("Content-Type", "application/gzip")
 		w.WriteHeader(http.StatusOK)
-		w.Write(tarData)
+	_, _ = w.Write(tarData) // httptest writer; a write error cannot occur here
 	}))
 	defer srv.Close()
 
@@ -696,7 +696,7 @@ func TestPrepareGo_NoGoMod(t *testing.T) {
 		tarData := buildTestTarball(t, "proj-1.0.0", map[string]string{"README.md": "# proj\n"})
 		w.Header().Set("Content-Type", "application/gzip")
 		w.WriteHeader(http.StatusOK)
-		w.Write(tarData)
+	_, _ = w.Write(tarData) // httptest writer; a write error cannot occur here
 	}))
 	defer srv.Close()
 
@@ -773,14 +773,20 @@ func TestPrepareGo_MultipleTopLevelDirsIsError(t *testing.T) {
 				Typeflag: tar.TypeDir,
 				Mode:     0o755,
 			}
-			wt.WriteHeader(hdr)
+			if err := wt.WriteHeader(hdr); err != nil {
+				t.Fatalf("tar header: %v", err)
+			}
 		}
-		wt.Close()
-		gz.Close()
+		if err := wt.Close(); err != nil {
+			t.Fatalf("close tar writer: %v", err)
+		}
+		if err := gz.Close(); err != nil {
+			t.Fatalf("close gzip writer: %v", err)
+		}
 
 		w.Header().Set("Content-Type", "application/gzip")
 		w.WriteHeader(http.StatusOK)
-		w.Write(buf.Bytes())
+_, _ = w.Write(buf.Bytes()) // httptest writer; a write error cannot occur here
 	}))
 	defer srv.Close()
 
@@ -919,7 +925,9 @@ LICENSE="MIT"
 SLOT="0"
 KEYWORDS="~amd64"
 `
-	os.WriteFile(ebuildPath, []byte(content), 0o644)
+	if err := os.WriteFile(ebuildPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write ebuild: %v", err)
+	}
 
 	ei := &ebuild.EbuildInfo{
 		Category: "dev-go",
@@ -976,16 +984,22 @@ func TestExtractGoSource(t *testing.T) {
 			hdr.Typeflag = tar.TypeDir
 			hdr.Mode = 0o755
 		}
-		w.WriteHeader(hdr)
+		if err := w.WriteHeader(hdr); err != nil {
+			t.Fatalf("tar header: %v", err)
+		}
 		if hdr.Typeflag == tar.TypeReg {
-			w.Write([]byte(content))
+_, _ = w.Write([]byte(content)) // httptest writer; a write error cannot occur here
 		}
 	}
-	w.Close()
-	gz.Close()
+	if err := w.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close gzip writer: %v", err)
+	}
 
 	extractDir := filepath.Join(tmpDir, "extracted")
-	os.MkdirAll(extractDir, 0o755)
+if err := os.MkdirAll(extractDir, 0o755); err != nil { t.Fatal(err) }
 
 	err := extractGoSource(strings.NewReader(buf.String()), extractDir)
 	if err != nil {
@@ -1037,9 +1051,15 @@ func TestCreateGoVendorTarball(t *testing.T) {
 
 	// Create a srcDir with vendor/
 	srcDir := filepath.Join(tmpDir, "src")
-	os.MkdirAll(filepath.Join(srcDir, "vendor", "x", "y"), 0o755)
-	os.WriteFile(filepath.Join(srcDir, "vendor", "x", "y", "z.go"), []byte("package y\n"), 0o644)
-	os.WriteFile(filepath.Join(srcDir, "go.mod"), []byte("module example.com/test\n"), 0o644)
+	if err := os.MkdirAll(filepath.Join(srcDir, "vendor", "x", "y"), 0o755); err != nil {
+		t.Fatalf("create vendor dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "vendor", "x", "y", "z.go"), []byte("package y\n"), 0o644); err != nil {
+		t.Fatalf("write z.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "go.mod"), []byte("module example.com/test\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
 
 	outPath := filepath.Join(tmpDir, "out.tar.gz")
 	err := createGoVendorTarball(srcDir, outPath)
@@ -1057,13 +1077,13 @@ func TestCreateGoVendorTarball(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open tarball: %v", err)
 	}
-	defer f.Close()
+defer func() { if err := f.Close(); err != nil { t.Fatal(err) } }()
 
 	gzr, err := gzip.NewReader(f)
 	if err != nil {
 		t.Fatalf("create gzip reader: %v", err)
 	}
-	defer gzr.Close()
+defer func() { _ = gzr.Close() }() // best-effort close in test
 
 	tr := tar.NewReader(gzr)
 	foundVendor := false
@@ -1087,7 +1107,7 @@ func TestCreateGoVendorTarball(t *testing.T) {
 func TestCreateGoVendorTarball_NoVendor(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcDir := filepath.Join(tmpDir, "src")
-	os.MkdirAll(srcDir, 0o755)
+if err := os.MkdirAll(srcDir, 0o755); err != nil { t.Fatal(err) }
 	// No vendor/ directory
 
 	outPath := filepath.Join(tmpDir, "out.tar.gz")
@@ -1106,11 +1126,13 @@ func TestCopyToDistdir(t *testing.T) {
 
 	// Create source tarball
 	tarballPath := filepath.Join(tmpDir, "example-0.1.0-deps.tar.gz")
-	os.WriteFile(tarballPath, []byte("tarball data"), 0o644)
+	if err := os.WriteFile(tarballPath, []byte("tarball data"), 0o644); err != nil {
+		t.Fatalf("write tarball: %v", err)
+	}
 
 	// Create distdir
 	distDir := filepath.Join(tmpDir, "dist")
-	os.MkdirAll(distDir, 0o755)
+if err := os.MkdirAll(distDir, 0o755); err != nil { t.Fatal(err) }
 
 	err := copyToDistdir(tarballPath, distDir)
 	if err != nil {
@@ -1170,7 +1192,7 @@ func TestBuildTestTarball(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create gzip reader: %v", err)
 	}
-	defer gzr.Close()
+defer func() { _ = gzr.Close() }() // best-effort close in test
 
 	tr := tar.NewReader(gzr)
 	found := false
@@ -1203,7 +1225,7 @@ func TestGoFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetch fixture: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() // best-effort close in test
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)

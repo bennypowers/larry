@@ -75,7 +75,7 @@ func (p *GitHubProvider) FetchResolution(rid remoteid.RemoteId, allowPrereleases
 	// Tier 1 — official latest release via /releases/latest (D1).
 	relTag, prerelease, draft, _ := p.Client.LatestRelease(rid.Owner, rid.Repo)
 	var relV *version.Version
-	if relTag != "" && !draft && !(prerelease && !allowPrereleases) {
+	if relTag != "" && !draft && (!prerelease || allowPrereleases) {
 		if v, err := tryParseVersion(relTag); err == nil {
 			relV = v
 		}

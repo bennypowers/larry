@@ -25,15 +25,21 @@ func TestPrepare_CustomScript_Detected(t *testing.T) {
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "example-1.0.ebuild")
 	filesDir := filepath.Join(tmpDir, "files")
-	os.MkdirAll(filesDir, 0755)
+	if err := os.MkdirAll(filesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create a dummy ebuild
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create custom prepare script
 	scriptPath := filepath.Join(filesDir, "prepare.sh")
 	shebang := "#!/bin/sh\necho custom\nexit 0\n"
-	os.WriteFile(scriptPath, []byte(shebang), 0755)
+	if err := os.WriteFile(scriptPath, []byte(shebang), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	ei := &ebuild.EbuildInfo{
 		Path:     ebuildPath,
@@ -55,7 +61,9 @@ func TestPrepare_CustomScript_Detected(t *testing.T) {
 func TestPrepare_CustomScript_Skipped(t *testing.T) {
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "example-1.0.ebuild")
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	ei := &ebuild.EbuildInfo{
 		Path:     ebuildPath,
@@ -91,14 +99,20 @@ func TestPrepare_CustomScript_DryRun(t *testing.T) {
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "example-1.0.ebuild")
 	filesDir := filepath.Join(tmpDir, "files")
-	os.MkdirAll(filesDir, 0755)
+	if err := os.MkdirAll(filesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create script that would modify the ebuild
 	scriptPath := filepath.Join(filesDir, "prepare.sh")
 	shebang := "#!/bin/sh\nsed -i 's/EAPI=8/EAPI=9/' \"$EBUILD\"\n"
-	os.WriteFile(scriptPath, []byte(shebang), 0755)
+	if err := os.WriteFile(scriptPath, []byte(shebang), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	ei := &ebuild.EbuildInfo{
 		Path:     ebuildPath,
@@ -130,14 +144,20 @@ func TestPrepare_CustomScript_Failure(t *testing.T) {
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "example-1.0.ebuild")
 	filesDir := filepath.Join(tmpDir, "files")
-	os.MkdirAll(filesDir, 0755)
+	if err := os.MkdirAll(filesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create script that fails
 	scriptPath := filepath.Join(filesDir, "prepare.sh")
 	shebang := "#!/bin/sh\nexit 1\n"
-	os.WriteFile(scriptPath, []byte(shebang), 0755)
+	if err := os.WriteFile(scriptPath, []byte(shebang), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	ei := &ebuild.EbuildInfo{
 		Path:     ebuildPath,
@@ -174,9 +194,13 @@ func TestPrepare_CustomScript_EnvVars(t *testing.T) {
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "example-1.0.ebuild")
 	filesDir := filepath.Join(tmpDir, "files")
-	os.MkdirAll(filesDir, 0755)
+	if err := os.MkdirAll(filesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create script that writes env vars to a file
 	envFile := filepath.Join(tmpDir, "env.out")
@@ -185,7 +209,9 @@ func TestPrepare_CustomScript_EnvVars(t *testing.T) {
 	script += "for v in EBUILD PN PV P CATEGORY DISTDIR LARRY_PREPARE; do\n"
 	script += "  echo \"$v=\"${!v}\"\" >> " + envFile + "\n"
 	script += "done\n"
-	os.WriteFile(scriptPath, []byte(script), 0755)
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	ei := &ebuild.EbuildInfo{
 		Path:     ebuildPath,
@@ -246,7 +272,9 @@ func TestPrepare_GenericNoCustomScript(t *testing.T) {
 	ebuildPath := filepath.Join(tmpDir, "example-1.0.ebuild")
 
 	// Create ebuild with no files/ dir
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n\nDESCRIPTION=\"test\"\nSRC_URI=\"https://example.com/test-1.0.tar.gz\"\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n\nDESCRIPTION=\"test\"\nSRC_URI=\"https://example.com/test-1.0.tar.gz\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	ei := &ebuild.EbuildInfo{
 		Path:     ebuildPath,
@@ -280,11 +308,17 @@ func TestRunCustomPrepare_DryRun(t *testing.T) {
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "test-1.0.ebuild")
 	filesDir := filepath.Join(tmpDir, "files")
-	os.MkdirAll(filesDir, 0755)
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.MkdirAll(filesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	scriptPath := filepath.Join(filesDir, "prepare.sh")
-	os.WriteFile(scriptPath, []byte("#!/bin/sh\necho ran\n"), 0755)
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho ran\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	// Stub ManifestRunner so dry-run + manifest call doesn't fail.
 	rec := newRecorder()
@@ -321,13 +355,21 @@ func TestRunCustomPrepare_Success(t *testing.T) {
 	// Proper dir structure: <tmpdir>/test/test-1.0.ebuild
 	pkgDir := filepath.Join(t.TempDir(), "test")
 	ebuildPath := filepath.Join(pkgDir, "test-1.0.ebuild")
-	os.MkdirAll(pkgDir, 0755)
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	filesDir := filepath.Join(pkgDir, "files")
-	os.MkdirAll(filesDir, 0755)
+	if err := os.MkdirAll(filesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	scriptPath := filepath.Join(filesDir, "prepare.sh")
-	os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0755)
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	// Stub ManifestRunner so the manifest call doesn't try a real tool.
 	rec := newRecorder()
@@ -362,13 +404,21 @@ func TestRunCustomPrepare_Failure(t *testing.T) {
 	// Proper dir structure: <tmpdir>/test/test-1.0.ebuild
 	pkgDir := filepath.Join(t.TempDir(), "test")
 	ebuildPath := filepath.Join(pkgDir, "test-1.0.ebuild")
-	os.MkdirAll(pkgDir, 0755)
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	filesDir := filepath.Join(pkgDir, "files")
-	os.MkdirAll(filesDir, 0755)
+	if err := os.MkdirAll(filesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	scriptPath := filepath.Join(filesDir, "prepare.sh")
-	os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 42\n"), 0755)
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 42\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	ei := &ebuild.EbuildInfo{
 		Path: ebuildPath,
@@ -396,8 +446,12 @@ func TestRunCustomPrepare_Failure(t *testing.T) {
 func TestRunCustomPrepare_ScriptNotFound(t *testing.T) {
 	pkgDir := filepath.Join(t.TempDir(), "test")
 	ebuildPath := filepath.Join(pkgDir, "test-1.0.ebuild")
-	os.MkdirAll(pkgDir, 0755)
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	ei := &ebuild.EbuildInfo{
 		Path: ebuildPath,
@@ -420,15 +474,23 @@ func TestRunCustomPrepare_UsesCmdDir(t *testing.T) {
 	// Proper dir structure: <tmpdir>/test/test-1.0.ebuild
 	pkgDir := filepath.Join(t.TempDir(), "test")
 	ebuildPath := filepath.Join(pkgDir, "test-1.0.ebuild")
-	os.MkdirAll(pkgDir, 0755)
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create script that writes CWD to a file
 	marker := filepath.Join(pkgDir, "marker.txt")
-	os.MkdirAll(filepath.Join(pkgDir, "files"), 0755)
+	if err := os.MkdirAll(filepath.Join(pkgDir, "files"), 0755); err != nil {
+		t.Fatal(err)
+	}
 	scriptPath := filepath.Join(pkgDir, "files", "prepare.sh")
 	script := "#!/bin/sh\npwd > " + marker + "\n"
-	os.WriteFile(scriptPath, []byte(script), 0755)
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	// Stub ManifestRunner so the manifest call doesn't fail.
 	orig := ManifestRunner
@@ -470,11 +532,19 @@ func TestRunCustomPrepare_SandboxWarningSuppressible(t *testing.T) {
 	// Proper dir structure: <tmpdir>/test/test-1.0.ebuild
 	pkgDir := filepath.Join(t.TempDir(), "test")
 	ebuildPath := filepath.Join(pkgDir, "test-1.0.ebuild")
-	os.MkdirAll(pkgDir, 0755)
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
-	os.MkdirAll(filepath.Join(pkgDir, "files"), 0755)
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(pkgDir, "files"), 0755); err != nil {
+		t.Fatal(err)
+	}
 	scriptPath := filepath.Join(pkgDir, "files", "prepare.sh")
-	os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0755)
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	// Stub ManifestRunner so the manifest call doesn't try pkgdev.
 	orig := ManifestRunner

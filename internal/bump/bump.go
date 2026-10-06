@@ -162,25 +162,6 @@ func extractPVFromContent(content string) string {
 	return ""
 }
 
-// extractPNPVFallback is a last-resort PN/PV extractor for when ParseEbuildPath fails.
-// It should never be needed in practice — atom.ParseEbuildPath handles all valid ebuilds.
-func extractPNPVFallback(path string) (pn, pv string) {
-	base := filepath.Base(path)
-	base = strings.TrimSuffix(base, ".ebuild")
-
-	// Strip revision suffix using atom (anchored -r\d+$)
-	base = atom.StripRevision(base)
-
-	// Find PV: last segment after hyphen starting with digit
-	for i := len(base) - 1; i >= 0; i-- {
-		if base[i] == '-' && i+1 < len(base) && base[i+1] >= '0' && base[i+1] <= '9' {
-			return base[:i], base[i+1:]
-		}
-	}
-
-	return base, ""
-}
-
 // getUpstreamVersion queries the provider registry for the latest upstream version.
 // Uses the same provider resolution logic as the upstream command.
 func getUpstreamVersion(cfg BumpConfig, pn string, ebuildPath string) (string, error) {

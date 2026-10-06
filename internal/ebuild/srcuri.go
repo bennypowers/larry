@@ -459,9 +459,6 @@ type SrcUriEntry struct {
 	UseFlag  string // "webui" for `webui? ( … )`, "!foo" for `!foo? ( … )`, "" when unconditional
 }
 
-// useFlagRe matches tokens like "foo?", "!bar?", "my-flag?".
-var useFlagRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_+-]*?$`)
-
 // ParseSrcUri splits a SRC_URI value into entries, stripping USE-conditional
 // wrappers and resolving `->` renames.
 func ParseSrcUri(s string, vars VariableMap) []SrcUriEntry {

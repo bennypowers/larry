@@ -65,7 +65,7 @@ func PrepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	if getErr != nil {
 		return fmt.Errorf("go: download source: %w", getErr)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() // best-effort cleanup
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("go: download source: HTTP %d", resp.StatusCode)
@@ -76,7 +76,7 @@ func PrepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	if err != nil {
 		return fmt.Errorf("go: create temp dir: %w", err)
 	}
-	defer os.RemoveAll(workDir)
+	defer func() { _ = os.RemoveAll(workDir) }() // best-effort cleanup
 
 	if err := extractGoSource(resp.Body, workDir); err != nil {
 		return fmt.Errorf("go: extract source: %w", err)
@@ -151,7 +151,7 @@ func extractGoSource(r io.Reader, destDir string) error {
 	if err != nil {
 		return fmt.Errorf("create gzip reader: %w", err)
 	}
-	defer gzr.Close()
+	defer func() { _ = gzr.Close() }() // best-effort close
 
 	tr := tar.NewReader(gzr)
 	for {
@@ -179,10 +179,10 @@ func extractGoSource(r io.Reader, destDir string) error {
 				return fmt.Errorf("create file: %w", err)
 			}
 			if _, err := io.Copy(outFile, tr); err != nil {
-				outFile.Close()
+				_ = outFile.Close()
 				return fmt.Errorf("write file: %w", err)
 			}
-			outFile.Close()
+			_ = outFile.Close() // best-effort close after successful write
 		}
 	}
 
@@ -243,16 +243,16 @@ func createGoVendorTarball(srcDir, outPath string) error {
 	if err != nil {
 		return fmt.Errorf("create tarball: %w", err)
 	}
-	defer outFile.Close()
+	defer func() { _ = outFile.Close() }() // best-effort close
 
 	gzw, err := gzip.NewWriterLevel(outFile, gzip.BestCompression)
 	if err != nil {
 		return fmt.Errorf("create gzip writer: %w", err)
 	}
-	defer gzw.Close()
+	defer func() { _ = gzw.Close() }() // best-effort close
 
 	tr := tar.NewWriter(gzw)
-	defer tr.Close()
+	defer func() { _ = tr.Close() }() // best-effort close
 
 	// Walk vendor/ and write entries with "vendor/" prefix
 	return filepath.Walk(vendorDir, func(path string, info os.FileInfo, walkErr error) error {
@@ -282,7 +282,7 @@ func createGoVendorTarball(srcDir, outPath string) error {
 			if err != nil {
 				return fmt.Errorf("open file for tar: %w", err)
 			}
-			defer f.Close()
+			defer func() { _ = f.Close() }() // best-effort close
 			if _, err := io.Copy(tr, f); err != nil {
 				return fmt.Errorf("write tar data: %w", err)
 			}

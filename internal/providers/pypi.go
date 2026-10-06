@@ -57,7 +57,7 @@ func (p *PyPIProvider) FetchLatestVersion(rid remoteid.RemoteId, allowPrerelease
 	if err != nil {
 		return nil, fmt.Errorf("pypi: failed to fetch package info: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("pypi: package %q not found", rid.Name)

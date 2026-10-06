@@ -9,18 +9,6 @@ import (
 	"testing"
 )
 
-// fixtureRoot returns the testdata/integration directory.
-func fixtureRoot() string {
-	// Try from working directory (go test ./internal/integration)
-	for _, base := range []string{"testdata/integration", "../testdata/integration"} {
-		if _, err := os.Stat(base); err == nil {
-			return base
-		}
-	}
-	// Fallback: assume testdata/integration at repo root
-	return "testdata/integration"
-}
-
 // projectRoot returns the project root directory (contains go.mod).
 func projectRoot() string {
 	// Test file is at internal/integration/ — parent is project root
@@ -65,7 +53,7 @@ func createTestOverlay(t *testing.T, base string) string {
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(filepath.Join(base, d), 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", d, err)
+			t.Fatalf("MkdirAll(%s): %v", d, err)
 		}
 	}
 
@@ -75,13 +63,13 @@ func createTestOverlay(t *testing.T, base string) string {
 repo-name = test-overlay
 masters = gentoo
 `), 0o644); err != nil {
-		t.Fatalf("write layout.conf: %v", err)
+		t.Fatalf("WriteFile(layout.conf): %v", err)
 	}
 
 	// Write profiles/categories
 	if err := os.WriteFile(filepath.Join(base, "profiles/categories"),
 		[]byte("dev-util\ndev-python\n"), 0o644); err != nil {
-		t.Fatalf("write categories: %v", err)
+		t.Fatalf("WriteFile(categories): %v", err)
 	}
 
 	return base
@@ -110,11 +98,7 @@ func larryRun(t *testing.T, binPath string, overlayDir string, args ...string) (
 // ---- TestIntegration_Upstream_Full ----
 
 func TestIntegration_Upstream_Full(t *testing.T) {
-	tmp, err := os.MkdirTemp("", "larry-integration-upstream-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmp)
+	tmp := t.TempDir()
 
 	bin := buildBinary(t, tmp)
 	overlay := createTestOverlay(t, tmp)
@@ -155,11 +139,7 @@ docache() {
 // ---- TestIntegration_Bump_Full ----
 
 func TestIntegration_Bump_Full(t *testing.T) {
-	tmp, err := os.MkdirTemp("", "larry-integration-bump-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmp)
+	tmp := t.TempDir()
 
 	bin := buildBinary(t, tmp)
 	overlay := createTestOverlay(t, tmp)
@@ -185,11 +165,7 @@ LICENSE="MIT"
 // ---- TestIntegration_Prepare_Generic ----
 
 func TestIntegration_Prepare_Generic(t *testing.T) {
-	tmp, err := os.MkdirTemp("", "larry-integration-prepare-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmp)
+	tmp := t.TempDir()
 
 	bin := buildBinary(t, tmp)
 	overlay := createTestOverlay(t, tmp)
@@ -215,11 +191,7 @@ LICENSE="MIT"
 // ---- TestIntegration_Import_Full ----
 
 func TestIntegration_Import_Full(t *testing.T) {
-	tmp, err := os.MkdirTemp("", "larry-integration-import-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmp)
+	tmp := t.TempDir()
 
 	bin := buildBinary(t, tmp)
 
@@ -251,11 +223,7 @@ LICENSE="MIT"
 // ---- TestIntegration_DryRun_All ----
 
 func TestIntegration_DryRun_All(t *testing.T) {
-	tmp, err := os.MkdirTemp("", "larry-integration-dryrun-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmp)
+	tmp := t.TempDir()
 
 	bin := buildBinary(t, tmp)
 	overlay := createTestOverlay(t, tmp)
@@ -295,11 +263,7 @@ LICENSE="MIT"
 // ---- TestIntegration_ConfigFile ----
 
 func TestIntegration_ConfigFile(t *testing.T) {
-	tmp, err := os.MkdirTemp("", "larry-integration-config-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmp)
+	tmp := t.TempDir()
 
 	bin := buildBinary(t, tmp)
 	overlay := createTestOverlay(t, tmp)
@@ -316,15 +280,15 @@ LICENSE="MIT"
 	// Create a config file
 	cfgDir := filepath.Join(tmp, "cfg")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
-		t.Fatal(err)
+		t.Fatalf("MkdirAll(cfg): %v", err)
 	}
 	cfgPath := filepath.Join(cfgDir, "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte("color: never\ndry-run: true\n"), 0o644); err != nil {
-		t.Fatal(err)
+		t.Fatalf("WriteFile(config): %v", err)
 	}
 
 	// Run with config
-	_, err = larryRun(t, bin, overlay, "--config", cfgPath, "upstream")
+	_, err := larryRun(t, bin, overlay, "--config", cfgPath, "upstream")
 	// Command should execute without config-related error
 	// We don't care about the actual upstream result
 	_ = err
@@ -333,11 +297,7 @@ LICENSE="MIT"
 // ---- TestIntegration_Cache ----
 
 func TestIntegration_Cache(t *testing.T) {
-	tmp, err := os.MkdirTemp("", "larry-integration-cache-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmp)
+	tmp := t.TempDir()
 
 	bin := buildBinary(t, tmp)
 	overlay := createTestOverlay(t, tmp)
@@ -354,8 +314,8 @@ LICENSE="MIT"
 	cacheDir := filepath.Join(tmp, "cache")
 
 	// Run upstream with cache
-	_, err = larryRun(t, bin, overlay, "--cache-dir", cacheDir, "upstream")
-	_ = err
+	_, _ = larryRun(t, bin, overlay, "--cache-dir", cacheDir, "upstream")
+	// In dry-run mode with no network, cache may not be written
 
 	// Verify cache directory was created (or would be with real network)
 	// In dry-run mode with no network, cache may not be written
@@ -365,11 +325,7 @@ LICENSE="MIT"
 // ---- TestIntegration_Version ----
 
 func TestIntegration_Version(t *testing.T) {
-	tmp, err := os.MkdirTemp("", "larry-integration-version-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmp)
+	tmp := t.TempDir()
 
 	bin := buildBinary(t, tmp)
 

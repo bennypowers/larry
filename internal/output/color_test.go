@@ -1,7 +1,6 @@
 package output
 
 import (
-	"os"
 	"testing"
 )
 
@@ -58,8 +57,7 @@ func TestColor_Override(t *testing.T) {
 }
 
 func TestColor_NoColorEnv(t *testing.T) {
-	os.Setenv("NO_COLOR", "1")
-	defer os.Unsetenv("NO_COLOR")
+	t.Setenv("NO_COLOR", "1")
 
 	c, err := NewColorHelper("auto")
 	if err != nil {

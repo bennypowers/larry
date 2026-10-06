@@ -43,7 +43,8 @@ func TestLoadConfig_Defaults(t *testing.T) {
 		"LARRY_CACHE_DIR", "LARRY_DISTDIR", "LARRY_JOBS", "LARRY_REMOTE",
 		"LARRY_OVERLAY", "LARRY_MAINTAINER_NAME", "LARRY_MAINTAINER_EMAIL",
 		"PORTAGE_DISTDIR", "XDG_CONFIG_HOME"} {
-		os.Unsetenv(v)
+		// Best-effort; env var cleanup errors are not meaningful in tests.
+		_ = os.Unsetenv(v)
 	}
 
 	c, err := Load()
@@ -63,18 +64,11 @@ func TestLoadConfig_Defaults(t *testing.T) {
 }
 
 func TestLoadConfig_EnvOverride(t *testing.T) {
-	os.Setenv("LARRY_VERBOSE", "3")
-	os.Setenv("LARRY_COLOR", "always")
-	os.Setenv("LARRY_DRY_RUN", "true")
-	os.Setenv("LARRY_CACHE_DIR", "/tmp/test-cache")
-	os.Setenv("LARRY_REMOTE", "upstream")
-	defer func() {
-		os.Unsetenv("LARRY_VERBOSE")
-		os.Unsetenv("LARRY_COLOR")
-		os.Unsetenv("LARRY_DRY_RUN")
-		os.Unsetenv("LARRY_CACHE_DIR")
-		os.Unsetenv("LARRY_REMOTE")
-	}()
+	t.Setenv("LARRY_VERBOSE", "3")
+	t.Setenv("LARRY_COLOR", "always")
+	t.Setenv("LARRY_DRY_RUN", "true")
+	t.Setenv("LARRY_CACHE_DIR", "/tmp/test-cache")
+	t.Setenv("LARRY_REMOTE", "upstream")
 
 	c, err := Load()
 	if err != nil {
@@ -132,8 +126,7 @@ remote: myremote
 
 func TestLoadConfig_CacheDir(t *testing.T) {
 	// Test XDG_CACHE_HOME.
-	os.Setenv("XDG_CACHE_HOME", "/tmp/xdg-cache")
-	defer os.Unsetenv("XDG_CACHE_HOME")
+	t.Setenv("XDG_CACHE_HOME", "/tmp/xdg-cache")
 
 	expected := filepath.Join("/tmp/xdg-cache", "larry")
 	if got := defaultCacheDir(); got != expected {
@@ -142,8 +135,7 @@ func TestLoadConfig_CacheDir(t *testing.T) {
 }
 
 func TestLoadConfig_DistdirOverride(t *testing.T) {
-	os.Setenv("LARRY_DISTDIR", "/tmp/distfiles")
-	defer os.Unsetenv("LARRY_DISTDIR")
+	t.Setenv("LARRY_DISTDIR", "/tmp/distfiles")
 
 	c, err := Load()
 	if err != nil {
@@ -211,11 +203,7 @@ func TestResolveOverlay_NoOverlayIsError(t *testing.T) {
 	// Find a temp dir that is not inside a git repo.
 	// This is tricky since /tmp might be inside a repo.
 	// Use a sub-dir and check.
-	dir, err := os.MkdirTemp("", "larry-no-overlay")
-	if err != nil {
-		t.Skipf("cannot create temp dir: %v", err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	// Save CWD and chdir to the temp dir.
 	origCwd, err := os.Getwd()
@@ -255,11 +243,7 @@ func TestResolveOverlay_NeverReturnsPortageTree(t *testing.T) {
 	// Since we control all call sites (they pass rootFlags.Overlay or ""),
 	// and rootFlags.Overlay starts at "", this test just verifies the error
 	// case doesn't return the old default.
-	dir, err := os.MkdirTemp("", "larry-portage-test")
-	if err != nil {
-		t.Skipf("cannot create temp dir: %v", err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	origCwd, _ := os.Getwd()
 	if err := os.Chdir(dir); err != nil {
@@ -340,20 +324,9 @@ func TestResolveDistdir_Precedence(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Save and restore env vars.
-			oldLarry := os.Getenv("LARRY_DISTDIR")
-			oldPortage := os.Getenv("PORTAGE_DISTDIR")
-			oldXdg := os.Getenv("XDG_CACHE_HOME")
-			defer func() {
-				os.Setenv("LARRY_DISTDIR", oldLarry)
-				os.Setenv("PORTAGE_DISTDIR", oldPortage)
-				os.Setenv("XDG_CACHE_HOME", oldXdg)
-			}()
-
-			// Set env vars.
-			os.Setenv("LARRY_DISTDIR", tt.larry)
-			os.Setenv("PORTAGE_DISTDIR", tt.portage)
-			os.Setenv("XDG_CACHE_HOME", tt.xdg)
+			t.Setenv("LARRY_DISTDIR", tt.larry)
+			t.Setenv("PORTAGE_DISTDIR", tt.portage)
+			t.Setenv("XDG_CACHE_HOME", tt.xdg)
 
 			cfg := &Config{
 				CacheDir: tt.xdg + "/larry",
@@ -370,9 +343,9 @@ func TestResolveDistdir_Precedence(t *testing.T) {
 
 func TestResolveDistdir_NeverEmpty(t *testing.T) {
 	// With all env vars unset and cfg.Distdir == "", should get cache fallback.
-	os.Unsetenv("LARRY_DISTDIR")
-	os.Unsetenv("PORTAGE_DISTDIR")
-	os.Unsetenv("XDG_CACHE_HOME")
+	_ = os.Unsetenv("LARRY_DISTDIR")
+	_ = os.Unsetenv("PORTAGE_DISTDIR")
+	_ = os.Unsetenv("XDG_CACHE_HOME")
 
 	cfg := &Config{Distdir: ""}
 	got := cfg.ResolveDistdir("")
@@ -429,15 +402,8 @@ func TestResolveCacheDir_Precedence(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			oldLarry := os.Getenv("LARRY_CACHE_DIR")
-			oldXdg := os.Getenv("XDG_CACHE_HOME")
-			defer func() {
-				os.Setenv("LARRY_CACHE_DIR", oldLarry)
-				os.Setenv("XDG_CACHE_HOME", oldXdg)
-			}()
-
-			os.Setenv("LARRY_CACHE_DIR", tt.larry)
-			os.Setenv("XDG_CACHE_HOME", tt.xdg)
+			t.Setenv("LARRY_CACHE_DIR", tt.larry)
+			t.Setenv("XDG_CACHE_HOME", tt.xdg)
 
 			cfg := &Config{CacheDir: tt.cfg}
 			got := cfg.ResolveCacheDir(tt.override)
@@ -478,12 +444,8 @@ maintainer:
 	}
 
 	// Test 2: env overrides file.
-	os.Setenv("LARRY_MAINTAINER_NAME", "Env Person")
-	os.Setenv("LARRY_MAINTAINER_EMAIL", "env@example.com")
-	defer func() {
-		os.Unsetenv("LARRY_MAINTAINER_NAME")
-		os.Unsetenv("LARRY_MAINTAINER_EMAIL")
-	}()
+	t.Setenv("LARRY_MAINTAINER_NAME", "Env Person")
+	t.Setenv("LARRY_MAINTAINER_EMAIL", "env@example.com")
 
 	c, err = Load()
 	if err != nil {

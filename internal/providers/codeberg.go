@@ -63,7 +63,7 @@ func (p *CodebergProvider) FetchLatestVersion(rid remoteid.RemoteId, allowPrerel
 	if err != nil {
 		return nil, fmt.Errorf("codeberg: failed to fetch releases: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("codeberg: repository %s/%s not found", rid.Owner, rid.Repo)

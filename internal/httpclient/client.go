@@ -1,6 +1,7 @@
 package httpclient
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -126,7 +127,7 @@ func ParseRateHeaders(resp *http.Response) map[string]string {
 func (c *Client) doWithRateLimit(method, url string, body io.Reader) (*http.Response, error) {
 	host := extractHost(url)
 	var resp *http.Response
-	err := c.rateLimiter.Do(nil, host, func() error {
+	err := c.rateLimiter.Do(context.TODO(), host, func() error {
 		req, err := http.NewRequest(method, url, body)
 		if err != nil {
 			return err
@@ -143,7 +144,7 @@ func (c *Client) doWithRetry(host, method, url string, body io.Reader) (*http.Re
 	var lastErr error
 	for i := 0; i <= c.config.MaxRetries; i++ {
 		var reqErr error
-		reqErr = c.rateLimiter.Do(nil, host, func() error {
+		reqErr = c.rateLimiter.Do(context.TODO(), host, func() error {
 			req, err := http.NewRequest(method, url, body)
 			if err != nil {
 				return err
@@ -164,7 +165,8 @@ func (c *Client) doWithRetry(host, method, url string, body io.Reader) (*http.Re
 		if resp.StatusCode >= 500 || resp.StatusCode == 429 {
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			if resp.Body != nil {
-				resp.Body.Close()
+				// Best-effort discard of body before retry.
+				_ = resp.Body.Close()
 			}
 			if i < c.config.MaxRetries {
 				time.Sleep(c.config.ExponentialBackoff(i))

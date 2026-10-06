@@ -47,7 +47,8 @@ func (l *Logger) Msg(format string, args ...any) {
 	if l.color != nil && l.color.Enabled() {
 		msg = l.color.Blue(msg)
 	}
-	fmt.Fprintf(l.out, ">>> %s\n", msg)
+	// Log output failures are unrecoverable and not meaningful in this context.
+	_, _ = fmt.Fprintf(l.out, ">>> %s\n", msg)
 }
 
 // Debug writes a message with the ">>> " prefix to the error writer.
@@ -60,7 +61,8 @@ func (l *Logger) Debug(format string, args ...any) {
 	if l.color != nil && l.color.Enabled() {
 		msg = l.color.Blue(msg)
 	}
-	fmt.Fprintf(l.errw, ">>> %s\n", msg)
+	// Log output failures are unrecoverable and not meaningful in this context.
+	_, _ = fmt.Fprintf(l.errw, ">>> %s\n", msg)
 }
 
 // Warn writes a warning with the "*** " prefix to the error writer.
@@ -73,7 +75,8 @@ func (l *Logger) Warn(format string, args ...any) {
 	if l.color != nil && l.color.Enabled() {
 		msg = l.color.Yellow(msg)
 	}
-	fmt.Fprintf(l.errw, "*** %s\n", msg)
+	// Log output failures are unrecoverable and not meaningful in this context.
+	_, _ = fmt.Fprintf(l.errw, "*** %s\n", msg)
 }
 
 // Error writes an error with the "!!! " prefix to the error writer.
@@ -83,7 +86,8 @@ func (l *Logger) Error(format string, args ...any) {
 	if l.color != nil && l.color.Enabled() {
 		msg = l.color.Red(msg)
 	}
-	fmt.Fprintf(l.errw, "!!! %s\n", msg)
+	// Log output failures are unrecoverable and not meaningful in this context.
+	_, _ = fmt.Fprintf(l.errw, "!!! %s\n", msg)
 }
 
 // Info is a thin alias of Msg.

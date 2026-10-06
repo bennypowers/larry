@@ -353,13 +353,13 @@ func TestImport_NumericOrdering(t *testing.T) {
 func TestImport_RefusesEqualOrNewerWithoutForce(t *testing.T) {
 	srcDir := t.TempDir()
 	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
-	os.MkdirAll(srcCat, 0755)
-	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+	if err := os.MkdirAll(srcCat, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	targetOverlay := t.TempDir()
 	targetPkgDir := filepath.Join(targetOverlay, "dev-lisp", "foo")
-	os.MkdirAll(targetPkgDir, 0755)
-	os.WriteFile(filepath.Join(targetPkgDir, "foo-1.0.0.ebuild"), []byte("OLD\n"), 0644)
+	if err := os.MkdirAll(targetPkgDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(targetPkgDir, "foo-1.0.0.ebuild"), []byte("OLD\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	cfg := &ImportConfig{
 		SourceOverlay:   srcDir,
@@ -388,13 +388,13 @@ func TestImport_RefusesEqualOrNewerWithoutForce(t *testing.T) {
 func TestImport_ForceOverwrites(t *testing.T) {
 	srcDir := t.TempDir()
 	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
-	os.MkdirAll(srcCat, 0755)
-	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+	if err := os.MkdirAll(srcCat, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	targetOverlay := t.TempDir()
 	targetPkgDir := filepath.Join(targetOverlay, "dev-lisp", "foo")
-	os.MkdirAll(targetPkgDir, 0755)
-	os.WriteFile(filepath.Join(targetPkgDir, "foo-1.0.0.ebuild"), []byte("OLD\n"), 0644)
+	if err := os.MkdirAll(targetPkgDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(targetPkgDir, "foo-1.0.0.ebuild"), []byte("OLD\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	cfg := &ImportConfig{
 		SourceOverlay:   srcDir,
@@ -419,13 +419,13 @@ func TestImport_ForceOverwrites(t *testing.T) {
 func TestImport_AllowsNewerWithoutForce(t *testing.T) {
 	srcDir := t.TempDir()
 	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
-	os.MkdirAll(srcCat, 0755)
-	os.WriteFile(filepath.Join(srcCat, "foo-2.0.0.ebuild"), []byte("SRC\n"), 0644)
+	if err := os.MkdirAll(srcCat, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "foo-2.0.0.ebuild"), []byte("SRC\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	targetOverlay := t.TempDir()
 	targetPkgDir := filepath.Join(targetOverlay, "dev-lisp", "foo")
-	os.MkdirAll(targetPkgDir, 0755)
-	os.WriteFile(filepath.Join(targetPkgDir, "foo-1.0.0.ebuild"), []byte("OLD\n"), 0644)
+	if err := os.MkdirAll(targetPkgDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(targetPkgDir, "foo-1.0.0.ebuild"), []byte("OLD\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	cfg := &ImportConfig{
 		SourceOverlay:   srcDir,
@@ -499,12 +499,12 @@ func TestImport_DryRunNoWrites(t *testing.T) {
 func TestImport_CopiesFilesDir(t *testing.T) {
 	srcDir := t.TempDir()
 	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
-	os.MkdirAll(srcCat, 0755)
-	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+	if err := os.MkdirAll(srcCat, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	filesDir := filepath.Join(srcCat, "files")
-	os.MkdirAll(filesDir, 0755)
-	os.WriteFile(filepath.Join(filesDir, "foo.patch"), []byte("PATCH\n"), 0644)
+	if err := os.MkdirAll(filesDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(filesDir, "foo.patch"), []byte("PATCH\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
@@ -579,9 +579,9 @@ func TestImport_MetadataShape(t *testing.T) {
 
 	srcDir := t.TempDir()
 	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
-	os.MkdirAll(srcCat, 0755)
-	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
-	os.WriteFile(filepath.Join(srcCat, "metadata.xml"), []byte(srcMeta), 0644)
+	if err := os.MkdirAll(srcCat, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "metadata.xml"), []byte(srcMeta), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	targetOverlay := t.TempDir()
 
@@ -616,8 +616,8 @@ func TestImport_MetadataShape_NoRemoteIds(t *testing.T) {
 	// No source metadata.xml.
 	srcDir := t.TempDir()
 	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
-	os.MkdirAll(srcCat, 0755)
-	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+	if err := os.MkdirAll(srcCat, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	targetOverlay := t.TempDir()
 
@@ -666,9 +666,9 @@ func TestImport_PreservesUpstreamRemoteId(t *testing.T) {
 `
 	srcDir := t.TempDir()
 	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
-	os.MkdirAll(srcCat, 0755)
-	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
-	os.WriteFile(filepath.Join(srcCat, "metadata.xml"), []byte(srcMeta), 0644)
+	if err := os.MkdirAll(srcCat, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "metadata.xml"), []byte(srcMeta), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
@@ -712,9 +712,9 @@ func TestImport_MalformedSourceMetadataIsReported(t *testing.T) {
 	srcMeta := `<pkgmetadata><unclosed>`
 	srcDir := t.TempDir()
 	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
-	os.MkdirAll(srcCat, 0755)
-	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
-	os.WriteFile(filepath.Join(srcCat, "metadata.xml"), []byte(srcMeta), 0644)
+	if err := os.MkdirAll(srcCat, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "metadata.xml"), []byte(srcMeta), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
@@ -745,8 +745,8 @@ func TestImport_MissingSourceMetadataIsNotAnError(t *testing.T) {
 	// No metadata.xml in source at all.
 	srcDir := t.TempDir()
 	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
-	os.MkdirAll(srcCat, 0755)
-	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+	if err := os.MkdirAll(srcCat, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
@@ -781,8 +781,8 @@ func TestImport_MissingSourceMetadataIsNotAnError(t *testing.T) {
 func TestImport_MissingMaintainerConfigIsError(t *testing.T) {
 	srcDir := t.TempDir()
 	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
-	os.MkdirAll(srcCat, 0755)
-	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+	if err := os.MkdirAll(srcCat, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
@@ -815,8 +815,8 @@ func TestImport_MissingMaintainerConfigIsError(t *testing.T) {
 func TestImport_MissingMaintainerEmailIsError(t *testing.T) {
 	srcDir := t.TempDir()
 	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
-	os.MkdirAll(srcCat, 0755)
-	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+	if err := os.MkdirAll(srcCat, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
@@ -840,8 +840,8 @@ func TestImport_MissingMaintainerEmailIsError(t *testing.T) {
 func TestImport_MaintainerFromConfig(t *testing.T) {
 	srcDir := t.TempDir()
 	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
-	os.MkdirAll(srcCat, 0755)
-	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+	if err := os.MkdirAll(srcCat, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
@@ -885,8 +885,8 @@ func TestImport_MaintainerFromConfig(t *testing.T) {
 func TestImport_RunsPrepare(t *testing.T) {
 	srcDir := t.TempDir()
 	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
-	os.MkdirAll(srcCat, 0755)
-	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+	if err := os.MkdirAll(srcCat, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	targetOverlay := t.TempDir()
 
@@ -924,8 +924,8 @@ func TestImport_RunsPrepare(t *testing.T) {
 func TestImport_PrepareFailureIsReported(t *testing.T) {
 	srcDir := t.TempDir()
 	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
-	os.MkdirAll(srcCat, 0755)
-	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+	if err := os.MkdirAll(srcCat, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	targetOverlay := t.TempDir()
 
@@ -961,8 +961,8 @@ func TestImport_PrepareFailureIsReported(t *testing.T) {
 func TestImport_DryRunDoesNotPrepare(t *testing.T) {
 	srcDir := t.TempDir()
 	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
-	os.MkdirAll(srcCat, 0755)
-	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+	if err := os.MkdirAll(srcCat, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	var prepareCalled bool
 	cfg := &ImportConfig{
@@ -995,8 +995,8 @@ func TestImport_DryRunDoesNotPrepare(t *testing.T) {
 func TestImport_ProvenanceLines(t *testing.T) {
 	srcDir := t.TempDir()
 	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
-	os.MkdirAll(srcCat, 0755)
-	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+	if err := os.MkdirAll(srcCat, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	targetOverlay := t.TempDir()
 

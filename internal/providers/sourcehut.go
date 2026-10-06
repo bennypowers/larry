@@ -160,7 +160,7 @@ func (p *SourceHutProvider) fetchViaGraphQL(rid remoteid.RemoteId, allowPrerelea
 	if err != nil {
 		return nil, fmt.Errorf("sourcehut: failed to query GraphQL API: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -223,7 +223,7 @@ func (p *SourceHutProvider) fetchViaHTML(rid remoteid.RemoteId, allowPrereleases
 	if err != nil {
 		return nil, fmt.Errorf("sourcehut: failed to fetch refs page: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("sourcehut: unexpected status %d", resp.StatusCode)

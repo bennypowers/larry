@@ -85,7 +85,7 @@ func (p *GitLabProvider) FetchLatestVersion(rid remoteid.RemoteId, allowPrerelea
 	if err != nil {
 		return nil, fmt.Errorf("gitlab: failed to fetch releases: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		// Fallback to tags endpoint
@@ -138,7 +138,7 @@ func (p *GitLabProvider) fetchLatestTag(host, encodedPath string, allowPrereleas
 	if err != nil {
 		return nil, fmt.Errorf("gitlab: failed to fetch tags: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("gitlab: project not found")

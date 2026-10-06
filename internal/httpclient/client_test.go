@@ -81,7 +81,8 @@ func TestParseRateHeaders_FromServer(t *testing.T) {
 		w.Header().Set("X-RateLimit-Limit", "5000")
 		w.Header().Set("Retry-After", "60")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
+		// httptest writer; a write error cannot occur here.
+		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer srv.Close()
 
@@ -90,7 +91,7 @@ func TestParseRateHeaders_FromServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if !called {
 		t.Fatal("handler was not called")
@@ -238,7 +239,8 @@ func TestGetWithRetry_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called++
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"version":"1.0.0"}`))
+		// httptest writer; a write error cannot occur here.
+		_, _ = w.Write([]byte(`{"version":"1.0.0"}`))
 	}))
 	defer srv.Close()
 
@@ -247,7 +249,7 @@ func TestGetWithRetry_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWithRetry failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if called != 1 {
 		t.Errorf("expected 1 request, got %d", called)
@@ -266,7 +268,8 @@ func TestGetWithRetry_Retries5xx(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`ok`))
+		// httptest writer; a write error cannot occur here.
+		_, _ = w.Write([]byte(`ok`))
 	}))
 	defer srv.Close()
 
@@ -275,7 +278,7 @@ func TestGetWithRetry_Retries5xx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWithRetry failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if called != 3 {
 		t.Errorf("expected 3 requests (2 retries + 1 success), got %d", called)
@@ -290,7 +293,8 @@ func TestGetWithRetry_NoRetryOn4xx(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called++
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`bad request`))
+		// httptest writer; a write error cannot occur here.
+		_, _ = w.Write([]byte(`bad request`))
 	}))
 	defer srv.Close()
 
@@ -299,7 +303,7 @@ func TestGetWithRetry_NoRetryOn4xx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if called != 1 {
 		t.Errorf("expected 1 request (no retry on 4xx), got %d", called)
@@ -338,7 +342,8 @@ func TestGetWithRetry_Retries429(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`ok`))
+		// httptest writer; a write error cannot occur here.
+		_, _ = w.Write([]byte(`ok`))
 	}))
 	defer srv.Close()
 
@@ -347,7 +352,7 @@ func TestGetWithRetry_Retries429(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWithRetry failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if called != 2 {
 		t.Errorf("expected 2 requests, got %d", called)

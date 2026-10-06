@@ -200,8 +200,12 @@ func TestCollectEbuilds(t *testing.T) {
 		}
 	}
 	// Create non-ebuild files
-	os.WriteFile(filepath.Join(dir, "README.md"), []byte("readme"), 0644)
-	os.WriteFile(filepath.Join(dir, "pkg-1.0.0.ebuild.bak"), []byte("bak"), 0644)
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("readme"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pkg-1.0.0.ebuild.bak"), []byte("bak"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	files, err := collectEbuilds(dir)
 	if err != nil {
@@ -287,7 +291,9 @@ func TestBackupDir(t *testing.T) {
 	// Create multiple files
 	for i := 0; i < 3; i++ {
 		path := filepath.Join(dir, fmt.Sprintf("pkg-%d.ebuild", i))
-		os.WriteFile(path, []byte("EAPI=8\n"), 0644)
+		if err := os.WriteFile(path, []byte("EAPI=8\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Backup all files in directory
@@ -366,7 +372,9 @@ func TestVerifyDistfiles(t *testing.T) {
 
 	// Create a distfile
 	distPath := filepath.Join(dir, "my-pkg-1.0.0.tar.gz")
-	os.WriteFile(distPath, []byte("content"), 0644)
+	if err := os.WriteFile(distPath, []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Test with existing distfile
 	if !verifyDistfiles(dir, []string{"my-pkg-1.0.0.tar.gz"}) {
@@ -460,8 +468,7 @@ func TestFindManifestRunner_NotFound(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetEnv(t *testing.T) {
-	os.Setenv("TEST_LARRY_VAR", "test_value")
-	t.Cleanup(func() { os.Unsetenv("TEST_LARRY_VAR") })
+	t.Setenv("TEST_LARRY_VAR", "test_value")
 
 	val := getEnv("TEST_LARRY_VAR")
 	if val != "test_value" {
@@ -601,7 +608,9 @@ func TestPrepareDir_AggregatesFailures(t *testing.T) {
 	dir := t.TempDir()
 	// Create three ebuilds.
 	for _, name := range []string{"foo-1.0.ebuild", "foo-2.0.ebuild", "foo-3.0.ebuild"} {
-		os.WriteFile(filepath.Join(dir, name), []byte("EAPI=8\n"), 0644)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("EAPI=8\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	rec := newRecorder()

@@ -874,6 +874,31 @@ SRC_URI="
 	}
 }
 
+// ---- TestBuildVariableMap_MultiLineSRCURI: multi-line quoted SRC_URI resolves correctly ----
+// Regression for the original TestExtractVar/multi_line failure: SRC_URI whose
+// quoted body spans multiple lines must still resolve to the correct URI entries.
+func TestBuildVariableMap_MultiLineSRCURI(t *testing.T) {
+	// The quoted body includes embedded newlines and a tab — exactly the
+	// input that caused the original TestExtractVar/multi_line failure.
+	multiLine := "\n\tmirror://npm/pkg/pkg-1.0.0.tgz\n"
+
+	vars := VariableMap{
+		"PN":    "pkg",
+		"PV":    "1.0.0",
+		"P":     "pkg-1.0.0",
+		"SRC_URI": multiLine,
+	}
+
+	entries := ParseSrcUri(multiLine, vars)
+	if len(entries) != 1 {
+		t.Fatalf("ParseSrcUri(multiLine, vars) = %d entries, want 1: %v", len(entries), entries)
+	}
+	want := "mirror://npm/pkg/pkg-1.0.0.tgz"
+	if entries[0].URL != want {
+		t.Errorf("entries[0].URL = %q, want %q", entries[0].URL, want)
+	}
+}
+
 // ---- TestBuildVariableMap_NilParsedEbuild ----
 
 func TestBuildVariableMap_NilParsedEbuild(t *testing.T) {
@@ -1072,9 +1097,7 @@ func TestParseSrcUri_Continuation(t *testing.T) {
 
 func TestParseSrcUri_Empty(t *testing.T) {
 	entries := ParseSrcUri("", ParseSrcUriTestVars)
-	if entries == nil || len(entries) != 0 {
-		if entries != nil && len(entries) != 0 {
-			t.Errorf("got %d entries, want 0", len(entries))
-		}
+	if len(entries) != 0 {
+		t.Errorf("got %d entries, want 0", len(entries))
 	}
 }

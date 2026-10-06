@@ -208,15 +208,15 @@ func nonTTYTable(results []*upstream.UpstreamResult) string {
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("%-30s %-12s %-12s %-12s %s\n", "PACKAGE", "CURRENT", "LATEST", "STATUS", "SOURCE"))
+	fmt.Fprintf(&b, "%-30s %-12s %-12s %-12s %s\n", "PACKAGE", "CURRENT", "LATEST", "STATUS", "SOURCE")
 	b.WriteString(strings.Repeat("-", 80) + "\n")
 
 	for _, r := range results {
 		status := r.Status.String()
 		// Indent Package cell by 2 spaces per depth level (plan 18).
 		pkg := strings.Repeat("  ", r.Depth) + r.Package
-		b.WriteString(fmt.Sprintf("%-30s %-12s %-12s %-12s %s\n",
-			pkg, r.Current, r.Latest, status, r.Source.Label))
+		fmt.Fprintf(&b, "%-30s %-12s %-12s %-12s %s\n",
+			pkg, r.Current, r.Latest, status, r.Source.Label)
 	}
 
 	_ = os.Stdout

@@ -224,7 +224,7 @@ func prepareGeneric(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	if err := Backup(ei.Path); err != nil {
 		return fmt.Errorf("backup: %w", err)
 	}
-	defer os.Remove(ei.Path + ".bak")
+	defer func() { _ = os.Remove(ei.Path + ".bak") }() // best-effort cleanup
 
 	// Run manifest
 	req := manifestRequest{
@@ -236,7 +236,7 @@ func prepareGeneric(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	}
 	if err := runManifest(req); err != nil {
 		// Rollback on failure
-		Restore(ei.Path)
+		_ = Restore(ei.Path) // best-effort recovery after failure
 		return fmt.Errorf("generic: manifest: %w", err)
 	}
 
@@ -276,7 +276,7 @@ func parsePVRaw(pv string) (string, int) {
 	if matches := revRegex.FindStringSubmatch(pv); matches != nil {
 		pv = strings.TrimSuffix(pv, matches[0])
 		var rev int
-		fmt.Sscanf(matches[1], "%d", &rev)
+		_, _ = fmt.Sscanf(matches[1], "%d", &rev) // matches[1] is \d+ from regex; error ignored // matches[1] is already \d+ from regex, error ignored
 		return pv, rev
 	}
 	return pv, 0
@@ -382,7 +382,7 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 	if err := Backup(ei.Path); err != nil {
 		return fmt.Errorf("backup: %w", err)
 	}
-	defer os.Remove(ei.Path + ".bak")
+	defer func() { _ = os.Remove(ei.Path + ".bak") }() // best-effort cleanup
 
 	// Build sandboxed environment
 	env := sandboxEnv(ei, cfg)
@@ -399,7 +399,7 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 
 	if err := cmd.Run(); err != nil {
 		// Rollback ebuild on script failure.
-		Restore(ei.Path)
+		_ = Restore(ei.Path) // best-effort recovery after failure
 		return fmt.Errorf("custom prepare script %q failed: %w", scriptPath, err)
 	}
 
@@ -413,7 +413,7 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 	}
 	if err := runManifest(req); err != nil {
 		// Rollback ebuild on manifest failure.
-		Restore(ei.Path)
+		_ = Restore(ei.Path) // best-effort recovery after failure
 		return fmt.Errorf("manifest: %w", err)
 	}
 
@@ -471,7 +471,7 @@ func sandboxEnv(ei *ebuild.EbuildInfo, cfg *PrepareConfig) []string {
 
 	// Temp dir — restrict to a larry-owned temp dir
 	tmpDir, _ := os.MkdirTemp("", "larry-prepare-")
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }() // best-effort cleanup
 	env = append(env,
 		"TMPDIR="+tmpDir,
 		"TMP="+tmpDir,

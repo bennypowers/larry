@@ -214,7 +214,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 		f.requests = append(f.requests, r.URL.Path)
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write(body)
+		_, _ = w.Write(body) // httptest writer; a write error cannot occur here
 	})
 
 	path, err := fetchCargoLock(f, forgeGitHub, "tsdh", "x", "v1.0")
@@ -239,7 +239,7 @@ func TestFetchCargoLock_GitHubRawURL(t *testing.T) {
 	f.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.requests = append(f.requests, r.URL.Path)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok")) // httptest writer; a write error cannot occur here
 	})
 
 	_, err := fetchCargoLock(f, forgeGitHub, "tsdh", "x", "v1.0")
@@ -263,7 +263,7 @@ func TestFetchCargoLock_SourceHutBlobURL(t *testing.T) {
 	f.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.requests = append(f.requests, r.URL.Path)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok")) // httptest writer; a write error cannot occur here
 	})
 
 	_, err := fetchCargoLock(f, forgeSourceHut, "~tsdh", "nirius", "nirius-0.7.1")
@@ -312,7 +312,7 @@ func TestFetchCargoLock_BindingsPythonSubdir(t *testing.T) {
 		callCount++
 		if strings.Contains(r.URL.Path, "bindings/python") {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("python subdir lock"))
+			_, _ = w.Write([]byte("python subdir lock")) // httptest writer; a write error cannot occur here
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -388,7 +388,7 @@ checksum = "abc123"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(lockContent))
+		_, _ = w.Write([]byte(lockContent)) // httptest writer; a write error cannot occur here
 	}))
 	defer server.Close()
 
@@ -482,8 +482,12 @@ edition = "2021"
 [dependencies]
 aho-corasick = "1.1.2"
 `
-	os.WriteFile(lockPath, []byte(lockContent), 0644)
-	os.WriteFile(tomlPath, []byte(tomlContent), 0644)
+	if err := os.WriteFile(lockPath, []byte(lockContent), 0644); err != nil {
+		t.Fatalf("write Cargo.lock: %v", err)
+	}
+	if err := os.WriteFile(tomlPath, []byte(tomlContent), 0644); err != nil {
+		t.Fatalf("write Cargo.toml: %v", err)
+	}
 
 	// Create a stub ebuild with the required structure
 	tmpEbuild := filepath.Join(tmpDir, "test-pkg-1.0.0.ebuild")
@@ -504,7 +508,9 @@ LICENSE+=""
 SLOT="0"
 KEYWORDS="~amd64"
 `
-	os.WriteFile(tmpEbuild, []byte(ebuildContent), 0644)
+	if err := os.WriteFile(tmpEbuild, []byte(ebuildContent), 0644); err != nil {
+		t.Fatalf("write stub ebuild: %v", err)
+	}
 
 	runner := &mockCmdRunner{
 		runFn: func(cmd *exec.Cmd) error {
@@ -547,7 +553,9 @@ LICENSE+=""
 SLOT="0"
 KEYWORDS="~amd64"
 `
-	os.WriteFile(ebuildPath, []byte(ebuildContent), 0644)
+	if err := os.WriteFile(ebuildPath, []byte(ebuildContent), 0644); err != nil {
+		t.Fatalf("write ebuild: %v", err)
+	}
 
 	crates := parseCargoLock(lockContent)
 	_, err := updateCargoEbuildNative(ebuildPath, crates)
@@ -759,7 +767,9 @@ LICENSE+=""
 SLOT="0"
 KEYWORDS="~amd64"
 `
-	os.WriteFile(ebuildPath, []byte(content), 0644)
+	if err := os.WriteFile(ebuildPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write ebuild: %v", err)
+	}
 
 	crates := []CargoCrate{
 		{Name: "atty", Version: "0.2.14"},
@@ -808,7 +818,9 @@ LICENSE+=""
 SLOT="0"
 KEYWORDS="~amd64"
 `
-	os.WriteFile(ebuildPath, []byte(content), 0644)
+	if err := os.WriteFile(ebuildPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write ebuild: %v", err)
+	}
 
 	// Create a bad crates list to simulate a failure
 	_, err := updateCargoEbuildNative(ebuildPath, nil)
@@ -833,10 +845,14 @@ func TestCargo_Pipeline_ManifestGeneration(t *testing.T) {
 	// Verify distfiles before manifest
 	tmpDir := t.TempDir()
 	distDir := filepath.Join(tmpDir, "dist")
-	os.MkdirAll(distDir, 0755)
+	if err := os.MkdirAll(distDir, 0755); err != nil {
+		t.Fatalf("create dist dir: %v", err)
+	}
 
 	// Create a distfile
-	os.WriteFile(filepath.Join(distDir, "rust-cli-0.1.0.tar.gz"), []byte("tarball"), 0644)
+	if err := os.WriteFile(filepath.Join(distDir, "rust-cli-0.1.0.tar.gz"), []byte("tarball"), 0644); err != nil {
+		t.Fatalf("write distfile: %v", err)
+	}
 
 	// Verify distfiles should return true
 	files := extractDistfilesFromSRCURI("rust-cli-0.1.0.tar.gz")
@@ -869,7 +885,9 @@ LICENSE+=""
 SLOT="0"
 KEYWORDS="~amd64"
 `
-	os.WriteFile(ebuildPath, []byte(content), 0644)
+	if err := os.WriteFile(ebuildPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write ebuild: %v", err)
+	}
 
 	ei := &ebuild.EbuildInfo{
 		Category: "dev-rust",
@@ -927,7 +945,9 @@ LICENSE+=""
 SLOT="0"
 KEYWORDS="~amd64"
 `
-	os.WriteFile(ebuildPath, []byte(originalContent), 0644)
+	if err := os.WriteFile(ebuildPath, []byte(originalContent), 0644); err != nil {
+		t.Fatalf("write ebuild: %v", err)
+	}
 
 	// Simulate failure: create a backup, then restore
 	err := Backup(ebuildPath)
@@ -965,8 +985,12 @@ func TestCargo_Pipeline_RevisionBump_SkipUpload(t *testing.T) {
 
 	// Create a tarball in DISTDIR (simulating existing asset)
 	distPath := filepath.Join(dir, "dist")
-	os.MkdirAll(distPath, 0755)
-	os.WriteFile(filepath.Join(distPath, "test-rust-cli-1.0.0-crates.tar.xz"), []byte("existing"), 0644)
+	if err := os.MkdirAll(distPath, 0755); err != nil {
+		t.Fatalf("create dist dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(distPath, "test-rust-cli-1.0.0-crates.tar.xz"), []byte("existing"), 0644); err != nil {
+		t.Fatalf("write distfile: %v", err)
+	}
 
 	// Revision bump: -r1
 	_ = &ebuild.EbuildInfo{
@@ -1073,7 +1097,9 @@ LICENSE+=""
 SLOT="0"
 KEYWORDS="~amd64"
 `
-	os.WriteFile(ebuildPath, []byte(content), 0644)
+	if err := os.WriteFile(ebuildPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write ebuild: %v", err)
+	}
 
 	ei := &ebuild.EbuildInfo{
 		Category: "dev-rust",
@@ -1119,7 +1145,7 @@ checksum = "abc123"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(lockContent))
+		_, _ = w.Write([]byte(lockContent)) // httptest writer; a write error cannot occur here
 	}))
 	defer server.Close()
 
@@ -1476,7 +1502,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 	if err := Backup(ebuildPath); err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
-	defer os.Remove(ebuildPath + ".bak")
+	// Best-effort cleanup; .bak is removed on success by Restore.
+	defer func() { _ = os.Remove(ebuildPath + ".bak") }()
 
 	count, err := updateCargoEbuildNative(ebuildPath, crates)
 	if err != nil {
@@ -1545,7 +1572,8 @@ func TestCargo_NoBakFileOnSuccess(t *testing.T) {
 	if err := Backup(ebuildPath); err != nil {
 		t.Fatalf("Backup: %v", err)
 	}
-	defer os.Remove(ebuildPath + ".bak")
+	// Best-effort cleanup; .bak is removed on success by Restore.
+	defer func() { _ = os.Remove(ebuildPath + ".bak") }()
 
 	lockContent := `[[package]]
 name = "aho-corasick"
@@ -1564,8 +1592,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 		t.Fatalf("Restore: %v", err)
 	}
 
-	// Simulate caller's defer os.Remove(.bak)
-	os.Remove(ebuildPath + ".bak")
+	// Best-effort cleanup; .bak should already be gone after Restore.
+	_ = os.Remove(ebuildPath + ".bak")
 
 	// Verify .bak does NOT exist
 	if _, err := os.Stat(ebuildPath + ".bak"); !os.IsNotExist(err) {

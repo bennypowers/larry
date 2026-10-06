@@ -325,7 +325,8 @@ func TestTestCmd_ImageNameFlag(t *testing.T) {
 
 	_, _, err := execCmd(t, "test", "--emerge", "--pretend", "--image", "foo", "--overlay", tmpOverlay, "dev-util/javy")
 
-	w.Close()
+	// Best-effort close of pipe writer.
+	_ = w.Close()
 	os.Stdout = origStdout
 
 	if err != nil {
@@ -360,7 +361,8 @@ func TestTestCmd_EmergePretendBuildsNothing(t *testing.T) {
 
 	_, _, err := execCmd(t, "test", "--emerge", "--pretend", "--overlay", tmpOverlay, "dev-util/javy")
 
-	w.Close()
+	// Best-effort close of pipe writer.
+	_ = w.Close()
 	os.Stdout = origStdout
 
 	if err != nil {

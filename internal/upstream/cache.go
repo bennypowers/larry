@@ -156,8 +156,8 @@ func (c *VersionCache) Set(key, version string) {
 
 	// Atomic rename
 	if err := os.Rename(tmpPath, path); err != nil {
-		// Clean up temp file on failure
-		os.Remove(tmpPath)
+		// Best-effort cleanup of temp file on atomic rename failure.
+		_ = os.Remove(tmpPath)
 		return
 	}
 }

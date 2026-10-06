@@ -330,12 +330,8 @@ func TestHasRemote(t *testing.T) {
 }
 
 func TestTags(t *testing.T) {
-	// Create a temporary repo with tags
-	tmpDir, err := os.MkdirTemp("", "git-test-")
-	if err != nil {
-		t.Fatalf("MkdirTemp(): %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	// Test operates on the current repo (see below).
+	_ = t.TempDir() // keep the test clean
 
 	// Initialize a bare repo and push tags
 	repo, err := Open(".")
@@ -409,11 +405,7 @@ func TestCommitByTag(t *testing.T) {
 
 func TestTags_SortedByDate(t *testing.T) {
 	// Create a temporary repo with multiple tags at different times
-	tmpDir, err := os.MkdirTemp("", "git-sort-test-")
-	if err != nil {
-		t.Fatalf("MkdirTemp(): %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	// Initialize a repo
 	r, err := git.PlainInit(tmpDir, false)
@@ -507,11 +499,7 @@ func TestTags_SortedByDate(t *testing.T) {
 
 func TestListTagsSorted_NilHashForUnknownTags(t *testing.T) {
 	// Create a repo where a tag points to an unresolvable object
-	tmpDir, err := os.MkdirTemp("", "git-unknown-tag-")
-	if err != nil {
-		t.Fatalf("MkdirTemp(): %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	r, err := git.PlainInit(tmpDir, false)
 	if err != nil {

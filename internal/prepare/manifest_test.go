@@ -37,17 +37,21 @@ func TestRunManifest_TargetsCategoryPackage(t *testing.T) {
 	overlay := t.TempDir()
 	dd := filepath.Join(t.TempDir(), "dd")
 	eb := filepath.Join(overlay, "dev-util", "foo", "foo-1.0.ebuild")
-	os.MkdirAll(filepath.Dir(eb), 0755)
-	os.WriteFile(eb, []byte("EAPI=8\n"), 0644)
+	if err := os.MkdirAll(filepath.Dir(eb), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(eb, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	rec := newRecorder()
 	orig := ManifestRunner
 	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
 		rec.record(bin, args, dir, env)
 		// Write back both DIST lines (simulating real pkgdev)
-		os.WriteFile(filepath.Join(overlay, "dev-util", "foo", "Manifest"), []byte(
+		_ = os.WriteFile(filepath.Join(overlay, "dev-util", "foo", "Manifest"), []byte(
 			"DIST foo-1.0.tar.gz 10 BLAKE2B aa SHA512 bb\n",
-		), 0644)
+		), 0644) //nolint:errcheck // callback; test verifies via runManifest return
 		return nil
 	}
 	t.Cleanup(func() { ManifestRunner = orig })
@@ -87,26 +91,34 @@ func TestRunManifest_SiblingVersionsSurvive(t *testing.T) {
 	dd := filepath.Join(t.TempDir(), "dd")
 	eb1 := filepath.Join(overlay, "dev-util", "foo", "foo-1.0.ebuild")
 	eb2 := filepath.Join(overlay, "dev-util", "foo", "foo-2.0.ebuild")
-	os.MkdirAll(filepath.Dir(eb1), 0755)
-	os.WriteFile(eb1, []byte("EAPI=8\n"), 0644)
-	os.WriteFile(eb2, []byte("EAPI=8\n"), 0644)
+	if err := os.MkdirAll(filepath.Dir(eb1), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(eb1, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(eb2, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Pre-existing manifest with both versions.
 	manifestPath := filepath.Join(overlay, "dev-util", "foo", "Manifest")
-	os.WriteFile(manifestPath, []byte(
+	if err := os.WriteFile(manifestPath, []byte(
 		"DIST foo-1.0.tar.gz 10 BLAKE2B aa SHA512 bb\n"+
 			"DIST foo-2.0.tar.gz 20 BLAKE2B cc SHA512 dd\n",
-	), 0644)
+	), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	rec := newRecorder()
 	orig := ManifestRunner
 	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
 		rec.record(bin, args, dir, env)
 		// Real pkgdev writes back ALL versions for a cat/pkg target.
-		os.WriteFile(manifestPath, []byte(
+		_ = os.WriteFile(manifestPath, []byte(
 			"DIST foo-1.0.tar.gz 10 BLAKE2B aa SHA512 bb\n"+
 				"DIST foo-2.0.tar.gz 20 BLAKE2B cc SHA512 dd\n",
-		), 0644)
+		), 0644) //nolint:errcheck // callback; test verifies via runManifest return
 		return nil
 	}
 	t.Cleanup(func() { ManifestRunner = orig })
@@ -138,14 +150,18 @@ func TestRunManifest_CreatesDistdir(t *testing.T) {
 	overlay := t.TempDir()
 	dd := filepath.Join(t.TempDir(), "nested", "dd")
 	eb := filepath.Join(overlay, "dev-util", "foo", "foo-1.0.ebuild")
-	os.MkdirAll(filepath.Dir(eb), 0755)
-	os.WriteFile(eb, []byte("EAPI=8\n"), 0644)
+	if err := os.MkdirAll(filepath.Dir(eb), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(eb, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	orig := ManifestRunner
 	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
-		os.WriteFile(filepath.Join(overlay, "dev-util", "foo", "Manifest"), []byte(
+		_ = os.WriteFile(filepath.Join(overlay, "dev-util", "foo", "Manifest"), []byte(
 			"DIST foo-1.0.tar.gz 10 BLAKE2B aa SHA512 bb\n",
-		), 0644)
+		), 0644) //nolint:errcheck // callback; test verifies via runManifest return
 		return nil
 	}
 	t.Cleanup(func() { ManifestRunner = orig })
@@ -172,8 +188,12 @@ func TestRunManifest_EmptyDistdirIsError(t *testing.T) {
 	// D5 — empty distdir is rejected, runner not called.
 	overlay := t.TempDir()
 	eb := filepath.Join(overlay, "dev-util", "foo", "foo-1.0.ebuild")
-	os.MkdirAll(filepath.Dir(eb), 0755)
-	os.WriteFile(eb, []byte("EAPI=8\n"), 0644)
+	if err := os.MkdirAll(filepath.Dir(eb), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(eb, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	called := false
 	orig := ManifestRunner
@@ -206,8 +226,12 @@ func TestRunManifest_NoGentooMirrorsInEnv(t *testing.T) {
 	overlay := t.TempDir()
 	dd := filepath.Join(t.TempDir(), "dd")
 	eb := filepath.Join(overlay, "dev-util", "foo", "foo-1.0.ebuild")
-	os.MkdirAll(filepath.Dir(eb), 0755)
-	os.WriteFile(eb, []byte("EAPI=8\n"), 0644)
+	if err := os.MkdirAll(filepath.Dir(eb), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(eb, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Capture the env passed to ManifestRunner.
 	type envCapture struct{ env []string }
@@ -216,9 +240,9 @@ func TestRunManifest_NoGentooMirrorsInEnv(t *testing.T) {
 	orig := ManifestRunner
 	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
 		captured.env = env
-		os.WriteFile(filepath.Join(overlay, "dev-util", "foo", "Manifest"), []byte(
+		_ = os.WriteFile(filepath.Join(overlay, "dev-util", "foo", "Manifest"), []byte(
 			"DIST foo-1.0.tar.gz 10 BLAKE2B aa SHA512 bb\n",
-		), 0644)
+		), 0644) //nolint:errcheck // callback; test verifies via runManifest return
 		return nil
 	}
 	t.Cleanup(func() { ManifestRunner = orig })
@@ -255,9 +279,15 @@ func TestRunManifest_PrefetchRunsBeforeManifestRemoval(t *testing.T) {
 	dd := filepath.Join(t.TempDir(), "dd")
 	eb := filepath.Join(overlay, "dev-util", "foo", "foo-1.0.ebuild")
 	pkgDir := filepath.Join(overlay, "dev-util", "foo")
-	os.MkdirAll(pkgDir, 0755)
-	os.WriteFile(eb, []byte("EAPI=8\n"), 0644)
-	os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte("AUX foo.patch 10 BLAKE2B aa SHA512 bb\n"), 0644)
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(eb, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte("AUX foo.patch 10 BLAKE2B aa SHA512 bb\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	prefetchSeenManifest := false
 	prefetchPkgDir := ""
@@ -265,7 +295,9 @@ func TestRunManifest_PrefetchRunsBeforeManifestRemoval(t *testing.T) {
 
 	orig := ManifestRunner
 	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
-		os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte("DIST foo-1.0.tar.gz 10 BLAKE2B aa SHA512 bb\n"), 0644)
+		if err := os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte("DIST foo-1.0.tar.gz 10 BLAKE2B aa SHA512 bb\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
 		return nil
 	}
 	t.Cleanup(func() { ManifestRunner = orig })
@@ -303,9 +335,15 @@ func TestRunManifest_PrefetchErrorAborts(t *testing.T) {
 	dd := filepath.Join(t.TempDir(), "dd")
 	eb := filepath.Join(overlay, "dev-util", "foo", "foo-1.0.ebuild")
 	pkgDir := filepath.Join(overlay, "dev-util", "foo")
-	os.MkdirAll(pkgDir, 0755)
-	os.WriteFile(eb, []byte("EAPI=8\n"), 0644)
-	os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte("AUX foo.patch 10 BLAKE2B aa SHA512 bb\n"), 0644)
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(eb, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte("AUX foo.patch 10 BLAKE2B aa SHA512 bb\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	called := false
 	orig := ManifestRunner
@@ -345,16 +383,22 @@ func TestRunManifest_NilPrefetchIsFine(t *testing.T) {
 	overlay := t.TempDir()
 	dd := filepath.Join(t.TempDir(), "dd")
 	eb := filepath.Join(overlay, "dev-util", "foo", "foo-1.0.ebuild")
-	os.MkdirAll(filepath.Dir(eb), 0755)
-	os.WriteFile(eb, []byte("EAPI=8\n"), 0644)
+	if err := os.MkdirAll(filepath.Dir(eb), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(eb, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	called := false
 	orig := ManifestRunner
 	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
 		called = true
-		os.WriteFile(filepath.Join(overlay, "dev-util", "foo", "Manifest"), []byte(
+		if err := os.WriteFile(filepath.Join(overlay, "dev-util", "foo", "Manifest"), []byte(
 			"DIST foo-1.0.tar.gz 10 BLAKE2B aa SHA512 bb\n",
-		), 0644)
+		), 0644); err != nil {
+			t.Fatal(err)
+		}
 		return nil
 	}
 	t.Cleanup(func() { ManifestRunner = orig })
@@ -377,9 +421,11 @@ func TestRunManifest_NilPrefetchIsFine(t *testing.T) {
 func TestVerifyManifest_NoSrcUriIsValid(t *testing.T) {
 	// D7 — meta/live ebuilds with only AUX are valid when no distfiles expected.
 	pkgDir := t.TempDir()
-	os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte(
+	if err := os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte(
 		"AUX foo.patch 10 BLAKE2B aa SHA512 bb\n",
-	), 0644)
+	), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	err := verifyManifestValid(pkgDir, nil)
 	if err != nil {
@@ -397,9 +443,11 @@ func TestVerifyManifest_MissingManifestNoExpectationsIsValid(t *testing.T) {
 
 func TestVerifyManifest_ZeroDistWithExpectationsIsInvalid(t *testing.T) {
 	pkgDir := t.TempDir()
-	os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte(
+	if err := os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte(
 		"AUX foo.patch 10 BLAKE2B aa SHA512 bb\n",
-	), 0644)
+	), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	err := verifyManifestValid(pkgDir, []string{"foo-1.0.tar.gz"})
 	if err == nil {
@@ -413,9 +461,11 @@ func TestVerifyManifest_ZeroDistWithExpectationsIsInvalid(t *testing.T) {
 func TestVerifyManifest_EmptyDistEntryIsInvalid(t *testing.T) {
 	// Zero size (0) fails [1-9]\d*; blank hash fails \S+.
 	pkgDir := t.TempDir()
-	os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte(
+	if err := os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte(
 		"DIST foo.tar.gz 0 BLAKE2B  SHA512 \n",
-	), 0644)
+	), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	err := verifyManifestValid(pkgDir, nil)
 	if err != nil {
@@ -432,9 +482,11 @@ func TestVerifyManifest_EmptyDistEntryIsInvalid(t *testing.T) {
 
 func TestVerifyManifest_WellFormedDistIsValid(t *testing.T) {
 	pkgDir := t.TempDir()
-	os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte(
+	if err := os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte(
 		"DIST foo-1.0.tar.gz 1234 BLAKE2B abc SHA512 def\n",
-	), 0644)
+	), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	err := verifyManifestValid(pkgDir, nil)
 	if err != nil {

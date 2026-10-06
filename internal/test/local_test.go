@@ -78,7 +78,7 @@ func (w *captureWriter) Write(p []byte) (n int, err error) {
 func TestResolveEbuild_ExistingFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "foo-1.0.0.ebuild")
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	path, err := resolveEbuild(ebuildPath)
 	if err != nil {
@@ -101,7 +101,7 @@ func TestResolveEbuild_Relative(t *testing.T) {
 	}
 	defer func() { _ = os.Chdir(origWd) }()
 
-	os.WriteFile("foo-1.0.0.ebuild", []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile("foo-1.0.0.ebuild", []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	path, err := resolveEbuild("foo-1.0.0.ebuild")
 	if err != nil {
@@ -120,9 +120,9 @@ func TestResolveEbuild_CatPkg(t *testing.T) {
 	// When given a category/package string, find the latest ebuild
 	tmpDir := t.TempDir()
 	catDir := filepath.Join(tmpDir, "app-misc", "foo")
-	os.MkdirAll(catDir, 0755)
-	os.WriteFile(filepath.Join(catDir, "foo-1.0.0.ebuild"), []byte("EAPI=8\n"), 0644)
-	os.WriteFile(filepath.Join(catDir, "foo-2.0.0.ebuild"), []byte("EAPI=8\n"), 0644)
+	if err := os.MkdirAll(catDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(catDir, "foo-1.0.0.ebuild"), []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(filepath.Join(catDir, "foo-2.0.0.ebuild"), []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	path, err := resolveEbuildFromCatPkg("app-misc/foo", tmpDir)
 	if err != nil {
@@ -289,7 +289,7 @@ func TestTestLocal_SingleInvocation(t *testing.T) {
 	// D7: exactly one invocation with all phases in one call.
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "foo-1.0.0.ebuild")
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	runner := &localStubRunner{}
 	cfg := &TestLocalConfig{
@@ -325,7 +325,7 @@ func TestTestLocal_SetsSandboxEnv(t *testing.T) {
 	// D5: env must contain the full sandbox FEATURES.
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "foo-1.0.0.ebuild")
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	distdir := filepath.Join(tmpDir, "dist")
 	ptmpdir := filepath.Join(tmpDir, "portage-tmp")
@@ -409,7 +409,7 @@ func TestTestLocal_CreatesDirs(t *testing.T) {
 	// D5: distdir and portage tmpdir are created via os.MkdirAll.
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "foo-1.0.0.ebuild")
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	distdir := filepath.Join(tmpDir, "nonexistent-dist")
 	ptmpdir := filepath.Join(tmpDir, "nonexistent-portage")
@@ -444,7 +444,7 @@ func TestTestLocal_PropagatesExitCode(t *testing.T) {
 	// D8: runner error wrapped in ExitError.
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "foo-1.0.0.ebuild")
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	// Use the real ExitError type so errors.As can find it.
 	runner := &localStubRunner{
@@ -477,7 +477,7 @@ func TestTestLocal_RelativePath(t *testing.T) {
 	}
 	defer func() { _ = os.Chdir(origWd) }()
 
-	os.WriteFile("foo-1.0.0.ebuild", []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile("foo-1.0.0.ebuild", []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 	absPath, err := filepath.Abs("foo-1.0.0.ebuild")
 	if err != nil {
 		t.Fatalf("Abs: %v", err)
@@ -504,7 +504,7 @@ func TestTestLocal_Banner(t *testing.T) {
 	// D8: banner output is correct.
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "javy-9.1.0.ebuild")
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	var outBuf, errBuf []byte
 	log := newTestLogger(t, &outBuf, &errBuf)
@@ -520,8 +520,8 @@ func TestTestLocal_Banner(t *testing.T) {
 
 	// We need to create a proper overlay structure for the banner to work.
 	catDir := filepath.Join(tmpDir, "dev-util", "javy")
-	os.MkdirAll(catDir, 0755)
-	os.WriteFile(filepath.Join(catDir, "javy-9.1.0.ebuild"), []byte("EAPI=8\n"), 0644)
+	if err := os.MkdirAll(catDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(catDir, "javy-9.1.0.ebuild"), []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	// Use the overlay path.
 	cfg.Cfg.Overlay = tmpDir
@@ -550,7 +550,7 @@ func TestTestLocal_SuccessSummary(t *testing.T) {
 	// D8: success message printed on runner success.
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "javy-9.1.0.ebuild")
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	var outBuf, errBuf []byte
 	log := newTestLogger(t, &outBuf, &errBuf)
@@ -565,9 +565,9 @@ func TestTestLocal_SuccessSummary(t *testing.T) {
 	}
 
 	catDir := filepath.Join(tmpDir, "dev-util", "javy")
-	os.MkdirAll(catDir, 0755)
+	if err := os.MkdirAll(catDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
 	ebuildPath = filepath.Join(catDir, "javy-9.1.0.ebuild")
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 	cfg.Cfg.Overlay = tmpDir
 
 	err := TestLocalWithConfig(ebuildPath, nil, runner, false, false, cfg)
@@ -585,7 +585,7 @@ func TestTestLocal_FailureSummary(t *testing.T) {
 	// D8: failure messages on stderr.
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "javy-9.1.0.ebuild")
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	var outBuf, errBuf []byte
 	log := newTestLogger(t, &outBuf, &errBuf)
@@ -603,9 +603,9 @@ func TestTestLocal_FailureSummary(t *testing.T) {
 	}
 
 	catDir := filepath.Join(tmpDir, "dev-util", "javy")
-	os.MkdirAll(catDir, 0755)
+	if err := os.MkdirAll(catDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
 	ebuildPath = filepath.Join(catDir, "javy-9.1.0.ebuild")
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 	cfg.Cfg.Overlay = tmpDir
 
 	err := TestLocalWithConfig(ebuildPath, nil, runner, false, false, cfg)
@@ -626,7 +626,7 @@ func TestTestLocal_PretendPrintsCommand(t *testing.T) {
 	// D7: pretend mode prints but does not run.
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "javy-9.1.0.ebuild")
-	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
 
 	var outBuf, errBuf []byte
 	log := newTestLogger(t, &outBuf, &errBuf)
@@ -661,56 +661,3 @@ func TestTestLocal_PretendPrintsCommand(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Deprecated: TestSetNetworkFeatures — kept for backward compat only.
-// New tests use TestTestLocal_SetsSandboxEnv instead.
-// ---------------------------------------------------------------------------
-
-func TestSetNetworkFeatures_Disabled(t *testing.T) {
-	env := setNetworkFeatures(nil)
-	found := false
-	for _, e := range env {
-		if strings.HasPrefix(e, "FEATURES=") {
-			found = true
-			if !strings.Contains(e, "-network-sandbox") {
-				t.Errorf("FEATURES missing -network-sandbox: %s", e)
-			}
-		}
-	}
-	if !found {
-		t.Error("expected FEATURES env var")
-	}
-}
-
-func TestSetNetworkFeatures_Existing(t *testing.T) {
-	env := []string{"FEATURES="}
-	env = setNetworkFeatures(env)
-	found := false
-	for _, e := range env {
-		if strings.HasPrefix(e, "FEATURES=") {
-			found = true
-			if !strings.Contains(e, "-network-sandbox") {
-				t.Errorf("FEATURES missing -network-sandbox: %s", e)
-			}
-		}
-	}
-	if !found {
-		t.Error("expected FEATURES env var")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// setNetworkFeatures — legacy compat helper for the compat tests above.
-// ---------------------------------------------------------------------------
-
-// setNetworkFeatures ensures FEATURES includes -network-sandbox.
-func setNetworkFeatures(env []string) []string {
-	var filtered []string
-	for _, e := range env {
-		if !strings.HasPrefix(e, "FEATURES=") {
-			filtered = append(filtered, e)
-		}
-	}
-	filtered = append(filtered, "FEATURES=-network-sandbox")
-	return filtered
-}

@@ -28,7 +28,7 @@ func TestNpm_DownloadDistfile(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/gzip")
 		w.WriteHeader(http.StatusOK)
-		w.Write(tarballContent)
+		_, _ = w.Write(tarballContent) // httptest writer; a write error cannot occur here
 	}))
 	defer server.Close()
 
@@ -113,7 +113,9 @@ func TestNpm_CopyToDistdir(t *testing.T) {
 	distDir := t.TempDir()
 
 	tarballPath := filepath.Join(srcDir, "pkg-deps.tar.xz")
-	os.WriteFile(tarballPath, []byte("tarball"), 0644)
+	if err := os.WriteFile(tarballPath, []byte("tarball"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	err := npmCopyToDistdir(tarballPath, distDir)
 	if err != nil {
@@ -143,7 +145,7 @@ func TestNpm_CopyToDistdir_EmptyDistdir(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// extractVar tests
+// npmPrepare unit tests
 func TestNpm_DryRun_SkipsAll(t *testing.T) {
 	_ = t.TempDir()
 	info := &ebuild.EbuildInfo{
@@ -168,13 +170,15 @@ func TestNpm_DryRun_SkipsAll(t *testing.T) {
 func TestNpm_Pipeline_DownloadAndCopy(t *testing.T) {
 	dir := t.TempDir()
 	distDir := filepath.Join(dir, "dist")
-	os.MkdirAll(distDir, 0755)
+	if err := os.MkdirAll(distDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	tarballContent := []byte("fake-npm-tarball-content")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write(tarballContent)
+		_, _ = w.Write(tarballContent) // httptest writer; a write error cannot occur here
 	}))
 	defer server.Close()
 
@@ -222,13 +226,15 @@ P="my-pkg-1.0.0"
 func TestNpm_Pipeline_DownloadToDistdir(t *testing.T) {
 	dir := t.TempDir()
 	distDir := filepath.Join(dir, "dist")
-	os.MkdirAll(distDir, 0755)
+	if err := os.MkdirAll(distDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	tarballContent := []byte("fake-npm-tarball-content")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write(tarballContent)
+		_, _ = w.Write(tarballContent) // httptest writer; a write error cannot occur here
 	}))
 	defer server.Close()
 
@@ -277,7 +283,9 @@ P="my-pkg-1.0.0"
 func TestNpm_DownloadsAllEntries(t *testing.T) {
 	dir := t.TempDir()
 	distDir := filepath.Join(dir, "dist")
-	os.MkdirAll(distDir, 0755)
+	if err := os.MkdirAll(distDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	tarballContent := []byte("fake-npm-tarball-content")
 
@@ -285,7 +293,7 @@ func TestNpm_DownloadsAllEntries(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
 		w.WriteHeader(http.StatusOK)
-		w.Write(tarballContent)
+		_, _ = w.Write(tarballContent) // httptest writer; a write error cannot occur here
 	}))
 	defer server.Close()
 
@@ -346,13 +354,15 @@ webui? ( mirror://npm/webui-pkg/webui-1.0.0.tgz )"`,
 func TestNpm_UsesRenameTargetAsFilename(t *testing.T) {
 	dir := t.TempDir()
 	distDir := filepath.Join(dir, "dist")
-	os.MkdirAll(distDir, 0755)
+	if err := os.MkdirAll(distDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	tarballContent := []byte("fake-npm-tarball-content")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write(tarballContent)
+		_, _ = w.Write(tarballContent) // httptest writer; a write error cannot occur here
 	}))
 	defer server.Close()
 
@@ -408,7 +418,9 @@ SRC_URI="mirror://npm/@vtsls/${MY_NPM_NAME}/-/${MY_NPM_NAME}-0.3.0.tgz -> vtsls-
 func TestNpm_SkipsExistingDistfile(t *testing.T) {
 	dir := t.TempDir()
 	distDir := filepath.Join(dir, "dist")
-	os.MkdirAll(distDir, 0755)
+	if err := os.MkdirAll(distDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	tarballContent := []byte("fake-npm-tarball-content")
 
@@ -422,7 +434,7 @@ func TestNpm_SkipsExistingDistfile(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
 		w.WriteHeader(http.StatusOK)
-		w.Write(tarballContent)
+		_, _ = w.Write(tarballContent) // httptest writer; a write error cannot occur here
 	}))
 	defer server.Close()
 
@@ -547,7 +559,9 @@ func TestNpm_NoNpmEntriesIsError(t *testing.T) {
 func TestNpm_InstallArgs(t *testing.T) {
 	// D8: npm --cache <dir> install <tgz>, no --ignore-scripts
 	tgzPath := filepath.Join(t.TempDir(), "pkg-1.0.0.tgz")
-	os.WriteFile(tgzPath, []byte("fake"), 0644)
+	if err := os.WriteFile(tgzPath, []byte("fake"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	var recordedNpm, recordedTar *exec.Cmd
 
@@ -565,7 +579,9 @@ func TestNpm_InstallArgs(t *testing.T) {
 		// doesn't fail on the os.ReadFile(outputTarball) call at the end.
 		if len(cmd.Args) >= 3 {
 			outputPath := cmd.Args[2]
-			os.WriteFile(outputPath, []byte("placeholder"), 0644)
+			if err := os.WriteFile(outputPath, []byte("placeholder"), 0644); err != nil {
+				t.Fatal(err)
+			}
 		}
 		return nil
 	}
@@ -627,8 +643,12 @@ func TestNpm_TarballCompressionFromExtension(t *testing.T) {
 		t.Run(tc.ext, func(t *testing.T) {
 			dir := t.TempDir()
 			npmCacheDir := filepath.Join(dir, "npm-cache")
-			os.MkdirAll(npmCacheDir, 0755)
-			os.WriteFile(filepath.Join(npmCacheDir, "index.json"), []byte("{}"), 0644)
+			if err := os.MkdirAll(npmCacheDir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(npmCacheDir, "index.json"), []byte("{}"), 0644); err != nil {
+				t.Fatal(err)
+			}
 
 			// Stub npmRunner, let archiveRunner run for real
 			origNpm := npmRunner
@@ -663,8 +683,12 @@ func TestNpm_TarballCompressionFromExtension(t *testing.T) {
 		}
 		dir := t.TempDir()
 		npmCacheDir := filepath.Join(dir, "npm-cache")
-		os.MkdirAll(npmCacheDir, 0755)
-		os.WriteFile(filepath.Join(npmCacheDir, "index.json"), []byte("{}"), 0644)
+		if err := os.MkdirAll(npmCacheDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(npmCacheDir, "index.json"), []byte("{}"), 0644); err != nil {
+			t.Fatal(err)
+		}
 
 		origNpm := npmRunner
 		npmRunner = func(*exec.Cmd) error { return nil }
@@ -707,16 +731,20 @@ func TestNpm_ReleaseCreatePassesNotes(t *testing.T) {
 func TestNpm_PrefetchesSiblingVersions(t *testing.T) {
 	// D5: npmPrefetchPackage downloads sibling version distfiles
 	pkgDir := t.TempDir()
-	os.WriteFile(filepath.Join(pkgDir, "foo-1.0.ebuild"), []byte(`EAPI=8
+	if err := os.WriteFile(filepath.Join(pkgDir, "foo-1.0.ebuild"), []byte(`EAPI=8
 PN="foo"
 PV="1.0"
 SRC_URI="mirror://npm/foo-pkg/foo-1.0.0.tgz"
-`), 0644)
-	os.WriteFile(filepath.Join(pkgDir, "foo-2.0.ebuild"), []byte(`EAPI=8
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "foo-2.0.ebuild"), []byte(`EAPI=8
 PN="foo"
 PV="2.0"
 SRC_URI="mirror://npm/bar-pkg/bar-2.0.0.tgz"
-`), 0644)
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	files, err := filepath.Glob(filepath.Join(pkgDir, "*.ebuild"))
 	if err != nil {
@@ -734,7 +762,9 @@ func TestNpm_PrefetchSkipsExisting(t *testing.T) {
 	// Pre-create a non-empty file; prefetch should skip it.
 	dir := t.TempDir()
 	existingPath := filepath.Join(dir, "foo-1.0.0.tgz")
-	os.WriteFile(existingPath, []byte("existing"), 0644)
+	if err := os.WriteFile(existingPath, []byte("existing"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	info, _ := os.Stat(existingPath)
 	if info.Size() == 0 {
@@ -745,16 +775,20 @@ func TestNpm_PrefetchSkipsExisting(t *testing.T) {
 func TestNpm_PrefetchIgnoresBakFiles(t *testing.T) {
 	// .ebuild.bak should not be parsed
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "foo-1.0.ebuild"), []byte(`EAPI=8
+	if err := os.WriteFile(filepath.Join(dir, "foo-1.0.ebuild"), []byte(`EAPI=8
 PN="foo"
 PV="1.0"
 SRC_URI="mirror://npm/foo-pkg/foo-1.0.0.tgz"
-`), 0644)
-	os.WriteFile(filepath.Join(dir, "foo-0.9.ebuild.bak"), []byte(`EAPI=8
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "foo-0.9.ebuild.bak"), []byte(`EAPI=8
 PN="foo"
 PV="0.9"
 SRC_URI="mirror://npm/foo-pkg/foo-0.9.0.tgz"
-`), 0644)
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	files, _ := filepath.Glob(filepath.Join(dir, "*.ebuild"))
 	for _, f := range files {
@@ -773,7 +807,9 @@ func TestNpm_ReleaseUploadUsesClobber(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	assetPath := filepath.Join(tmpDir, "deps.tar.xz")
-	os.WriteFile(assetPath, []byte("fake"), 0644)
+	if err := os.WriteFile(assetPath, []byte("fake"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	err := ghUploadAsset("v1.0.0", assetPath, "", runner)
 	if err != nil {

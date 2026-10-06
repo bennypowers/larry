@@ -22,9 +22,11 @@ install:
 
 .PHONY: lint
 lint:
-	@command -v govet >/dev/null 2>&1 || { echo "go vet not found"; exit 1; }
-	$(GO) vet $(GOFLAGS) ./...
-	@command -v staticcheck >/dev/null 2>&1 && staticcheck ./... || echo "staticcheck not available, skipping"
+	@if command -v golangci-lint >/dev/null 2>&1; then \
+	  golangci-lint run ./...; \
+	else \
+	  echo "golangci-lint not found; falling back to go vet"; $(GO) vet $(GOFLAGS) ./...; \
+	fi
 
 .PHONY: test
 test:

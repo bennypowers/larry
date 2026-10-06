@@ -191,7 +191,8 @@ func (l *ImportLogger) Msg(format string, args ...any) {
 	if l.out == nil {
 		return
 	}
-	fmt.Fprintln(l.out, msg)
+	// Log output failures are unrecoverable and not meaningful in this context.
+	_, _ = fmt.Fprintln(l.out, msg)
 }
 
 // Warn writes a warning line to err.
@@ -203,7 +204,8 @@ func (l *ImportLogger) Warn(format string, args ...any) {
 	if l.err == nil {
 		return
 	}
-	fmt.Fprintln(l.err, msg)
+	// Log output failures are unrecoverable and not meaningful in this context.
+	_, _ = fmt.Fprintln(l.err, msg)
 }
 
 // Error writes an error line to err.
@@ -215,7 +217,8 @@ func (l *ImportLogger) Error(format string, args ...any) {
 	if l.err == nil {
 		return
 	}
-	fmt.Fprintln(l.err, msg)
+	// Log output failures are unrecoverable and not meaningful in this context.
+	_, _ = fmt.Fprintln(l.err, msg)
 }
 
 // SetOut sets the writer for Msg.
@@ -307,8 +310,8 @@ func writeMetadata(path string, m *remoteid.Metadata) error {
 	// Write maintainers (tab-indented, type="person")
 	for _, maint := range m.Maintainers {
 		buf.WriteString("\t<maintainer type=\"person\">\n")
-		buf.WriteString(fmt.Sprintf("\t\t<email>%s</email>\n", escXML(maint.Email)))
-		buf.WriteString(fmt.Sprintf("\t\t<name>%s</name>\n", escXML(maint.Name)))
+		fmt.Fprintf(&buf, "\t\t<email>%s</email>\n", escXML(maint.Email))
+		fmt.Fprintf(&buf, "\t\t<name>%s</name>\n", escXML(maint.Name))
 		buf.WriteString("\t</maintainer>\n")
 	}
 
@@ -316,7 +319,7 @@ func writeMetadata(path string, m *remoteid.Metadata) error {
 	if len(m.Remotes) > 0 {
 		buf.WriteString("\t<upstream>\n")
 		for _, r := range m.Remotes {
-			buf.WriteString(fmt.Sprintf("\t\t<remote-id type=\"%s\">%s</remote-id>\n", r.Type, escXML(rString(r))))
+			fmt.Fprintf(&buf, "\t\t<remote-id type=\"%s\">%s</remote-id>\n", r.Type, escXML(rString(r)))
 		}
 		buf.WriteString("\t</upstream>\n")
 	}

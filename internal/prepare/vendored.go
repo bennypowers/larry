@@ -107,7 +107,7 @@ func downloadFileFromURL(url, dest string) error {
 	if err != nil {
 		return fmt.Errorf("download %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() // best-effort cleanup
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
@@ -117,7 +117,7 @@ func downloadFileFromURL(url, dest string) error {
 	if err != nil {
 		return fmt.Errorf("create %s: %w", dest, err)
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }() // best-effort close
 
 	_, err = io.Copy(out, resp.Body)
 	return err
@@ -309,7 +309,7 @@ func PrepareVendored(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	if err != nil {
 		return fmt.Errorf("create temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }() // best-effort cleanup
 
 	sourceTarball := filepath.Join(tmpDir, "source.tar.gz")
 	if err := downloadFileFromURL(sourceURL, sourceTarball); err != nil {

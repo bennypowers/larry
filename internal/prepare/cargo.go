@@ -65,7 +65,7 @@ func PrepareCargo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	if err != nil {
 		return fmt.Errorf("cargo: failed to download Cargo.lock for %s/%s at tag %s: %w", owner, repo, tag, err)
 	}
-	defer os.Remove(lockPath)
+	defer func() { _ = os.Remove(lockPath) }() // best-effort cleanup
 
 	// 4. Parse Cargo.lock
 	lockContent, err := os.ReadFile(lockPath)
@@ -175,19 +175,19 @@ func fetchCargoLock(fetch fetcher, forge forgeKind, owner, repo, tag string) (st
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			continue
 		}
 
 		tmpDir, err := os.MkdirTemp("", "larry-cargo-*")
 		if err != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			continue
 		}
 
 		destPath := filepath.Join(tmpDir, "Cargo.lock")
 		if err := func() error {
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }() // best-effort
 			data, err := io.ReadAll(resp.Body)
 			if err != nil {
 				return fmt.Errorf("read Cargo.lock: %w", err)
@@ -197,7 +197,7 @@ func fetchCargoLock(fetch fetcher, forge forgeKind, owner, repo, tag string) (st
 			}
 			return nil
 		}(); err != nil {
-			os.RemoveAll(tmpDir)
+			_ = os.RemoveAll(tmpDir) // best-effort cleanup on failure
 			continue
 		}
 
@@ -221,7 +221,7 @@ func downloadCargoLock(url, dest string, client *httpclient.Client) error {
 	if err != nil {
 		return fmt.Errorf("download Cargo.lock: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() // best-effort cleanup
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download Cargo.lock: HTTP %d", resp.StatusCode)
@@ -340,7 +340,7 @@ func updateCargoEbuild(ei *ebuild.EbuildInfo, lockPath string, crates []CargoCra
 			// Fall through to native parsing
 			return updateCargoEbuildNative(ebuildPath, crates)
 		}
-		defer os.RemoveAll(work)
+		defer func() { _ = os.RemoveAll(work) }() // best-effort cleanup
 
 		// Copy the downloaded Cargo.lock into the work dir.
 		lockData, err := os.ReadFile(lockPath)

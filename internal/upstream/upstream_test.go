@@ -629,8 +629,12 @@ func TestCacheIntegration_CacheMissAfterTTL(t *testing.T) {
 	cache.Set("dev-python/requests/pypi:1.0.0", "2.0.0")
 	path := filepath.Join(dir, "dev-python_requests_pypi_1.0.0")
 	oldTime := time.Now().Add(-7 * 60 * 60 * time.Hour)
-	os.WriteFile(path, []byte("2.0.0\n"), 0644)
-	os.Chtimes(path, oldTime, oldTime)
+	if err := os.WriteFile(path, []byte("2.0.0\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chtimes(path, oldTime, oldTime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
 	_, ok := cache.Get("dev-python/requests/pypi:1.0.0")
 	if ok {
 		t.Fatal("expected cache miss after TTL")
@@ -712,7 +716,9 @@ func TestResolveSourceURL_NPM(t *testing.T) {
 func TestParseEbuildInfo(t *testing.T) {
 	dir := t.TempDir()
 	pkgDir := filepath.Join(dir, "dev-python", "requests")
-	os.MkdirAll(pkgDir, 0755)
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(pkgDir): %v", err)
+	}
 	ebuildPath := filepath.Join(pkgDir, "requests-1.0.0.ebuild")
 	if err := os.WriteFile(ebuildPath, []byte(`
 EAPI=8
@@ -742,7 +748,9 @@ SLOT="0"
 func TestDebugParseEbuildInfo(t *testing.T) {
 	dir := t.TempDir()
 	pkgDir := filepath.Join(dir, "dev-python", "requests")
-	os.MkdirAll(pkgDir, 0755)
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(pkgDir): %v", err)
+	}
 	ebuildPath := filepath.Join(pkgDir, "requests-1.0.0.ebuild")
 	if err := os.WriteFile(ebuildPath, []byte(`EAPI=8
 DESCRIPTION="Test"

@@ -388,7 +388,7 @@ func TestHTTPClient_ParseRateHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	receivedHeaders = resp.Header
 

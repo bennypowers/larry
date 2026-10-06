@@ -39,7 +39,9 @@ func TestCache_TTL6h(t *testing.T) {
 	}
 	// Modify the mtime to be >6h ago
 	oldTime := time.Now().Add(-7 * time.Hour)
-	os.Chtimes(path, oldTime, oldTime)
+	if err := os.Chtimes(path, oldTime, oldTime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
 
 	// Should be stale now
 	_, ok := cache.Get("cat/pkg/pypi:1.0.0")
@@ -49,7 +51,9 @@ func TestCache_TTL6h(t *testing.T) {
 
 	// Also test fresh file works
 	freshPath := filepath.Join(dir, "cat_pkg_npm_1.0.0")
-	os.WriteFile(freshPath, []byte("1.5.0\n"), 0644)
+	if err := os.WriteFile(freshPath, []byte("1.5.0\n"), 0644); err != nil {
+		t.Fatalf("WriteFile(fresh): %v", err)
+	}
 	version, ok := cache.Get("cat/pkg/npm:1.0.0")
 	if !ok {
 		t.Fatal("expected cache hit for fresh file")

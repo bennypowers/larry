@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -29,22 +28,8 @@ func TestImportCmd_PrintsProvenance(t *testing.T) {
 	)
 
 	// Set maintainer env vars so config.Load() picks them up.
-	origName, haveName := os.LookupEnv("LARRY_MAINTAINER_NAME")
-	origEmail, haveEmail := os.LookupEnv("LARRY_MAINTAINER_EMAIL")
-	os.Setenv("LARRY_MAINTAINER_NAME", "Benny Powers")
-	os.Setenv("LARRY_MAINTAINER_EMAIL", "web@bennypowers.com")
-	defer func() {
-		if haveName {
-			os.Setenv("LARRY_MAINTAINER_NAME", origName)
-		} else {
-			os.Unsetenv("LARRY_MAINTAINER_NAME")
-		}
-		if haveEmail {
-			os.Setenv("LARRY_MAINTAINER_EMAIL", origEmail)
-		} else {
-			os.Unsetenv("LARRY_MAINTAINER_EMAIL")
-		}
-	}()
+	t.Setenv("LARRY_MAINTAINER_NAME", "Benny Powers")
+	t.Setenv("LARRY_MAINTAINER_EMAIL", "web@bennypowers.com")
 
 	stdout, stderr, err := execCmd(t,
 		"--overlay", targetOverlay,
@@ -70,12 +55,8 @@ func TestImportCmd_PrintsProvenance(t *testing.T) {
 
 func TestImportCmd_NoStaleRunPrepareHint(t *testing.T) {
 	// Set maintainer env vars for the CLI config.
-	os.Setenv("LARRY_MAINTAINER_NAME", "Benny Powers")
-	os.Setenv("LARRY_MAINTAINER_EMAIL", "web@bennypowers.com")
-	defer func() {
-		os.Unsetenv("LARRY_MAINTAINER_NAME")
-		os.Unsetenv("LARRY_MAINTAINER_EMAIL")
-	}()
+	t.Setenv("LARRY_MAINTAINER_NAME", "Benny Powers")
+	t.Setenv("LARRY_MAINTAINER_EMAIL", "web@bennypowers.com")
 
 	sourceOverlay := fixtureOverlay(t,
 		map[string]string{"source": "https://github.com/source/foo"},
