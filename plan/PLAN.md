@@ -25,7 +25,7 @@ Hard facts at audit time:
 | `larry prepare --all` | silent no-op (returns nil, does nothing) |
 | `larry prepare` (go pipeline) | always fails — fabricated ebuild path |
 | `larry test --compile/--merge/--phase` | ✅ flags parsed, phases correct, env set, single invocation, banner/summary (plan 26) |
-| `larry test --emerge` | cannot work — `Containerfile.larry-test` is Ubuntu with no Portage |
+| `larry test --emerge` | `Containerfile.larry-test` → `gentoo/stage3:amd64-openrc` (plan 27a; 27b wires the argv) |
 | `larry import` | writes to `<overlay>/var/db/repos/.../foo-1.0.0.ebuild/foo-1.0.0.ebuild` |
 | `config.Load()` | ✅ wired in `PersistentPreRunE` (plan 13a) |
 | global flags | ✅ persistent flags registered on root (plan 13a) |
@@ -63,7 +63,7 @@ corrective work is in Phase 2. Status corrections:
 | 7g | Prepare: dry-run/staging | `07-PLAN-PREPARE.md#T19` | ⚠️ dry-run has side effects → `21`, `28a` |
 | 8 | Import command | `08-PLAN-IMPORT.md` | 🔴 writes to wrong path → `28a`, `28b` |
 | 9 | Test: local mode | `09-PLAN-TEST.md#T20` | 🔴 flags discarded, env unset → `26` |
-| 9b | Test: podman mode + Containerfile | `09-PLAN-TEST.md#T21` | 🔴 image has no Portage → `27a`, `27b` |
+| 9b | Test: podman mode + Containerfile | `09-PLAN-TEST.md#T21` | ✅ base image fixed (27a); argv/mounts pending (27b) |
 | 10 | TUI | `10-PLAN-TUI.md` | ✅ |
 | 11 | Polish (integration tests, docs) | `11-PLAN-POLISH.md` | ⚠️ 319 lint issues (82 shown by default), 1 red test → `29a`, `29b`, `29c` |
 
@@ -97,7 +97,7 @@ stated acceptance check. Respect preconditions — the first four unblock the re
 | 25a  | ✅   | `25a-PLAN-PREPARE-ESCAPE-HATCH.md`  | Delete `TypeRpiKernel`, reject `--type rpi-kernel`, `docs/examples/rpi-kernel-prepare.sh`; `files/prepare.sh` gets backup→run→manifest→rollback; sandbox warning through the logger (it floods `go test` today)                                                                  | 12, 13a, 13b, 20b, 21 |
 | 25b  | ✅   | `25b-PLAN-PREPARE-VENDORED.md`      | PN from `internal/atom` (fixes every hyphenated name), wire `.larry.yaml` `vendor_dirs` → `DepSpec.SourcePath`, `npm-cache` asset contract, `catPkg` manifest, delete dead helpers                                                                                             | 12, 21, 22b           |
 | 26   | ✅   | `26-PLAN-TEST-LOCAL.md`             | Wire phases + precedence, script's 14-phase set, `RunWithEnv` + sandbox env, single `ebuild` call, banner/summary, exit codes, short + bare `--<phase>` flags, atom-based ebuild pick                                                                                            | 12, 13a, 13b          |
-| 27a  |      | `27a-PLAN-TEST-CONTAINERFILE.md`    | `gentoo/stage3` Containerfile with `ARG REPO/VIDEO_CARDS/AMDGPU_TARGETS`; delete the Ubuntu-shaped `TestContainerfile_Exists`, add 7 real tests. **Zero Go code**                                                                                                                | —                     |
+| 27a  | ✅   | `27a-PLAN-TEST-CONTAINERFILE.md`    | `gentoo/stage3` Containerfile with `ARG REPO/VIDEO_CARDS/AMDGPU_TARGETS`; delete the Ubuntu-shaped `TestContainerfile_Exists`, add 7 real tests. **Zero Go code**                                                                                                                | —                     |
 | 27b  |      | `27b-PLAN-TEST-CONTAINER-ARGS.md`   | emerge argv from the atom, `-v` mounts incl. binpkgs, `podman image exists`, pretend-before-build, nil-guard order, `checkPodmanAvailable` must use its runner, `--image`                                                                                                        | 12, 13a, 26           |
 | 28a  |      | `28a-PLAN-IMPORT-PATHS.md`          | `resolveSourceOverlay` (path / repo-name / scan-skipping-own), target from `atom.ParseAtom`, non-live highest version via `atom.FindLatest`, `--force` guard, dry-run writes nothing, delete 3 dead overlay finders                                                              | 12, 13a, 14           |
 | 28b  |      | `28b-PLAN-IMPORT-METADATA.md`       | Byte-exact `<pkgmetadata>` golden (tabs, DOCTYPE, `<upstream>` omitted when empty), flat `MaintainerName`/`MaintainerEmail`, propagate the metadata parse error, provenance lines, injectable `Prepare` hook                                                                     | 28a, 13a, 13b, 15     |

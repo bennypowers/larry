@@ -1,49 +1,48 @@
 # larry test container image
-# Minimal Gentoo-like environment for ebuild testing
+# A clean-room Gentoo emerge environment with ROCm GPU passthrough.
 #
-# Build: podman build -t larry-test -f Containerfile.larry-test .
-# Usage: podman run --rm -v /path/to/overlay:/overlay larry-test emerge <pkg>
+# Build: podman build -t larry-test --build-arg REPO=<name> <overlay-dir>
+#
+# The overlay, distfiles and binpkgs are mounted at runtime, not baked in.
 
-FROM docker.io/library/ubuntu:24.04
+FROM docker.io/gentoo/stage3:amd64-openrc
 
-# Avoid interactive prompts
-ENV DEBIAN_FRONTEND=noninteractive
+# Overlay repo name, and GPU targets matching the host.
+ARG REPO=bennypowers
+ARG VIDEO_CARDS=amdgpu
+ARG AMDGPU_TARGETS=gfx1201
 
-# Install base dependencies
-RUN apt-get update && apt-get install -y \
-    bash \
-    coreutils \
-    diffutils \
-    findutils \
-    grep \
-    gzip \
-    make \
-    sed \
-    tar \
-    xz-utils \
-    && rm -rf /var/lib/apt/lists/*
+# Accept ~amd64 for overlay packages and their deps
+RUN echo 'ACCEPT_KEYWORDS="~amd64"' >> /etc/portage/make.conf
 
-# Install Gentoo Portage dependencies
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-setuptools \
-    python3-wheel \
-    git \
-    rsync \
-    && rm -rf /var/lib/apt/lists/*
+# GPU targets
+RUN printf 'VIDEO_CARDS="%s"\n' "$VIDEO_CARDS" >> /etc/portage/make.conf \
+ && printf 'AMDGPU_TARGETS="%s"\n' "$AMDGPU_TARGETS" >> /etc/portage/make.conf
 
-# Create larry user for non-root operation
-RUN useradd -m -s /bin/bash larry
+# Parallel builds
+RUN printf 'MAKEOPTS="-j%s -l%s"\n' "$(nproc)" "$(nproc)" >> /etc/portage/make.conf \
+ && printf 'EMERGE_DEFAULT_OPTS="--jobs=4 --load-average=%s"\n' "$(nproc)" >> /etc/portage/make.conf
 
-# Set Gentoo EPREFIX
-ENV EPREFIX=/larry
+# Features: use binpkgs when available
+RUN echo 'FEATURES="binpkg-multi-instance getbinpkg"' >> /etc/portage/make.conf
 
-# Create necessary directories
-RUN mkdir -p /overlay /distfiles /binpkgs /var/cache/distfiles /var/cache/binpkgs /larry
+# Point DISTDIR and PKGDIR at the runtime mount points
+RUN echo 'DISTDIR="/var/cache/distfiles"' >> /etc/portage/make.conf \
+ && echo 'PKGDIR="/var/cache/binpkgs"'    >> /etc/portage/make.conf
 
-# Set environment
-ENV DISTDIR=/distfiles
-ENV PKGDIR=/binpkgs
+# Overlay repo config (the overlay itself is mounted at runtime)
+RUN mkdir -p /etc/portage/repos.conf \
+ && printf '[%s]\nlocation = /var/db/repos/%s\n' "$REPO" "$REPO" \
+    > "/etc/portage/repos.conf/$REPO.conf"
 
-# Default command
-CMD ["emerge", "--help"]
+# Guru overlay — many of our packages depend on it
+RUN printf '[guru]\nlocation = /var/db/repos/guru\nsync-type = git\nsync-uri = https://github.com/gentoo-mirror/guru.git\n' \
+    > /etc/portage/repos.conf/guru.conf
+
+# Sync the gentoo tree first (rsync, no git needed)
+RUN emaint sync -r gentoo
+
+# Binpkg trust, install git, then sync guru
+RUN getuto && emerge -1q dev-vcs/git && emaint sync -r guru
+
+WORKDIR /var/db/repos/$REPO
