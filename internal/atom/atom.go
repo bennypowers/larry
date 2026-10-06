@@ -126,10 +126,10 @@ func ParseEbuildPath(path string) (*ParsedEbuild, error) {
 
 	pv, rev := SplitRevision(pvr)
 	p := pn + "-" + pv
-	pf := pvr
+	pf := pn + "-" + pvr
 
 	if pv == "9999" {
-		pf = pv
+		pf = pn + "-" + pv
 	}
 
 	return &ParsedEbuild{

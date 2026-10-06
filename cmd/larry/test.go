@@ -19,6 +19,7 @@ var (
 	testPhases        []string
 	testPortageTmpdir string
 	testEmerge        bool
+	testImageName     string
 )
 
 func init() {
@@ -36,6 +37,8 @@ func init() {
 		"specific phase to run (can be specified multiple times; overrides --compile/--merge)")
 	testCmd.Flags().StringVar(&testPortageTmpdir, "portage-tmpdir", "",
 		"override PORTAGE_TMPDIR for test runs")
+	testCmd.Flags().StringVar(&testImageName, "image", "",
+		"container image name (default: larry-test)")
 
 	// Allow unknown flags (e.g. bare --<phase>) so splitPhaseFlags can detect them.
 	testCmd.FParseErrWhitelist = cobra.FParseErrWhitelist{
@@ -109,11 +112,11 @@ Examples:
 
 		// Determine mode: container or local.
 		if testEmerge {
-			distdir := cfg.ResolveDistdir(rootFlags.Distdir)
+			cacheDir := cfg.ResolveCacheDir(rootFlags.CacheDir)
 			cfg := &test.ContainerConfig{
 				Overlay:   overlayDir,
-				Distdir:   distdir,
-				ImageName: "larry-test",
+				CacheDir:  cacheDir,
+				ImageName: testImageName,
 				UseTUI:    false,
 			}
 			err := test.TestContainer(ebuildPath, cfg, nil, testPretend, true)
@@ -157,6 +160,7 @@ func splitPhaseFlags() (extraPhases []string, unknownFlag string) {
 		"emerge": true, "e": true,
 		"phase": true, "p": true,
 		"portage-tmpdir": true,
+		"image": true,
 		// Root persistent flags.
 		"verbose": true, "quiet": true, "color": true, "dry-run": true,
 		"cache-dir": true, "distdir": true, "jobs": true,

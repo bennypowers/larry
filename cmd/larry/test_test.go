@@ -1,6 +1,8 @@
 package main
 
 import (
+	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -304,5 +306,72 @@ func TestTestCmd_Pretend(t *testing.T) {
 	// Runner should have zero calls.
 	if len(runner.RunWithEnvCalls) != 0 {
 		t.Errorf("pretend mode executed %d calls, expected 0", len(runner.RunWithEnvCalls))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D9 — --image flag
+// ---------------------------------------------------------------------------
+
+func TestTestCmd_ImageNameFlag(t *testing.T) {
+	tmpOverlay := fixtureOverlay(t, nil, map[string]string{
+		"dev-util/javy/javy-9.1.0.ebuild": "EAPI=8\n",
+	})
+
+	// Capture os.Stdout for fmt.Printf in TestContainer's pretend path.
+	origStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	_, _, err := execCmd(t, "test", "--emerge", "--pretend", "--image", "foo", "--overlay", tmpOverlay, "dev-util/javy")
+
+	w.Close()
+	os.Stdout = origStdout
+
+	if err != nil {
+		t.Fatalf("execCmd failed: %v", err)
+	}
+
+	combined, _ := io.ReadAll(r)
+	stdout := string(combined)
+
+	// The printed command should contain " foo emerge "
+	if !strings.Contains(stdout, " foo emerge ") {
+		t.Errorf("captured stdout = %q, want ' foo emerge '", stdout)
+	}
+	if strings.Contains(stdout, "larry-test") {
+		t.Error("stdout should not contain 'larry-test' when --image=foo")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D4 — --emerge --pretend builds nothing
+// ---------------------------------------------------------------------------
+
+func TestTestCmd_EmergePretendBuildsNothing(t *testing.T) {
+	tmpOverlay := fixtureOverlay(t, nil, map[string]string{
+		"dev-util/javy/javy-9.1.0.ebuild": "EAPI=8\n",
+	})
+
+	// Capture os.Stdout.
+	origStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	_, _, err := execCmd(t, "test", "--emerge", "--pretend", "--overlay", tmpOverlay, "dev-util/javy")
+
+	w.Close()
+	os.Stdout = origStdout
+
+	if err != nil {
+		t.Fatalf("execCmd failed: %v", err)
+	}
+
+	combined, _ := io.ReadAll(r)
+	stdout := string(combined)
+
+	// Should print a command with --pretend
+	if !strings.Contains(stdout, "--pretend") {
+		t.Errorf("captured stdout = %q, want '--pretend'", stdout)
 	}
 }
