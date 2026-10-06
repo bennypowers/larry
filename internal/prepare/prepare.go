@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"bennypowers.dev/larry/internal/ebuild"
+	"bennypowers.dev/larry/internal/github"
 	"bennypowers.dev/larry/internal/logger"
 	"bennypowers.dev/larry/internal/upstream"
 )
@@ -25,6 +26,12 @@ type PrepareConfig struct {
 	HTTPClient              *http.Client
 	CleanupOrphanedAssets   bool // removes orphaned GitHub assets on prepare failure
 	RevisionBump            bool // skip source download, only run manifest
+
+	// GitHubBaseURL is the scheme+host used to build archive URLs.
+	// Empty means "https://github.com". Tests set it to an httptest server URL.
+	GitHubBaseURL string
+	// Runner executes external commands (go mod vendor). Nil means the real runner.
+	Runner github.CmdRunner
 }
 
 // Prepare handles the ebuild preparation pipeline.
@@ -76,7 +83,7 @@ func Prepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	case ebuild.TypeCargo:
 		return prepareCargo(ei, cfg)
 	case ebuild.TypeGo:
-		return prepareGo(ei, cfg)
+		return PrepareGo(ei, cfg)
 	case ebuild.TypeVendored:
 		return PrepareVendored(ei, cfg)
 	default:
@@ -230,11 +237,6 @@ func prepareNpm(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 // prepareCargo runs the cargo-specific prepare pipeline.
 func prepareCargo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	return PrepareCargo(ei, cfg)
-}
-
-// prepareGo runs the go-specific prepare pipeline.
-func prepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
-	return PrepareGo(ei, cfg)
 }
 
 // NewEbuildInfoFromPath creates an EbuildInfo from a file path.

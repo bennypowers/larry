@@ -1,7 +1,8 @@
 package prepare
 
 import (
-	"encoding/json"
+	"archive/tar"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,99 +10,109 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strings"
 
+	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
 	"bennypowers.dev/larry/internal/httpclient"
 )
 
+var githubRe = regexp.MustCompile(`github\.com/([^/]+)/([^/]+)`)
+
 // PrepareGo is the go-specific prepare pipeline for `larry prepare`.
-// It vendors Go dependencies, creates a tarball, and uploads to GitHub releases.
+// It vendors Go dependencies, creates a vendor tarball, and runs pkgdev manifest.
 func PrepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	// Early exit for dry-run
 	if cfg.DryRun {
 		return nil
 	}
 
+	// Defaults for injectable fields
+	base := cfg.GitHubBaseURL
+	if base == "" {
+		base = "https://github.com"
+	}
+	runner := cfg.Runner
+	if runner == nil {
+		runner = github.NewClient().Runner()
+	}
+
+	// D6: distdir must be set — no default fallback
+	distDir := cfg.Distdir
+	if distDir == "" {
+		return fmt.Errorf("go: distdir is empty")
+	}
+
 	// 1. Find the upstream repository
 	owner, repo := findGoRepo(ei)
 	if owner == "" || repo == "" {
-		return fmt.Errorf("go: could not resolve GitHub owner/repo from SRC_URI or HOMEPAGE")
+		return fmt.Errorf("go: could not resolve github.com owner/repo from SRC_URI or HOMEPAGE")
 	}
 
-	// 2. Create temp work directory
+	// 2. Tag: v${PV} with revision stripped
+	tag := "v" + atom.StripRevision(ei.PVVal)
+
+	// 3. Download source tarball
+	srcURL := fmt.Sprintf("%s/%s/%s/archive/refs/tags/%s.tar.gz", base, owner, repo, tag)
+
+	var resp *http.Response
+	var getErr error
+	if cfg.HTTPClient != nil {
+		resp, getErr = cfg.HTTPClient.Get(srcURL)
+	} else {
+		resp, getErr = httpclient.NewClient().Get(srcURL)
+	}
+	if getErr != nil {
+		return fmt.Errorf("go: download source: %w", getErr)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("go: download source: HTTP %d", resp.StatusCode)
+	}
+
+	// 4. Extract into a temp directory
 	workDir, err := os.MkdirTemp("", "larry-go-*")
 	if err != nil {
 		return fmt.Errorf("go: create temp dir: %w", err)
 	}
 	defer os.RemoveAll(workDir)
 
-	// 3. Download source tarball (v${PV}.tar.gz)
-	clientGH := github.NewClient()
-	sourceTarball := filepath.Join(workDir, fmt.Sprintf("v%s.tar.gz", ei.PV()))
-	err = downloadGoSource(clientGH, owner, repo, ei.PV(), sourceTarball)
-	if err != nil {
-		return fmt.Errorf("go: download source: %w", err)
-	}
-
-	// 4. Extract source
-	extractDir := filepath.Join(workDir, "extracted")
-	os.MkdirAll(extractDir, 0755)
-	err = extractGoSource(sourceTarball, extractDir)
-	if err != nil {
+	if err := extractGoSource(resp.Body, workDir); err != nil {
 		return fmt.Errorf("go: extract source: %w", err)
 	}
 
-	// 5. Run go mod vendor
-	// Find the Go module root (may be in subdirectory)
-	moduleRoot := findGoModuleRoot(extractDir)
-	if moduleRoot == "" {
-		return fmt.Errorf("go: no go.mod found in extracted source")
+	// 5. Find the single top-level extracted directory and verify go.mod
+	srcDir, err := findGoModuleRoot(workDir)
+	if err != nil {
+		return fmt.Errorf("go: %w", err)
 	}
 
-	runner := github.NewClient().Runner()
-	err = runGoModVendor(moduleRoot, runner)
-	if err != nil {
+	// 6. Run go mod vendor
+	if err := runGoModVendor(srcDir, runner); err != nil {
 		return fmt.Errorf("go: go mod vendor: %w", err)
 	}
 
-	// 6. Create vendor tarball
-	distDir := cfg.Distdir
-	if distDir == "" {
-		distDir = "/usr/portage/distfiles"
-	}
-
-	err = createGoVendorTarball(moduleRoot, filepath.Join(moduleRoot, ei.Pkg+"-"+ei.PV()+".ebuild"), distDir)
-	if err != nil {
+	// 7. Create vendor tarball in package directory
+	outPath := filepath.Join(filepath.Dir(ei.Path), ei.P()+"-deps.tar.gz")
+	if err := createGoVendorTarball(srcDir, outPath); err != nil {
 		return fmt.Errorf("go: create vendor tarball: %w", err)
 	}
 
-	// 7. Check if release exists, create if not
-	releaseExists, err := checkGoReleaseExists(clientGH, owner, repo, ei.PV())
+	// 8. Copy to distdir (script writes pkg-dir first, then cp to DISTDIR)
+	if err := copyToDistdir(outPath, distDir); err != nil {
+		return fmt.Errorf("go: copy to distdir: %w", err)
+	}
+
+	// 9. Run pkgdev manifest with catPkg (plan 21)
+	pe, err := atom.ParseEbuildPath(ei.Path)
 	if err != nil {
-		return fmt.Errorf("go: check release: %w", err)
+		return fmt.Errorf("go: parse ebuild path: %w", err)
 	}
-
-	if !releaseExists {
-		err = createGoRelease(clientGH, owner, repo, ei.PV())
-		if err != nil {
-			return fmt.Errorf("go: create release: %w", err)
-		}
-	}
-
-	// 8. Upload vendor tarball
-	pkgName := ei.Pkg
-	distfile := filepath.Join(distDir, pkgName+"-"+ei.PV()+"-deps.tar.gz")
-	err = uploadGoRelease(clientGH, owner, repo, ei.PV(), filepath.Base(distfile))
-	if err != nil {
-		return fmt.Errorf("go: upload release: %w", err)
-	}
-
-	// 9. Run pkgdev manifest
+	catPkg := pe.Category + "/" + pe.PN
 	if err := runManifest(manifestRequest{
 		Overlay:    cfg.Overlay,
-		CatPkg:     ei.Category + "/" + ei.PN(),
+		CatPkg:     catPkg,
 		Distdir:    distDir,
 		EbuildPath: ei.Path,
 		Prefetch:   nil,
@@ -116,17 +127,15 @@ func PrepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 func findGoRepo(ei *ebuild.EbuildInfo) (owner, repo string) {
 	// Try HOMEPAGE first: https://github.com/owner/repo
 	if ei.HOMEPAGE != "" {
-		re := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)`)
-		matches := re.FindStringSubmatch(ei.HOMEPAGE)
+		matches := githubRe.FindStringSubmatch(ei.HOMEPAGE)
 		if len(matches) == 3 {
 			return matches[1], matches[2]
 		}
 	}
 
-	// Try SRC_URI: mirror://github/${PN}/${P}.tar.gz
+	// Try SRC_URI
 	if ei.SRC_URI != "" {
-		re := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)`)
-		matches := re.FindStringSubmatch(ei.SRC_URI)
+		matches := githubRe.FindStringSubmatch(ei.SRC_URI)
 		if len(matches) == 3 {
 			return matches[1], matches[2]
 		}
@@ -135,105 +144,79 @@ func findGoRepo(ei *ebuild.EbuildInfo) (owner, repo string) {
 	return "", ""
 }
 
-// downloadGoSource downloads the source tarball from GitHub.
-func downloadGoSource(client *github.Client, owner, repo, version, dest string) error {
-	// Download the source tarball using gh CLI
-	output, err := client.Gh("api", owner+"/"+repo+"/releases/tags/v"+version)
+// extractGoSource extracts a gzip tarball from the given reader into destDir.
+// Uses archive/tar + compress/gzip (no subprocess).
+func extractGoSource(r io.Reader, destDir string) error {
+	gzr, err := gzip.NewReader(r)
 	if err != nil {
-		return fmt.Errorf("gh release API: %w", err)
+		return fmt.Errorf("create gzip reader: %w", err)
 	}
+	defer gzr.Close()
 
-	// Parse JSON to get download URL
-	var result struct {
-		Assets []struct {
-			BrowserDownloadURL string `json:"browser_download_url"`
-			Name               string `json:"name"`
-		} `json:"assets"`
-	}
-	if err := json.Unmarshal(output, &result); err != nil {
-		return fmt.Errorf("parse release JSON: %w", err)
-	}
-
-	// Find the source tarball (v${PV}.tar.gz)
-	var downloadURL string
-	for _, asset := range result.Assets {
-		if strings.Contains(asset.Name, "v"+version) && strings.HasSuffix(asset.Name, ".tar.gz") {
-			downloadURL = asset.BrowserDownloadURL
+	tr := tar.NewReader(gzr)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
 			break
 		}
-	}
-
-	if downloadURL == "" {
-		// Fallback: construct direct download URL
-		downloadURL = fmt.Sprintf("https://github.com/%s/%s/archive/refs/tags/v%s.tar.gz", owner, repo, version)
-	}
-
-	// Download the file
-	clientHTTP := httpclient.NewClient()
-	return downloadGoSourceURL(downloadURL, dest, clientHTTP)
-}
-
-// downloadGoSourceURL downloads a Go source tarball from a URL.
-func downloadGoSourceURL(url, dest string, client *httpclient.Client) error {
-	// Create directory if needed
-	dir := filepath.Dir(dest)
-	if dir != "" {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("create dest dir: %w", err)
+		if err != nil {
+			return fmt.Errorf("read tar entry: %w", err)
 		}
-	}
 
-	resp, err := client.Get(url)
-	if err != nil {
-		return fmt.Errorf("download Go source: %w", err)
-	}
-	defer resp.Body.Close()
+		target := filepath.Join(destDir, header.Name)
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download Go source: HTTP %d", resp.StatusCode)
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read Go source: %w", err)
-	}
-
-	if err := os.WriteFile(dest, data, 0644); err != nil {
-		return fmt.Errorf("write Go source: %w", err)
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return fmt.Errorf("create dir: %w", err)
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return fmt.Errorf("create parent dir: %w", err)
+			}
+			outFile, err := os.Create(target)
+			if err != nil {
+				return fmt.Errorf("create file: %w", err)
+			}
+			if _, err := io.Copy(outFile, tr); err != nil {
+				outFile.Close()
+				return fmt.Errorf("write file: %w", err)
+			}
+			outFile.Close()
+		}
 	}
 
 	return nil
 }
 
-// extractGoSource extracts a Go source tarball to a directory.
-func extractGoSource(tarballPath, destDir string) error {
-	cmd := exec.Command("tar", "xzf", tarballPath, "-C", destDir)
-	return cmd.Run()
-}
-
 // findGoModuleRoot finds the directory containing go.mod in the extracted source.
-func findGoModuleRoot(root string) string {
-	// First check the root
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
-		return root
-	}
-
-	// Search subdirectories
+// Returns an error if there is not exactly one top-level directory.
+func findGoModuleRoot(root string) (string, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("read extracted source: %w", err)
 	}
 
-	for _, entry := range entries {
-		if entry.IsDir() {
-			subPath := filepath.Join(root, entry.Name())
-			if found := findGoModuleRoot(subPath); found != "" {
-				return found
-			}
+	// Collect top-level directories
+	var topDirs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			topDirs = append(topDirs, filepath.Join(root, e.Name()))
 		}
 	}
 
-	return ""
+	if len(topDirs) != 1 {
+		return "", fmt.Errorf("expected exactly one top-level directory in extracted source, found %d", len(topDirs))
+	}
+
+	srcDir := topDirs[0]
+
+	// Check for go.mod
+	if _, err := os.Stat(filepath.Join(srcDir, "go.mod")); err != nil {
+		return "", fmt.Errorf("no go.mod found in extracted source directory")
+	}
+
+	return srcDir, nil
 }
 
 // runGoModVendor runs go mod vendor in the given directory.
@@ -243,77 +226,76 @@ func runGoModVendor(dir string, runner github.CmdRunner) error {
 	return runner.Run(cmd)
 }
 
-// createGoVendorTarball creates a tarball of the vendor/ directory.
-func createGoVendorTarball(moduleRoot, ebuildPath, distDir string) error {
-	vendorDir := filepath.Join(moduleRoot, "vendor")
+// createGoVendorTarball creates a gzip tarball of the vendor/ directory at outPath.
+// The tarball root is vendor/ (matching what the go-module eclass expects).
+func createGoVendorTarball(srcDir, outPath string) error {
+	vendorDir := filepath.Join(srcDir, "vendor")
 	if _, err := os.Stat(vendorDir); err != nil {
 		return fmt.Errorf("vendor directory not found: %s", vendorDir)
 	}
 
-	// Ensure distdir exists
-	if err := os.MkdirAll(distDir, 0755); err != nil {
-		return fmt.Errorf("create distdir: %w", err)
+	// Ensure output directory exists
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return fmt.Errorf("create output dir: %w", err)
 	}
 
-	// Parse ebuild to get P (package name-version)
-	ebuildContent, err := os.ReadFile(ebuildPath)
+	outFile, err := os.Create(outPath)
 	if err != nil {
-		return fmt.Errorf("read ebuild: %w", err)
+		return fmt.Errorf("create tarball: %w", err)
 	}
+	defer outFile.Close()
 
-	// Extract P from P= variable (multiline: P= can appear anywhere)
-	var pVal string
-	re := regexp.MustCompile(`(?m)^P\s*=\s*"([^"]+)"`)
-	matches := re.FindSubmatch(ebuildContent)
-	if len(matches) == 2 {
-		pVal = string(matches[1])
-	} else {
-		// Fallback: use directory name
-		pVal = filepath.Base(filepath.Dir(ebuildPath))
-	}
-
-	// Create tarball: ${P}-deps.tar.gz
-	destFile := filepath.Join(distDir, pVal+"-deps.tar.gz")
-	cmd := exec.Command("tar", "czf", destFile, "-C", vendorDir, ".")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("create vendor tarball: %w", err)
-	}
-
-	return nil
-}
-
-// checkGoReleaseExists checks if a GitHub release exists.
-func checkGoReleaseExists(client *github.Client, owner, repo, tag string) (bool, error) {
-	_, err := client.Gh("release", "view", tag)
+	gzw, err := gzip.NewWriterLevel(outFile, gzip.BestCompression)
 	if err != nil {
-		// Release doesn't exist (or error)
-		return false, nil
+		return fmt.Errorf("create gzip writer: %w", err)
 	}
-	return true, nil
-}
+	defer gzw.Close()
 
-// createGoRelease creates a GitHub release.
-func createGoRelease(client *github.Client, owner, repo, tag string) error {
-	_, err := client.Gh("release", "create", tag, "-t", "v"+tag, "-n", "Release v"+tag)
-	if err != nil {
-		return fmt.Errorf("create release: %w", err)
-	}
-	return nil
-}
+	tr := tar.NewWriter(gzw)
+	defer tr.Close()
 
-// uploadGoRelease uploads a file to a GitHub release.
-func uploadGoRelease(client *github.Client, owner, repo, tag, filename string) error {
-	_, err := client.Gh("release", "upload", tag, filepath.Join("/tmp", filename), "-F", filename)
-	if err != nil {
-		return fmt.Errorf("upload release asset: %w", err)
-	}
-	return nil
+	// Walk vendor/ and write entries with "vendor/" prefix
+	return filepath.Walk(vendorDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		// Compute the name relative to srcDir (so vendor/ is at the root)
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return fmt.Errorf("compute rel path: %w", err)
+		}
+
+		hdr, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return fmt.Errorf("create tar header: %w", err)
+		}
+		hdr.Name = rel
+
+		if err := tr.WriteHeader(hdr); err != nil {
+			return fmt.Errorf("write tar header: %w", err)
+		}
+
+		// For regular files, copy content
+		if info.Mode().IsRegular() {
+			f, err := os.Open(path)
+			if err != nil {
+				return fmt.Errorf("open file for tar: %w", err)
+			}
+			defer f.Close()
+			if _, err := io.Copy(tr, f); err != nil {
+				return fmt.Errorf("write tar data: %w", err)
+			}
+		}
+
+		return nil
+	})
 }
 
 // copyToDistdir copies a tarball to the distdir.
 func copyToDistdir(src, distDir string) error {
 	// Ensure distdir exists
-	if err := os.MkdirAll(distDir, 0755); err != nil {
+	if err := os.MkdirAll(distDir, 0o755); err != nil {
 		return fmt.Errorf("create distdir: %w", err)
 	}
 
@@ -325,7 +307,7 @@ func copyToDistdir(src, distDir string) error {
 
 	// Write to distdir
 	dst := filepath.Join(distDir, filepath.Base(src))
-	if err := os.WriteFile(dst, data, 0644); err != nil {
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
 		return fmt.Errorf("write to distdir: %w", err)
 	}
 
