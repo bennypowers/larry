@@ -3,9 +3,11 @@ package importcmd
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/version"
@@ -19,17 +21,28 @@ type ImportConfig struct {
 	DryRun        bool   // skip write operations
 	Force         bool   // overwrite even if target is newer or equal
 	ReposRoot     string // base dir for repo scan; defaults to /var/db/repos
+
+	// MaintainerName and MaintainerEmail are required for non-dry-run imports.
+	MaintainerName  string
+	MaintainerEmail string
+
+	// Prepare runs the prepare pipeline on the freshly imported ebuild.
+	// Nil means no prepare step.
+	Prepare func(ebuildPath string) error
+
+	// Log is used for provenance and progress lines.
+	// When nil, logging is a no-op.
+	Log *ImportLogger
 }
 
 // ImportResult holds the result of an import operation.
 type ImportResult struct {
-	EbuildPath  string              // path to imported ebuild in target
-	MetaPath    string              // path to metadata.xml in target
-	SourcePath  string              // path to source ebuild
-	RepoName    string              // source repo name for provenance
-	SourceMeta  *remoteid.Metadata
-	Prepared    bool                // whether prepare was called
-	Warned      string              // warning message (if any)
+	EbuildPath string // path to imported ebuild in target
+	MetaPath   string // path to metadata.xml in target
+	SourcePath string // path to source ebuild
+	RepoName   string // source repo name for provenance
+	Prepared   bool   // whether prepare was called
+	Warned     string // warning message (if any)
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +170,70 @@ func copyRecursive(src, dst string) error {
 }
 
 // ---------------------------------------------------------------------------
+// ImportLogger — lightweight logger for import provenance lines
+// ---------------------------------------------------------------------------
+
+// ImportLogger provides Msg, Warn, and Error methods matching the script's
+// provenance-line output style. Zero value is a no-op.
+type ImportLogger struct {
+	mu   sync.Mutex
+	out  io.Writer
+	err  io.Writer
+	msgs []string // captured for testing
+}
+
+// Msg writes an import progress/provenance line to out.
+func (l *ImportLogger) Msg(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	l.mu.Lock()
+	l.msgs = append(l.msgs, msg)
+	l.mu.Unlock()
+	if l.out == nil {
+		return
+	}
+	fmt.Fprintln(l.out, msg)
+}
+
+// Warn writes a warning line to err.
+func (l *ImportLogger) Warn(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	l.mu.Lock()
+	l.msgs = append(l.msgs, msg)
+	l.mu.Unlock()
+	if l.err == nil {
+		return
+	}
+	fmt.Fprintln(l.err, msg)
+}
+
+// Error writes an error line to err.
+func (l *ImportLogger) Error(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	l.mu.Lock()
+	l.msgs = append(l.msgs, msg)
+	l.mu.Unlock()
+	if l.err == nil {
+		return
+	}
+	fmt.Fprintln(l.err, msg)
+}
+
+// SetOut sets the writer for Msg.
+func (l *ImportLogger) SetOut(w io.Writer) { l.out = w }
+
+// SetErr sets the writer for Warn/Error.
+func (l *ImportLogger) SetErr(w io.Writer) { l.err = w }
+
+// Messages returns a copy of captured messages (for testing).
+func (l *ImportLogger) Messages() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]string, len(l.msgs))
+	copy(out, l.msgs)
+	return out
+}
+
+// ---------------------------------------------------------------------------
 // Metadata operations
 // ---------------------------------------------------------------------------
 
@@ -218,28 +295,30 @@ func mergeMetadata(path string, maintainerEmail, maintainerName string, remotes 
 	return writeMetadata(path, m)
 }
 
-// writeMetadata marshals metadata to XML and writes it.
+// writeMetadata marshals metadata to XML and writes it with exact Gentoo format:
+// DOCTYPE, <pkgmetadata> root (no hyphen), tab indents, type="person" on maintainer,
+// <upstream> only when there are remote-ids, single trailing newline.
 func writeMetadata(path string, m *remoteid.Metadata) error {
-	// Build XML manually for proper formatting.
 	var buf bytes.Buffer
 	buf.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+	buf.WriteString("<!DOCTYPE pkgmetadata SYSTEM \"https://www.gentoo.org/dtd/metadata.dtd\">\n")
 	buf.WriteString("<pkgmetadata>\n")
 
-	// Write maintainers
+	// Write maintainers (tab-indented, type="person")
 	for _, maint := range m.Maintainers {
-		buf.WriteString(fmt.Sprintf("  <maintainer>\n"))
-		buf.WriteString(fmt.Sprintf("    <email>%s</email>\n", escXML(maint.Email)))
-		buf.WriteString(fmt.Sprintf("    <name>%s</name>\n", escXML(maint.Name)))
-		buf.WriteString("  </maintainer>\n")
+		buf.WriteString("\t<maintainer type=\"person\">\n")
+		buf.WriteString(fmt.Sprintf("\t\t<email>%s</email>\n", escXML(maint.Email)))
+		buf.WriteString(fmt.Sprintf("\t\t<name>%s</name>\n", escXML(maint.Name)))
+		buf.WriteString("\t</maintainer>\n")
 	}
 
-	// Write <upstream> block when there are remote-ids.
+	// Write <upstream> block ONLY when there are remote-ids.
 	if len(m.Remotes) > 0 {
-		buf.WriteString("  <upstream>\n")
+		buf.WriteString("\t<upstream>\n")
 		for _, r := range m.Remotes {
-			buf.WriteString(fmt.Sprintf("    <remote-id type=\"%s\">%s</remote-id>\n", r.Type, escXML(rString(r))))
+			buf.WriteString(fmt.Sprintf("\t\t<remote-id type=\"%s\">%s</remote-id>\n", r.Type, escXML(rString(r))))
 		}
-		buf.WriteString("  </upstream>\n")
+		buf.WriteString("\t</upstream>\n")
 	}
 
 	buf.WriteString("</pkgmetadata>\n")
@@ -281,6 +360,16 @@ func Import(catPkg string, cfg *ImportConfig) (*ImportResult, error) {
 		cfg = &ImportConfig{}
 	}
 
+	log := cfg.Log
+	if log == nil {
+		log = &ImportLogger{}
+	}
+
+	// 0. Validate maintainer config (before any writes)
+	if cfg.MaintainerName == "" || cfg.MaintainerEmail == "" {
+		return nil, fmt.Errorf("maintainer not configured: set maintainer.name and maintainer.email in the config file, or LARRY_MAINTAINER_NAME / LARRY_MAINTAINER_EMAIL")
+	}
+
 	// 1. Resolve source overlay
 	sourceOverlay, repoName, err := resolveSourceOverlay(
 		cfg.SourceOverlay,
@@ -305,11 +394,15 @@ func Import(catPkg string, cfg *ImportConfig) (*ImportResult, error) {
 	}
 	srcEbuildPath := srcParsed.Path
 
-	// 4. Parse source metadata
+	// 4. Parse source metadata (missing is OK, malformed is an error)
+	var remoteIds []*remoteid.RemoteId
 	srcMetaPath := filepath.Join(srcPkgDir, "metadata.xml")
-	var srcMeta *remoteid.Metadata
-	if meta, err := remoteid.ParseMetadataFile(srcMetaPath); err == nil {
-		srcMeta = meta
+	if _, err := os.Stat(srcMetaPath); err == nil {
+		meta, err := remoteid.ParseMetadataFile(srcMetaPath)
+		if err != nil {
+			return nil, fmt.Errorf("parse source metadata %s: %w", srcMetaPath, err)
+		}
+		remoteIds = meta.GetRemoteIds()
 	}
 
 	// 5. Determine target directory from atom.ParseAtom
@@ -338,52 +431,70 @@ func Import(catPkg string, cfg *ImportConfig) (*ImportResult, error) {
 
 	// 8. Dry-run: no filesystem writes at all
 	if cfg.DryRun {
+		log.Msg("Importing %s from ::%s", catPkg, repoName)
+		log.Msg("Source:   %s", srcPkgDir)
 		return &ImportResult{
-			SourcePath:  srcEbuildPath,
-			EbuildPath:  resultEbuildPath,
-			MetaPath:    resultMetaPath,
-			RepoName:    repoName,
-			SourceMeta:  srcMeta,
+			SourcePath: srcEbuildPath,
+			EbuildPath: resultEbuildPath,
+			MetaPath:   resultMetaPath,
+			RepoName:   repoName,
 		}, nil
 	}
 
-	// 9. Create target directory
+	// 9. Provenance lines
+	log.Msg("Importing %s from ::%s", catPkg, repoName)
+	log.Msg("Source:   %s", srcPkgDir)
+
+	// 10. Create target directory
 	if err := os.MkdirAll(targetPkgDir, 0755); err != nil {
 		return nil, fmt.Errorf("create target dir: %w", err)
 	}
 
-	// 10. Copy ebuild
+	// 11. Copy ebuild
 	if err := copyEbuild(srcEbuildPath, targetPkgDir); err != nil {
 		return nil, fmt.Errorf("copy ebuild: %w", err)
 	}
+	log.Msg("Copied:   %s", filepath.Base(srcEbuildPath))
 
-	// 11. Copy files/ directory
+	// 12. Copy files/ directory
 	if err := copyFilesDir(srcPkgDir, targetPkgDir); err != nil {
 		return nil, fmt.Errorf("copy files/: %w", err)
 	}
+	if _, err := os.Stat(filepath.Join(srcPkgDir, "files")); err == nil {
+		log.Msg("Copied:   files/")
+	}
 
-	// 12. Create or merge metadata.xml
+	// 13. Create or merge metadata.xml
 	if _, err := os.Stat(resultMetaPath); err == nil {
 		// Target metadata exists — merge
-		if err := mergeMetadata(resultMetaPath, "", "", srcMeta.GetRemoteIds()); err != nil {
+		if err := mergeMetadata(resultMetaPath, cfg.MaintainerEmail, cfg.MaintainerName, remoteIds); err != nil {
 			return nil, fmt.Errorf("merge metadata: %w", err)
 		}
 	} else {
 		// Target metadata doesn't exist — create
-		remoteIds := []*remoteid.RemoteId{}
-		if srcMeta != nil {
-			remoteIds = srcMeta.GetRemoteIds()
-		}
-		if err := createMetadata(resultMetaPath, "", "", remoteIds); err != nil {
+		if err := createMetadata(resultMetaPath, cfg.MaintainerEmail, cfg.MaintainerName, remoteIds); err != nil {
 			return nil, fmt.Errorf("create metadata: %w", err)
+		}
+	}
+	log.Msg("Created:  metadata.xml")
+
+	// 14. Run prepare (if configured and not dry-run)
+	if cfg.Prepare != nil {
+		if err := cfg.Prepare(resultEbuildPath); err != nil {
+			return &ImportResult{
+				EbuildPath: resultEbuildPath,
+				MetaPath:   resultMetaPath,
+				SourcePath: srcEbuildPath,
+				RepoName:   repoName,
+			}, fmt.Errorf("prepare imported ebuild: %w", err)
 		}
 	}
 
 	return &ImportResult{
-		SourcePath:  srcEbuildPath,
-		EbuildPath:  resultEbuildPath,
-		MetaPath:    resultMetaPath,
-		RepoName:    repoName,
-		SourceMeta:  srcMeta,
+		EbuildPath: resultEbuildPath,
+		MetaPath:   resultMetaPath,
+		SourcePath: srcEbuildPath,
+		RepoName:   repoName,
+		Prepared:   cfg.Prepare != nil,
 	}, nil
 }

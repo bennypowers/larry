@@ -1,6 +1,8 @@
 package importcmd
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,10 +46,13 @@ func TestImport_TargetPath(t *testing.T) {
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
-		SourceOverlay: filepath.Join(reposRoot, "guru"),
-		TargetOverlay: targetOverlay,
-		DryRun:        false,
-		ReposRoot:     reposRoot,
+		SourceOverlay:   filepath.Join(reposRoot, "guru"),
+		TargetOverlay:   targetOverlay,
+		DryRun:          false,
+		ReposRoot:       reposRoot,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Log:             &ImportLogger{},
 	}
 
 	result, err := Import("dev-lisp/foo", cfg)
@@ -81,9 +86,12 @@ func TestImport_AutoSearchSkipsOwnOverlay(t *testing.T) {
 
 	targetOverlay := filepath.Join(reposRoot, "mine")
 	cfg := &ImportConfig{
-		SourceOverlay: "", // empty → auto-search
-		TargetOverlay: targetOverlay,
-		ReposRoot:     reposRoot,
+		SourceOverlay:   "", // empty → auto-search
+		TargetOverlay:   targetOverlay,
+		ReposRoot:       reposRoot,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Log:             &ImportLogger{},
 	}
 
 	result, err := Import("dev-lisp/foo", cfg)
@@ -111,9 +119,12 @@ func TestImport_AutoSearchNoneFound(t *testing.T) {
 
 	targetOverlay := filepath.Join(reposRoot, "mine")
 	cfg := &ImportConfig{
-		SourceOverlay: "",
-		TargetOverlay: targetOverlay,
-		ReposRoot:     reposRoot,
+		SourceOverlay:   "",
+		TargetOverlay:   targetOverlay,
+		ReposRoot:       reposRoot,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Log:             &ImportLogger{},
 	}
 
 	_, err := Import("dev-lisp/foo", cfg)
@@ -136,9 +147,12 @@ func TestImport_FromRepoName(t *testing.T) {
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
-		SourceOverlay: "guru",
-		TargetOverlay: targetOverlay,
-		ReposRoot:     reposRoot,
+		SourceOverlay:   "guru",
+		TargetOverlay:   targetOverlay,
+		ReposRoot:       reposRoot,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Log:             &ImportLogger{},
 	}
 
 	result, err := Import("dev-lisp/foo", cfg)
@@ -157,9 +171,12 @@ func TestImport_FromAbsolutePath(t *testing.T) {
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
-		SourceOverlay: filepath.Join(reposRoot, "guru"),
-		TargetOverlay: targetOverlay,
-		ReposRoot:     reposRoot,
+		SourceOverlay:   filepath.Join(reposRoot, "guru"),
+		TargetOverlay:   targetOverlay,
+		ReposRoot:       reposRoot,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Log:             &ImportLogger{},
 	}
 
 	result, err := Import("dev-lisp/foo", cfg)
@@ -178,9 +195,12 @@ func TestImport_FromUnknownRepoName(t *testing.T) {
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
-		SourceOverlay: "nosuch",
-		TargetOverlay: targetOverlay,
-		ReposRoot:     reposRoot,
+		SourceOverlay:   "nosuch",
+		TargetOverlay:   targetOverlay,
+		ReposRoot:       reposRoot,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Log:             &ImportLogger{},
 	}
 
 	_, err := Import("dev-lisp/foo", cfg)
@@ -203,8 +223,11 @@ func TestImport_ExcludesLiveEbuild(t *testing.T) {
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
-		SourceOverlay: filepath.Join(reposRoot, "guru"),
-		TargetOverlay: targetOverlay,
+		SourceOverlay:   filepath.Join(reposRoot, "guru"),
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Log:             &ImportLogger{},
 	}
 
 	result, err := Import("dev-lisp/foo", cfg)
@@ -230,8 +253,11 @@ func TestImport_PostReleaseIsNotLive(t *testing.T) {
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
-		SourceOverlay: filepath.Join(reposRoot, "guru"),
-		TargetOverlay: targetOverlay,
+		SourceOverlay:   filepath.Join(reposRoot, "guru"),
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Log:             &ImportLogger{},
 	}
 
 	result, err := Import("dev-lisp/foo", cfg)
@@ -251,8 +277,11 @@ func TestImport_PreReleaseIsNotLive(t *testing.T) {
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
-		SourceOverlay: filepath.Join(reposRoot, "guru"),
-		TargetOverlay: targetOverlay,
+		SourceOverlay:   filepath.Join(reposRoot, "guru"),
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Log:             &ImportLogger{},
 	}
 
 	result, err := Import("dev-lisp/foo", cfg)
@@ -276,8 +305,11 @@ func TestImport_VersionCompareUsesVersionPkg(t *testing.T) {
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
-		SourceOverlay: filepath.Join(reposRoot, "guru"),
-		TargetOverlay: targetOverlay,
+		SourceOverlay:   filepath.Join(reposRoot, "guru"),
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Log:             &ImportLogger{},
 	}
 
 	result, err := Import("dev-lisp/foo", cfg)
@@ -297,8 +329,11 @@ func TestImport_NumericOrdering(t *testing.T) {
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
-		SourceOverlay: filepath.Join(reposRoot, "guru"),
-		TargetOverlay: targetOverlay,
+		SourceOverlay:   filepath.Join(reposRoot, "guru"),
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Log:             &ImportLogger{},
 	}
 
 	result, err := Import("dev-lisp/foo", cfg)
@@ -327,9 +362,12 @@ func TestImport_RefusesEqualOrNewerWithoutForce(t *testing.T) {
 	os.WriteFile(filepath.Join(targetPkgDir, "foo-1.0.0.ebuild"), []byte("OLD\n"), 0644)
 
 	cfg := &ImportConfig{
-		SourceOverlay: srcDir,
-		TargetOverlay: targetOverlay,
-		Force:         false,
+		SourceOverlay:   srcDir,
+		TargetOverlay:   targetOverlay,
+		Force:           false,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Log:             &ImportLogger{},
 	}
 
 	_, err := Import("dev-lisp/foo", cfg)
@@ -359,9 +397,12 @@ func TestImport_ForceOverwrites(t *testing.T) {
 	os.WriteFile(filepath.Join(targetPkgDir, "foo-1.0.0.ebuild"), []byte("OLD\n"), 0644)
 
 	cfg := &ImportConfig{
-		SourceOverlay: srcDir,
-		TargetOverlay: targetOverlay,
-		Force:         true,
+		SourceOverlay:   srcDir,
+		TargetOverlay:   targetOverlay,
+		Force:           true,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Log:             &ImportLogger{},
 	}
 
 	_, err := Import("dev-lisp/foo", cfg)
@@ -387,9 +428,12 @@ func TestImport_AllowsNewerWithoutForce(t *testing.T) {
 	os.WriteFile(filepath.Join(targetPkgDir, "foo-1.0.0.ebuild"), []byte("OLD\n"), 0644)
 
 	cfg := &ImportConfig{
-		SourceOverlay: srcDir,
-		TargetOverlay: targetOverlay,
-		Force:         false,
+		SourceOverlay:   srcDir,
+		TargetOverlay:   targetOverlay,
+		Force:           false,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Log:             &ImportLogger{},
 	}
 
 	_, err := Import("dev-lisp/foo", cfg)
@@ -417,9 +461,12 @@ func TestImport_DryRunNoWrites(t *testing.T) {
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
-		SourceOverlay: filepath.Join(reposRoot, "guru"),
-		TargetOverlay: targetOverlay,
-		DryRun:        true,
+		SourceOverlay:   filepath.Join(reposRoot, "guru"),
+		TargetOverlay:   targetOverlay,
+		DryRun:          true,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Log:             &ImportLogger{},
 	}
 
 	result, err := Import("dev-lisp/foo", cfg)
@@ -461,8 +508,11 @@ func TestImport_CopiesFilesDir(t *testing.T) {
 
 	targetOverlay := t.TempDir()
 	cfg := &ImportConfig{
-		SourceOverlay: srcDir,
-		TargetOverlay: targetOverlay,
+		SourceOverlay:   srcDir,
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Log:             &ImportLogger{},
 	}
 
 	_, err := Import("dev-lisp/foo", cfg)
@@ -506,4 +556,511 @@ func TestImportResult_Struct(t *testing.T) {
 	if r.EbuildPath == "" || r.MetaPath == "" || r.SourcePath == "" {
 		t.Error("ImportResult fields not set")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// D7 — writeMetadata: byte-exact golden (pkgmetadata, DOCTYPE, tabs)
+// ---------------------------------------------------------------------------
+
+func TestImport_MetadataShape(t *testing.T) {
+	// Source metadata with upstream remote-id.
+	srcMeta := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+  <maintainer type="person">
+    <email>upstream@example.com</email>
+    <name>Upstream Maintainer</name>
+  </maintainer>
+  <upstream>
+    <remote-id type="github">owner/repo</remote-id>
+  </upstream>
+</pkgmetadata>
+`
+
+	srcDir := t.TempDir()
+	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
+	os.MkdirAll(srcCat, 0755)
+	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+	os.WriteFile(filepath.Join(srcCat, "metadata.xml"), []byte(srcMeta), 0644)
+
+	targetOverlay := t.TempDir()
+
+	log := &ImportLogger{}
+
+	cfg := &ImportConfig{
+		SourceOverlay:   srcDir,
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Prepare:         nil, // no-op
+		Log:             log,
+	}
+
+	_, err := Import("dev-lisp/foo", cfg)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(targetOverlay, "dev-lisp", "foo", "metadata.xml"))
+	if err != nil {
+		t.Fatalf("read metadata.xml: %v", err)
+	}
+
+	want := testdataImportedGolden()
+	if !bytes.Equal(got, want) {
+		t.Errorf("metadata.xml does not match golden\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
+func TestImport_MetadataShape_NoRemoteIds(t *testing.T) {
+	// No source metadata.xml.
+	srcDir := t.TempDir()
+	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
+	os.MkdirAll(srcCat, 0755)
+	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+
+	targetOverlay := t.TempDir()
+
+	cfg := &ImportConfig{
+		SourceOverlay:   srcDir,
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Prepare:         nil,
+		Log:             &ImportLogger{},
+	}
+
+	_, err := Import("dev-lisp/foo", cfg)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(targetOverlay, "dev-lisp", "foo", "metadata.xml"))
+	if err != nil {
+		t.Fatalf("read metadata.xml: %v", err)
+	}
+
+	want := testdataImportedNoUpstreamGolden()
+	if !bytes.Equal(got, want) {
+		t.Errorf("metadata.xml does not match no-upstream golden\nwant: %q\ngot:  %q", want, got)
+	}
+
+	// Also assert no <upstream> substring at all
+	if strings.Contains(string(got), "<upstream>") {
+		t.Error("metadata.xml must not contain <upstream> when there are no remote-ids")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D8 — Preserve upstream remote-id / error on malformed / missing is ok
+// ---------------------------------------------------------------------------
+
+func TestImport_PreservesUpstreamRemoteId(t *testing.T) {
+	srcMeta := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+  <upstream>
+    <remote-id type="github">owner/repo</remote-id>
+  </upstream>
+</pkgmetadata>
+`
+	srcDir := t.TempDir()
+	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
+	os.MkdirAll(srcCat, 0755)
+	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+	os.WriteFile(filepath.Join(srcCat, "metadata.xml"), []byte(srcMeta), 0644)
+
+	targetOverlay := t.TempDir()
+	cfg := &ImportConfig{
+		SourceOverlay:   srcDir,
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Prepare:         nil,
+		Log:             &ImportLogger{},
+	}
+
+	_, err := Import("dev-lisp/foo", cfg)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(targetOverlay, "dev-lisp", "foo", "metadata.xml"))
+	if err != nil {
+		t.Fatalf("read metadata.xml: %v", err)
+	}
+
+	want := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>web@bennypowers.com</email>
+		<name>Benny Powers</name>
+	</maintainer>
+	<upstream>
+		<remote-id type="github">owner/repo</remote-id>
+	</upstream>
+</pkgmetadata>
+`
+	if string(got) != want {
+		t.Errorf("metadata.xml mismatch\nwant: %q\ngot:  %q", want, string(got))
+	}
+}
+
+func TestImport_MalformedSourceMetadataIsReported(t *testing.T) {
+	// Malformed XML — no closing tag.
+	srcMeta := `<pkgmetadata><unclosed>`
+	srcDir := t.TempDir()
+	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
+	os.MkdirAll(srcCat, 0755)
+	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+	os.WriteFile(filepath.Join(srcCat, "metadata.xml"), []byte(srcMeta), 0644)
+
+	targetOverlay := t.TempDir()
+	cfg := &ImportConfig{
+		SourceOverlay:   srcDir,
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Prepare:         nil,
+		Log:             &ImportLogger{},
+	}
+
+	_, err := Import("dev-lisp/foo", cfg)
+	if err == nil {
+		t.Fatal("expected error for malformed source metadata")
+	}
+	if !strings.Contains(err.Error(), "parse source metadata") {
+		t.Errorf("error should mention 'parse source metadata': %v", err)
+	}
+
+	// No metadata.xml should have been written
+	metaPath := filepath.Join(targetOverlay, "dev-lisp", "foo", "metadata.xml")
+	if _, err := os.Stat(metaPath); err == nil {
+		t.Error("metadata.xml should not exist on error")
+	}
+}
+
+func TestImport_MissingSourceMetadataIsNotAnError(t *testing.T) {
+	// No metadata.xml in source at all.
+	srcDir := t.TempDir()
+	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
+	os.MkdirAll(srcCat, 0755)
+	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+
+	targetOverlay := t.TempDir()
+	cfg := &ImportConfig{
+		SourceOverlay:   srcDir,
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Prepare:         nil,
+		Log:             &ImportLogger{},
+	}
+
+	_, err := Import("dev-lisp/foo", cfg)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	// Should produce the no-upstream golden
+	got, err := os.ReadFile(filepath.Join(targetOverlay, "dev-lisp", "foo", "metadata.xml"))
+	if err != nil {
+		t.Fatalf("read metadata.xml: %v", err)
+	}
+	want := testdataImportedNoUpstreamGolden()
+	if !bytes.Equal(got, want) {
+		t.Errorf("metadata.xml mismatch\nwant: %q\ngot:  %q", want, string(got))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D9 — Maintainer config required
+// ---------------------------------------------------------------------------
+
+func TestImport_MissingMaintainerConfigIsError(t *testing.T) {
+	srcDir := t.TempDir()
+	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
+	os.MkdirAll(srcCat, 0755)
+	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+
+	targetOverlay := t.TempDir()
+	cfg := &ImportConfig{
+		SourceOverlay:   srcDir,
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "",
+		MaintainerEmail: "x@y",
+		Prepare:         nil,
+		Log:             &ImportLogger{},
+	}
+
+	_, err := Import("dev-lisp/foo", cfg)
+	if err == nil {
+		t.Fatal("expected error for missing maintainer name")
+	}
+	if !strings.Contains(err.Error(), "maintainer not configured") {
+		t.Errorf("error should mention 'maintainer not configured': %v", err)
+	}
+
+	// Target overlay must have zero entries — nothing was written.
+	entries, err := os.ReadDir(targetOverlay)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("target overlay should have 0 entries, got %d", len(entries))
+	}
+}
+
+func TestImport_MissingMaintainerEmailIsError(t *testing.T) {
+	srcDir := t.TempDir()
+	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
+	os.MkdirAll(srcCat, 0755)
+	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+
+	targetOverlay := t.TempDir()
+	cfg := &ImportConfig{
+		SourceOverlay:   srcDir,
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "X",
+		MaintainerEmail: "",
+		Prepare:         nil,
+		Log:             &ImportLogger{},
+	}
+
+	_, err := Import("dev-lisp/foo", cfg)
+	if err == nil {
+		t.Fatal("expected error for missing maintainer email")
+	}
+	if !strings.Contains(err.Error(), "maintainer not configured") {
+		t.Errorf("error should mention 'maintainer not configured': %v", err)
+	}
+}
+
+func TestImport_MaintainerFromConfig(t *testing.T) {
+	srcDir := t.TempDir()
+	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
+	os.MkdirAll(srcCat, 0755)
+	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+
+	targetOverlay := t.TempDir()
+	cfg := &ImportConfig{
+		SourceOverlay:   srcDir,
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Prepare:         nil,
+		Log:             &ImportLogger{},
+	}
+
+	_, err := Import("dev-lisp/foo", cfg)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(targetOverlay, "dev-lisp", "foo", "metadata.xml"))
+	if err != nil {
+		t.Fatalf("read metadata.xml: %v", err)
+	}
+
+	if !strings.Contains(string(got), `<email>web@bennypowers.com</email>`) {
+		t.Errorf("missing expected email in metadata.xml\n%q", string(got))
+	}
+	if !strings.Contains(string(got), `<name>Benny Powers</name>`) {
+		t.Errorf("missing expected name in metadata.xml\n%q", string(got))
+	}
+	// No empty <email></email> or <name></name>
+	if strings.Contains(string(got), "<email></email>") {
+		t.Error("should not contain empty <email> tag")
+	}
+	if strings.Contains(string(got), "<name></name>") {
+		t.Error("should not contain empty <name> tag")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D11 — Prepare hook
+// ---------------------------------------------------------------------------
+
+func TestImport_RunsPrepare(t *testing.T) {
+	srcDir := t.TempDir()
+	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
+	os.MkdirAll(srcCat, 0755)
+	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+
+	targetOverlay := t.TempDir()
+
+	var prepareCalled bool
+	var preparePath string
+	cfg := &ImportConfig{
+		SourceOverlay:   srcDir,
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Prepare: func(ebuildPath string) error {
+			prepareCalled = true
+			preparePath = ebuildPath
+			return nil
+		},
+		Log: &ImportLogger{},
+	}
+
+	result, err := Import("dev-lisp/foo", cfg)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	if !prepareCalled {
+		t.Error("prepare stub was not called")
+	}
+	if preparePath != result.EbuildPath {
+		t.Errorf("prepare called with path %q, want %q", preparePath, result.EbuildPath)
+	}
+	if !result.Prepared {
+		t.Error("result.Prepared should be true")
+	}
+}
+
+func TestImport_PrepareFailureIsReported(t *testing.T) {
+	srcDir := t.TempDir()
+	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
+	os.MkdirAll(srcCat, 0755)
+	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+
+	targetOverlay := t.TempDir()
+
+	cfg := &ImportConfig{
+		SourceOverlay:   srcDir,
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Prepare: func(p string) error {
+			return fmt.Errorf("boom")
+		},
+		Log: &ImportLogger{},
+	}
+
+	result, err := Import("dev-lisp/foo", cfg)
+	if err == nil {
+		t.Fatal("expected error from prepare failure")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("error should wrap 'boom': %v", err)
+	}
+	if result == nil {
+		t.Fatal("result should not be nil on prepare failure")
+	}
+	if result.EbuildPath == "" {
+		t.Error("result.EbuildPath should be populated")
+	}
+	if result.Prepared {
+		t.Error("result.Prepared should be false on prepare failure")
+	}
+}
+
+func TestImport_DryRunDoesNotPrepare(t *testing.T) {
+	srcDir := t.TempDir()
+	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
+	os.MkdirAll(srcCat, 0755)
+	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+
+	var prepareCalled bool
+	cfg := &ImportConfig{
+		SourceOverlay:   srcDir,
+		TargetOverlay:   t.TempDir(),
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		DryRun:          true,
+		Prepare: func(p string) error {
+			prepareCalled = true
+			return nil
+		},
+		Log: &ImportLogger{},
+	}
+
+	_, err := Import("dev-lisp/foo", cfg)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	if prepareCalled {
+		t.Error("prepare stub should not be called in dry-run mode")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D14 — Provenance lines via logger
+// ---------------------------------------------------------------------------
+
+func TestImport_ProvenanceLines(t *testing.T) {
+	srcDir := t.TempDir()
+	srcCat := filepath.Join(srcDir, "dev-lisp", "foo")
+	os.MkdirAll(srcCat, 0755)
+	os.WriteFile(filepath.Join(srcCat, "foo-1.0.0.ebuild"), []byte("SRC\n"), 0644)
+
+	targetOverlay := t.TempDir()
+
+	log := &ImportLogger{}
+	cfg := &ImportConfig{
+		SourceOverlay:   srcDir,
+		TargetOverlay:   targetOverlay,
+		MaintainerName:  "Benny Powers",
+		MaintainerEmail: "web@bennypowers.com",
+		Prepare:         nil,
+		Log:             log,
+	}
+
+	_, err := Import("dev-lisp/foo", cfg)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	// Check that provenance lines were logged
+	msgs := log.Messages()
+	found := false
+	for _, m := range msgs {
+		if strings.Contains(m, "Importing dev-lisp/foo") && strings.Contains(m, "from ::") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected 'Importing dev-lisp/foo from ::...' in log messages. Got: %v", msgs)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D10 — Never calls GetRemoteIds on nil
+// ---------------------------------------------------------------------------
+// Covered by TestImport_MissingSourceMetadataIsNotAnError
+
+// ---------------------------------------------------------------------------
+// Test data helpers
+// ---------------------------------------------------------------------------
+
+func testdataImportedGolden() []byte {
+	// Tab-indented metadata with upstream remote-id.
+	return []byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
+		"<!DOCTYPE pkgmetadata SYSTEM \"https://www.gentoo.org/dtd/metadata.dtd\">\n" +
+		"<pkgmetadata>\n" +
+		"\t<maintainer type=\"person\">\n" +
+		"\t\t<email>web@bennypowers.com</email>\n" +
+		"\t\t<name>Benny Powers</name>\n" +
+		"\t</maintainer>\n" +
+		"\t<upstream>\n" +
+		"\t\t<remote-id type=\"github\">owner/repo</remote-id>\n" +
+		"\t</upstream>\n" +
+		"</pkgmetadata>\n")
+}
+
+func testdataImportedNoUpstreamGolden() []byte {
+	// Tab-indented metadata without upstream block.
+	return []byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
+		"<!DOCTYPE pkgmetadata SYSTEM \"https://www.gentoo.org/dtd/metadata.dtd\">\n" +
+		"<pkgmetadata>\n" +
+		"\t<maintainer type=\"person\">\n" +
+		"\t\t<email>web@bennypowers.com</email>\n" +
+		"\t\t<name>Benny Powers</name>\n" +
+		"\t</maintainer>\n" +
+		"</pkgmetadata>\n")
 }

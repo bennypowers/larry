@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"bennypowers.dev/larry/internal/importcmd"
 
@@ -40,8 +39,7 @@ the local overlay at the same category/package path.
 The target overlay (where the ebuild is imported to) is auto-detected from the
 local git repository (same resolution as all other larry commands).
 
-After importing, run 'larry prepare' on the imported ebuild to run the
-appropriate type-specific pipeline (npm, cargo, go, vendored, or generic).
+The imported ebuild is prepared automatically; use 'larry prepare' to re-run it.
 
 Examples:
   larry import dev-lisp/sbcl-unicode-dictionary  # Import to local overlay
@@ -60,11 +58,13 @@ Examples:
 		}
 
 		importCfg := &importcmd.ImportConfig{
-			SourceOverlay: importFrom,
-			TargetOverlay: targetOverlay,
-			DryRun:        importDry,
-			Force:         importForce,
-			// ReposRoot defaults to /var/db/repos inside resolveSourceOverlay.
+			SourceOverlay:   importFrom,
+			TargetOverlay:   targetOverlay,
+			DryRun:          importDry,
+			Force:           importForce,
+			MaintainerName:  cfg.MaintainerName,
+			MaintainerEmail: cfg.MaintainerEmail,
+			Log:             newCLILogger(cmd),
 		}
 
 		result, err := importcmd.Import(catPkg, importCfg)
@@ -86,11 +86,14 @@ Examples:
 		log.Msg("  Ebuild: %s", result.EbuildPath)
 		log.Msg("  Metadata: %s", result.MetaPath)
 
-		// Print next steps
-		ebuildDir := filepath.Dir(result.EbuildPath)
-		ebuildRel := ebuildDir
-		log.Msg("Run 'larry prepare %s' to prepare the ebuild for commit.", ebuildRel)
-
 		return nil
 	},
+}
+
+// newCLILogger wraps the cobra command's output writers into an importcmd.ImportLogger.
+func newCLILogger(cmd *cobra.Command) *importcmd.ImportLogger {
+	l := &importcmd.ImportLogger{}
+	l.SetOut(cmd.OutOrStdout())
+	l.SetErr(cmd.ErrOrStderr())
+	return l
 }
