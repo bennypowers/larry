@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -355,7 +356,7 @@ KEYWORDS="~amd64"
 	os.WriteFile(ebuildPath, []byte(ebuildContent), 0644)
 
 	crates := parseCargoLock(lockContent)
-	err := updateCargoEbuildNative(ebuildPath, crates)
+	_, err := updateCargoEbuildNative(ebuildPath, crates)
 	if err != nil {
 		t.Fatalf("updateCargoEbuildNative returned error: %v", err)
 	}
@@ -377,7 +378,7 @@ func TestCargo_Pipeline_AllToolsUnavailable(t *testing.T) {
 	}
 	// Native parsing always works as fallback, so this test
 	// verifies the error path when even native parsing fails
-	err = updateCargoEbuildNative("/nonexistent/ebuild", []CargoCrate{})
+	_, err = updateCargoEbuildNative("/nonexistent/ebuild", []CargoCrate{})
 	if err == nil {
 		t.Fatal("expected error for nonexistent ebuild path")
 	}
@@ -418,7 +419,7 @@ KEYWORDS="~amd64"
 		{Name: "aho-corasick", Version: "1.1.2"},
 	}
 
-	err := updateCargoEbuildNative(ebuildPath, crates)
+	_, err := updateCargoEbuildNative(ebuildPath, crates)
 	if err != nil {
 		t.Fatalf("updateCargoEbuildNative returned error: %v", err)
 	}
@@ -463,7 +464,7 @@ KEYWORDS="~amd64"
 	os.WriteFile(ebuildPath, []byte(content), 0644)
 
 	// Create a bad crates list to simulate a failure
-	err := updateCargoEbuildNative(ebuildPath, nil)
+	_, err := updateCargoEbuildNative(ebuildPath, nil)
 	if err != nil {
 		t.Fatalf("updateCargoEbuildNative returned error: %v", err)
 	}
@@ -716,17 +717,15 @@ checksum = "abc123"
 }
 
 func TestCargo_ParseCargoLock_GitCrate(t *testing.T) {
+	// D1: git-sourced crates are filtered out — the cargo eclass cannot resolve them.
 	lockContent := `[[package]]
 name = "git-dep"
 version = "0.1.0"
 source = "git+https://github.com/user/repo?rev=abc123#abc123def"
 `
 	crates := parseCargoLock(lockContent)
-	if len(crates) != 1 {
-		t.Fatalf("parseCargoLock returned %d crates, want 1", len(crates))
-	}
-	if crates[0].Name != "git-dep" {
-		t.Errorf("crates[0].Name = %q, want %q", crates[0].Name, "git-dep")
+	if len(crates) != 0 {
+		t.Fatalf("parseCargoLock returned %d crates, want 0 (git sources filtered)", len(crates))
 	}
 }
 
@@ -864,4 +863,427 @@ func TestCargo_ParseCargoLockJSON(t *testing.T) {
 	if result.DownloadURL == "" {
 		t.Error("JSON download_url is empty")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// D1 — parseCargoLock only accepts registry+ sources
+// ---------------------------------------------------------------------------
+
+func TestParseCargoLock_OnlyRegistryCrates(t *testing.T) {
+	lockContent := `[[package]]
+name = "aho-corasick"
+version = "1.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2969dcb958b36655471fc61f7e416fa76033bdd4bfed0678d8fee1e2d07a1f0"
+
+[[package]]
+name = "local-fork"
+version = "0.1.0"
+source = "git+https://github.com/x/y?rev=abc#abc"
+
+[[package]]
+name = "nirius"
+version = "0.7.1"
+`
+	crates := parseCargoLock(lockContent)
+	if len(crates) != 1 {
+		t.Fatalf("parseCargoLock returned %d crates, want 1", len(crates))
+	}
+	if crates[0].Name != "aho-corasick" || crates[0].Version != "1.1.4" {
+		t.Errorf("crates[0] = %+v, want {Name: aho-corasick, Version: 1.1.4}", crates[0])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D2 — formatCRATES dedupes and sorts
+// ---------------------------------------------------------------------------
+
+func TestFormatCRATES_DedupeAndSort(t *testing.T) {
+	crates := []CargoCrate{
+		{Name: "b", Version: "2.0"},
+		{Name: "a", Version: "1.0"},
+		{Name: "b", Version: "2.0"},
+	}
+	result := formatCRATES(crates)
+	want := "\n\ta@1.0\n\tb@2.0\n"
+	if result != want {
+		t.Errorf("formatCRATES() = %q, want %q", result, want)
+	}
+}
+
+func TestFormatCRATES_Empty(t *testing.T) {
+	result := formatCRATES(nil)
+	want := "\n"
+	if result != want {
+		t.Errorf("formatCRATES(nil) = %q, want %q", result, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D3 — updateCargoEbuildNative: replace-or-insert
+// ---------------------------------------------------------------------------
+
+func TestUpdateCratesBlock_Replace(t *testing.T) {
+	fixturesDir := filepath.Join("testdata", "ebuilds")
+	src, err := os.ReadFile(filepath.Join(fixturesDir, "cargo-literal-crates.ebuild"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	ebuildPath := filepath.Join(tmpDir, "nirius-0.7.1.ebuild")
+	if err := os.WriteFile(ebuildPath, src, 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	crates := []CargoCrate{
+		{Name: "a", Version: "1.0"},
+		{Name: "b", Version: "2.0"},
+	}
+	count, err := updateCargoEbuildNative(ebuildPath, crates)
+	if err != nil {
+		t.Fatalf("updateCargoEbuildNative returned error: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("updateCargoEbuildNative() count = %d, want 2", count)
+	}
+
+	updated, err := os.ReadFile(ebuildPath)
+	if err != nil {
+		t.Fatalf("read updated ebuild: %v", err)
+	}
+
+	wantBlock := "\n\ta@1.0\n\tb@2.0\n"
+	want := "CRATES=\"" + wantBlock + "\""
+	if !strings.Contains(string(updated), want) {
+		t.Errorf("updated ebuild missing CRATES block:\n%s", string(updated))
+	}
+	// Assert original 40 entries are gone
+	if strings.Contains(string(updated), "aho-corasick@1.1.4") {
+		t.Error("original crate aho-corasick@1.1.4 should have been replaced")
+	}
+}
+
+func TestUpdateCratesBlock_Append(t *testing.T) {
+	fixturesDir := filepath.Join("testdata", "ebuilds")
+	src, err := os.ReadFile(filepath.Join(fixturesDir, "cargo-no-crates.ebuild"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	ebuildPath := filepath.Join(tmpDir, "test-crate-1.0.0.ebuild")
+	if err := os.WriteFile(ebuildPath, src, 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	crates := []CargoCrate{{Name: "a", Version: "1.0"}}
+	count, err := updateCargoEbuildNative(ebuildPath, crates)
+	if err != nil {
+		t.Fatalf("updateCargoEbuildNative returned error: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+
+	updated, err := os.ReadFile(ebuildPath)
+	if err != nil {
+		t.Fatalf("read updated ebuild: %v", err)
+	}
+
+	if !strings.Contains(string(updated), "CRATES=\"\n\ta@1.0\n\"") {
+		t.Errorf("updated ebuild missing inserted CRATES block:\n%s", string(updated))
+	}
+
+	// Ordering guard: CRATES= must appear before inherit
+	if strings.Index(string(updated), "CRATES=") >= strings.Index(string(updated), "inherit") {
+		t.Error("CRATES= must appear before inherit")
+	}
+}
+
+func TestUpdateCratesBlock_NoInheritLine(t *testing.T) {
+	fixturesDir := filepath.Join("testdata", "ebuilds")
+	src, err := os.ReadFile(filepath.Join(fixturesDir, "cargo-no-inherit.ebuild"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	ebuildPath := filepath.Join(tmpDir, "test.ebuild")
+	if err := os.WriteFile(ebuildPath, src, 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	crates := []CargoCrate{{Name: "x", Version: "0.1"}}
+	_, err = updateCargoEbuildNative(ebuildPath, crates)
+	if err != nil {
+		t.Fatalf("updateCargoEbuildNative returned error: %v", err)
+	}
+
+	updated, err := os.ReadFile(ebuildPath)
+	if err != nil {
+		t.Fatalf("read updated ebuild: %v", err)
+	}
+
+	// CRATES= should appear after EAPI= but before any other content
+	if strings.Index(string(updated), "CRATES=") <= strings.Index(string(updated), "EAPI=") {
+		t.Error("CRATES= should appear after EAPI= line")
+	}
+}
+
+func TestUpdateCratesBlock_PreservesRestOfFile(t *testing.T) {
+	fixturesDir := filepath.Join("testdata", "ebuilds")
+	src, err := os.ReadFile(filepath.Join(fixturesDir, "cargo-literal-crates.ebuild"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	ebuildPath := filepath.Join(tmpDir, "nirius-0.7.1.ebuild")
+	if err := os.WriteFile(ebuildPath, src, 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	// Find the CRATES= block boundaries in the original
+	cratesStartRe := regexp.MustCompile(`(?sm)^CRATES\s*=\s*"`)
+	cratesEndRe := regexp.MustCompile(`(?sm)^"\s*$`)
+	startMatch := cratesStartRe.FindIndex(src)
+	var endMatch []int
+	// Find the closing quote after the start
+	if startMatch != nil {
+		rest := src[startMatch[1]:]
+		endSub := cratesEndRe.FindIndex(rest)
+		if endSub != nil {
+			endMatch = []int{startMatch[1] + endSub[0], startMatch[1] + endSub[1]}
+		}
+	}
+
+	crates := []CargoCrate{
+		{Name: "new-one", Version: "9.9.9"},
+	}
+	_, err = updateCargoEbuildNative(ebuildPath, crates)
+	if err != nil {
+		t.Fatalf("updateCargoEbuildNative returned error: %v", err)
+	}
+
+	updated, err := os.ReadFile(ebuildPath)
+	if err != nil {
+		t.Fatalf("read updated ebuild: %v", err)
+	}
+
+	// If we found both boundaries, verify byte-for-byte preservation
+	if startMatch != nil && endMatch != nil {
+		pre := string(src[:startMatch[0]])
+		post := string(src[endMatch[1]:])
+		wantBlock := "\n\tnew-one@9.9.9\n"
+		want := pre + "CRATES=\"" + wantBlock + "\"" + post
+		if string(updated) != want {
+			t.Errorf("file not preserved byte-for-byte outside CRATES= block.\n--- want\n+++ got\n%s",
+				diffStrings(want, string(updated)))
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D11 — lookPath seam (pycargoebuild absent → native path)
+// ---------------------------------------------------------------------------
+
+func TestCargo_FallsBackToNativeWhenPycargoebuildAbsent(t *testing.T) {
+	orig := lookPath
+	t.Cleanup(func() { lookPath = orig })
+
+	lookPath = func(name string) (string, error) {
+		if name == "pycargoebuild" {
+			return "", exec.ErrNotFound
+		}
+		return orig(name)
+	}
+
+	fixturesDir := filepath.Join("testdata", "ebuilds")
+	src, err := os.ReadFile(filepath.Join(fixturesDir, "cargo-no-crates.ebuild"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	ebuildPath := filepath.Join(tmpDir, "test-crate-1.0.0.ebuild")
+	if err := os.WriteFile(ebuildPath, src, 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	crates := []CargoCrate{{Name: "a", Version: "1.0"}}
+	_, err = updateCargoEbuildNative(ebuildPath, crates)
+	if err != nil {
+		t.Fatalf("updateCargoEbuildNative returned error: %v", err)
+	}
+
+	updated, err := os.ReadFile(ebuildPath)
+	if err != nil {
+		t.Fatalf("read updated ebuild: %v", err)
+	}
+
+	if !strings.Contains(string(updated), "CRATES=\"\n\ta@1.0\n\"") {
+		t.Errorf("native path did not insert CRATES block:\n%s", string(updated))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// D9 — backup / rollback / no-bak
+// ---------------------------------------------------------------------------
+
+// TestCargo_RollbackOnManifestFailure tests that PrepareCargo restores the
+// ebuild and removes the .bak when the manifest step fails.
+func TestCargo_RollbackOnManifestFailure(t *testing.T) {
+	fixturesDir := filepath.Join("testdata", "ebuilds")
+	src, err := os.ReadFile(filepath.Join(fixturesDir, "cargo-literal-crates.ebuild"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	overlayDir := filepath.Join(tmpDir, "overlay")
+	pkgDir := filepath.Join(overlayDir, "gui-apps", "nirius")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatalf("mkdir pkg dir: %v", err)
+	}
+
+	ebuildPath := filepath.Join(pkgDir, "nirius-0.7.1.ebuild")
+	if err := os.WriteFile(ebuildPath, src, 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	// Stub lookPath to skip pycargoebuild (use native path)
+	origLP := lookPath
+	lookPath = func(name string) (string, error) {
+		if name == "pycargoebuild" {
+			return "", exec.ErrNotFound
+		}
+		return origLP(name)
+	}
+	t.Cleanup(func() { lookPath = origLP })
+
+	// Parse Cargo.lock and update ebuild
+	lockContent := `[[package]]
+name = "aho-corasick"
+version = "1.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+`
+	crates := parseCargoLock(lockContent)
+
+	// Backup + update (simulates PrepareCargo steps 3-4)
+	if err := Backup(ebuildPath); err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	defer os.Remove(ebuildPath + ".bak")
+
+	count, err := updateCargoEbuildNative(ebuildPath, crates)
+	if err != nil {
+		t.Fatalf("updateCargoEbuildNative: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+
+	// Verify ebuild was modified
+	modified, _ := os.ReadFile(ebuildPath)
+	if string(modified) == string(src) {
+		t.Fatal("ebuild should have been modified")
+	}
+
+	// Simulate manifest failure → restore
+	if err := Restore(ebuildPath); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	// Verify ebuild is back to original
+	restored, err := os.ReadFile(ebuildPath)
+	if err != nil {
+		t.Fatalf("read restored ebuild: %v", err)
+	}
+	if string(restored) != string(src) {
+		t.Error("restored content differs from original")
+	}
+
+	// Verify .bak still exists (defer will clean up)
+	if _, err := os.Stat(ebuildPath + ".bak"); os.IsNotExist(err) {
+		t.Fatal(".bak should still exist after Restore")
+	}
+}
+
+func TestCargo_NoBakFileOnSuccess(t *testing.T) {
+	fixturesDir := filepath.Join("testdata", "ebuilds")
+	src, err := os.ReadFile(filepath.Join(fixturesDir, "cargo-literal-crates.ebuild"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	overlayDir := filepath.Join(tmpDir, "overlay")
+	pkgDir := filepath.Join(overlayDir, "gui-apps", "nirius")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatalf("mkdir pkg dir: %v", err)
+	}
+
+	ebuildPath := filepath.Join(pkgDir, "nirius-0.7.1.ebuild")
+	if err := os.WriteFile(ebuildPath, src, 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	// Stub lookPath to skip pycargoebuild
+	origLP := lookPath
+	lookPath = func(name string) (string, error) {
+		if name == "pycargoebuild" {
+			return "", exec.ErrNotFound
+		}
+		return origLP(name)
+	}
+	t.Cleanup(func() { lookPath = origLP })
+
+	// Simulate the success path: backup → update → manifest success → restore → remove .bak
+	if err := Backup(ebuildPath); err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	defer os.Remove(ebuildPath + ".bak")
+
+	lockContent := `[[package]]
+name = "aho-corasick"
+version = "1.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+`
+	crates := parseCargoLock(lockContent)
+
+	_, err = updateCargoEbuildNative(ebuildPath, crates)
+	if err != nil {
+		t.Fatalf("updateCargoEbuildNative: %v", err)
+	}
+
+	// Simulate manifest success: restore the original and remove .bak
+	if err := Restore(ebuildPath); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	// Simulate caller's defer os.Remove(.bak)
+	os.Remove(ebuildPath + ".bak")
+
+	// Verify .bak does NOT exist
+	if _, err := os.Stat(ebuildPath + ".bak"); !os.IsNotExist(err) {
+		t.Error(".bak file should not exist after success")
+	}
+
+	// Verify ebuild is restored
+	restored, err := os.ReadFile(ebuildPath)
+	if err != nil {
+		t.Fatalf("read restored ebuild: %v", err)
+	}
+	if string(restored) != string(src) {
+		t.Error("restored content differs from original")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Helper: diff two strings (for test output)
+// ---------------------------------------------------------------------------
+
+func diffStrings(a, b string) string {
+	return "=== want ===\n" + a + "\n=== got ===\n" + b
 }

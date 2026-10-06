@@ -14,7 +14,13 @@ import (
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
 	"bennypowers.dev/larry/internal/httpclient"
+	"bennypowers.dev/larry/internal/logger"
+	"sort"
 )
+
+// lookPath is exec.LookPath, stubbable so tests can exercise the native parser
+// even on a workstation that has pycargoebuild installed.
+var lookPath = exec.LookPath
 
 // CargoCrate represents a parsed entry from Cargo.lock.
 type CargoCrate struct {
@@ -54,10 +60,11 @@ func PrepareCargo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 
 	// 4. Generate CRATES variable and update ebuild
 	cratesStr := formatCRATES(crates)
-	err = updateCargoEbuild(ei, cratesStr, crates, cfg)
+	count, err := updateCargoEbuild(ei, cratesStr, crates, cfg)
 	if err != nil {
 		return fmt.Errorf("cargo: update ebuild: %w", err)
 	}
+	logger.Debug("updated CRATES with " + fmt.Sprintf("%d", count) + " crate entries")
 
 	// 5. Generate Manifest
 	if err := runManifest(manifestRequest{
@@ -272,6 +279,12 @@ func parseCargoLock(content string) []CargoCrate {
 			continue
 		}
 
+		// D1: Only accept registry+ sources. Git-sourced deps land in CRATES=
+		// and the cargo eclass cannot resolve them.
+		if !strings.HasPrefix(source, "registry+") {
+			continue
+		}
+
 		crates = append(crates, CargoCrate{
 			Name:    name,
 			Version: version,
@@ -283,25 +296,42 @@ func parseCargoLock(content string) []CargoCrate {
 }
 
 // formatCRATES formats a list of CargoCrate into CRATES variable content.
+// De-duplicates and byte-sorts entries (matching script's `sort -u`).
 func formatCRATES(crates []CargoCrate) string {
+	if len(crates) == 0 {
+		return "\n"
+	}
+	// Build "name@version" keys, deduplicate, sort
+	seen := make(map[string]struct{}, len(crates))
+	keys := make([]string, 0, len(crates))
+	for _, c := range crates {
+		key := c.Name + "@" + c.Version
+		if _, ok := seen[key]; !ok {
+			seen[key] = struct{}{}
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+
 	var sb strings.Builder
 	sb.WriteString("\n")
-	for _, c := range crates {
-		sb.WriteString(fmt.Sprintf("\t%s@%s\n", c.Name, c.Version))
+	for _, k := range keys {
+		sb.WriteString("\t" + k + "\n")
 	}
 	return sb.String()
 }
 
 // updateCargoEbuild updates the CRATES variable in an ebuild file.
-func updateCargoEbuild(ei *ebuild.EbuildInfo, cratesStr string, crates []CargoCrate, cfg *PrepareConfig) error {
+// Returns the number of crate entries written.
+func updateCargoEbuild(ei *ebuild.EbuildInfo, cratesStr string, crates []CargoCrate, cfg *PrepareConfig) (int, error) {
 	ebuildPath := ei.Path
 
 	if cfg.DryRun {
-		return nil
+		return 0, nil
 	}
 
 	// Check if pycargoebuild is available for better update
-	_, pycargoErr := exec.LookPath("pycargoebuild")
+	_, pycargoErr := lookPath("pycargoebuild")
 	if pycargoErr == nil {
 		// Try pycargoebuild --inplace update
 		tmpDir := filepath.Dir(ebuildPath)
@@ -326,9 +356,10 @@ edition = "2021"
 				runner := github.NewClient().Runner()
 				if err := runPycargoebuild(tmpDir, ebuildPath, runner); err != nil {
 					// pycargoebuild failed, fall through to native
-					return updateCargoEbuildNative(ebuildPath, crates)
+					count, err := updateCargoEbuildNative(ebuildPath, crates)
+					return count, err
 				}
-				return nil
+				return 0, nil
 			}
 		}
 	}
@@ -344,24 +375,95 @@ func runPycargoebuild(dir, ebuildPath string, runner github.CmdRunner) error {
 	return runner.Run(cmd)
 }
 
-// updateCargoEbuildNative updates the CRATES variable in the ebuild using native parsing.
-func updateCargoEbuildNative(ebuildPath string, crates []CargoCrate) error {
+// updateCargoEbuildNative replaces an existing CRATES="…" block, or inserts one when
+// absent. Returns the number of crate entries written.
+//
+// Algorithm:
+//
+//	1. If a CRATES="…" block exists (anchored at line start), replace it.
+//	2. Otherwise insert before the first "inherit" line.
+//	3. If no "inherit" line, insert after the "EAPI=" line.
+//	4. If no "EAPI=" line, prepend to the file.
+func updateCargoEbuildNative(ebuildPath string, crates []CargoCrate) (int, error) {
 	content, err := os.ReadFile(ebuildPath)
 	if err != nil {
-		return fmt.Errorf("read ebuild: %w", err)
+		return 0, fmt.Errorf("read ebuild: %w", err)
 	}
 
 	cratesStr := formatCRATES(crates)
 
-	// Replace CRATES="..." with new CRATES="..." (handles multiline)
-	cratesRe := regexp.MustCompile(`(?s)CRATES\s*=\s*"[^"]*"`)
-	newContent := cratesRe.ReplaceAllString(string(content), `CRATES="`+cratesStr+`"`)
+	// Count the number of deduplicated entries for the return value.
+	seen := make(map[string]struct{})
+	for _, c := range crates {
+		key := c.Name + "@" + c.Version
+		seen[key] = struct{}{}
+	}
+	entryCount := len(seen)
 
-	if err := os.WriteFile(ebuildPath, []byte(newContent), 0644); err != nil {
-		return fmt.Errorf("write ebuild: %w", err)
+	newBlock := "CRATES=\"" + cratesStr + "\""
+
+	// 1. Try to replace an existing CRATES="…" block (anchored at line start).
+	cratesRe := regexp.MustCompile(`(?sm)^CRATES\s*=\s*"`)
+	endRe := regexp.MustCompile(`(?sm)^"\s*$`)
+	startMatch := cratesRe.FindIndex(content)
+	if startMatch != nil {
+		// Find the closing quote line after the start.
+		rest := content[startMatch[1]:]
+		endMatch := endRe.FindIndex(rest)
+		if endMatch != nil {
+			// Replace: pre + newBlock + post
+			pre := content[:startMatch[0]]
+			post := content[startMatch[1]+endMatch[1]:]
+			newContent := append(pre, append([]byte(newBlock), post...)...)
+			if err := os.WriteFile(ebuildPath, newContent, 0644); err != nil {
+				return 0, fmt.Errorf("write ebuild: %w", err)
+			}
+			return entryCount, nil
+		}
 	}
 
-	return nil
+	// 2. No existing CRATES= — insert before first "inherit" line.
+	inheritRe := regexp.MustCompile(`(?m)^inherit\b`)
+	inheritMatch := inheritRe.FindIndex(content)
+	if inheritMatch != nil {
+		var sb strings.Builder
+		sb.Write(content[:inheritMatch[0]])
+		sb.WriteString("\n" + newBlock + "\n\n")
+		sb.Write(content[inheritMatch[0]:])
+		newContent := []byte(sb.String())
+		if err := os.WriteFile(ebuildPath, newContent, 0644); err != nil {
+			return 0, fmt.Errorf("write ebuild: %w", err)
+		}
+		return entryCount, nil
+	}
+
+	// 3. No "inherit" — insert after "EAPI=" line.
+	eapiRe := regexp.MustCompile(`(?m)^EAPI=\d+\s*$`)
+	eapiMatch := eapiRe.FindIndex(content)
+	if eapiMatch != nil {
+		afterEapi := content[eapiMatch[1]:]
+		var sb strings.Builder
+		sb.Write(content[:eapiMatch[0]])
+		sb.WriteByte('\n')
+		sb.WriteString(newBlock)
+		sb.WriteString("\n\n")
+		sb.Write(afterEapi)
+		newContent := []byte(sb.String())
+		if err := os.WriteFile(ebuildPath, newContent, 0644); err != nil {
+			return 0, fmt.Errorf("write ebuild: %w", err)
+		}
+		return entryCount, nil
+	}
+
+	// 4. Nothing to anchor to — prepend.
+	var sb strings.Builder
+	sb.WriteString(newBlock + "\n\n")
+	sb.Write(content)
+	newContent := []byte(sb.String())
+	if err := os.WriteFile(ebuildPath, newContent, 0644); err != nil {
+		return 0, fmt.Errorf("write ebuild: %w", err)
+	}
+	return entryCount, nil
 }
 
 
