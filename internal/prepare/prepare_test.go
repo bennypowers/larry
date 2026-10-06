@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"bennypowers.dev/larry/internal/ebuild"
+	"bennypowers.dev/larry/internal/output"
 	"bennypowers.dev/larry/internal/upstream"
 )
 
@@ -27,7 +28,6 @@ func TestDetectType_Force(t *testing.T) {
 		{"force_npm", ebuild.TypeNPM, ebuild.TypeNPM},
 		{"force_cargo", ebuild.TypeCargo, ebuild.TypeCargo},
 		{"force_go", ebuild.TypeGo, ebuild.TypeGo},
-		{"force_rpi", ebuild.TypeRpiKernel, ebuild.TypeRpiKernel},
 		{"force_vendored", ebuild.TypeVendored, ebuild.TypeVendored},
 		{"force_generic", ebuild.TypeGeneric, ebuild.TypeGeneric},
 	}
@@ -655,5 +655,94 @@ SRC_URI="mirror://test/my-pkg-1.0.0.tar.gz"
 	// Otherwise it will fail because the distfile doesn't exist
 	if err != nil {
 		t.Logf("Prepare_Generic_RealManifest returned: %v (expected if distfile missing)", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Plan 25a: rpi-kernel warning in generic pipeline
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Plan 25a: example script test
+// ---------------------------------------------------------------------------
+
+func TestExampleRpiScriptExists(t *testing.T) {
+	// docs/examples/rpi-kernel-prepare.sh must exist, be executable, and
+	// have a proper shebang.
+	// go test runs from the package dir, so go up two levels to project root.
+	pwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	path := filepath.Join(pwd, "..", "..", "docs", "examples", "rpi-kernel-prepare.sh")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat rpi-kernel-prepare.sh: %v", err)
+	}
+	if info.IsDir() {
+		t.Fatal("rpi-kernel-prepare.sh is a directory")
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Error("rpi-kernel-prepare.sh is not executable")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read rpi-kernel-prepare.sh: %v", err)
+	}
+	firstLine := strings.SplitN(string(data), "\n", 2)[0]
+	if firstLine != "#!/bin/sh" && firstLine != "#!/usr/bin/env bash" {
+		t.Errorf("first line = %q, want #!/bin/sh or #!/usr/bin/env bash", firstLine)
+	}
+}
+
+func TestPrepare_RpiKernelEbuildWarnsManifestOnly(t *testing.T) {
+	// A1 — generic pipeline emits a warning pointing at files/prepare.sh.
+	// The ebuild is unchanged; dry-run avoids needing a real manifest.
+	pkgDir := t.TempDir()
+	ebuildPath := filepath.Join(pkgDir, "rpi-6.18.46_p20260824.ebuild")
+	content := `EAPI=8
+inherit linux-info
+COMMIT="deadbeef"
+`
+	if err := os.WriteFile(ebuildPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a logger that captures stderr.
+	var warnBuf strings.Builder
+	lgr, err := output.NewLogger(0, false, nil)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	lgr.SetErr(&warnBuf)
+
+	info, err := upstream.ParseEbuildInfo(ebuildPath)
+	if err != nil {
+		t.Fatalf("ParseEbuildInfo: %v", err)
+	}
+
+	cfg := &PrepareConfig{
+		DryRun:  true,
+		Distdir: t.TempDir(),
+		Log:     lgr,
+	}
+
+	err = Prepare(info, cfg)
+	if err != nil {
+		t.Fatalf("Prepare returned error: %v", err)
+	}
+
+	// Check the warning was emitted.
+	if !strings.Contains(warnBuf.String(), genericManifestOnlyWarning) {
+		t.Errorf("stderr = %q, want substring %q", warnBuf.String(), genericManifestOnlyWarning)
+	}
+
+	// Check the ebuild is unchanged.
+	restored, err := os.ReadFile(ebuildPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restored) != content {
+		t.Errorf("ebuild changed: %q -> %q", content, string(restored))
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"bennypowers.dev/larry/internal/ebuild"
+	"bennypowers.dev/larry/internal/output"
 )
 
 // ---------------------------------------------------------------------------
@@ -14,6 +15,13 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestPrepare_CustomScript_Detected(t *testing.T) {
+	// Stub ManifestRunner so the manifest call doesn't fail.
+	orig := ManifestRunner
+	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
+		return nil
+	}
+	t.Cleanup(func() { ManifestRunner = orig })
+
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "example-1.0.ebuild")
 	filesDir := filepath.Join(tmpDir, "files")
@@ -73,6 +81,13 @@ func TestPrepare_CustomScript_Skipped(t *testing.T) {
 }
 
 func TestPrepare_CustomScript_DryRun(t *testing.T) {
+	// Stub ManifestRunner (not needed in dry-run but safe).
+	orig := ManifestRunner
+	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
+		return nil
+	}
+	t.Cleanup(func() { ManifestRunner = orig })
+
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "example-1.0.ebuild")
 	filesDir := filepath.Join(tmpDir, "files")
@@ -142,9 +157,20 @@ func TestPrepare_CustomScript_Failure(t *testing.T) {
 	if !strings.Contains(err.Error(), "custom prepare script") {
 		t.Errorf("expected custom prepare error, got: %v", err)
 	}
+	// No .bak should remain after rollback.
+	if _, err := os.Stat(ebuildPath + ".bak"); !os.IsNotExist(err) {
+		t.Error(".bak should not remain after rollback")
+	}
 }
 
 func TestPrepare_CustomScript_EnvVars(t *testing.T) {
+	// Stub ManifestRunner so the manifest call doesn't fail.
+	orig := ManifestRunner
+	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
+		return nil
+	}
+	t.Cleanup(func() { ManifestRunner = orig })
+
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "example-1.0.ebuild")
 	filesDir := filepath.Join(tmpDir, "files")
@@ -209,6 +235,13 @@ func TestPrepare_CustomScript_EnvVars(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPrepare_GenericNoCustomScript(t *testing.T) {
+	// Stub ManifestRunner so generic pipeline doesn't fail.
+	orig := ManifestRunner
+	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
+		return nil
+	}
+	t.Cleanup(func() { ManifestRunner = orig })
+
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "example-1.0.ebuild")
 
@@ -253,6 +286,15 @@ func TestRunCustomPrepare_DryRun(t *testing.T) {
 	scriptPath := filepath.Join(filesDir, "prepare.sh")
 	os.WriteFile(scriptPath, []byte("#!/bin/sh\necho ran\n"), 0755)
 
+	// Stub ManifestRunner so dry-run + manifest call doesn't fail.
+	rec := newRecorder()
+	orig := ManifestRunner
+	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
+		rec.record(bin, args, dir, env)
+		return nil
+	}
+	t.Cleanup(func() { ManifestRunner = orig })
+
 	ei := &ebuild.EbuildInfo{
 		Path: ebuildPath,
 		Pkg:  "test",
@@ -265,23 +307,36 @@ func TestRunCustomPrepare_DryRun(t *testing.T) {
 	}
 
 	// Should not execute the script in dry-run mode
-	// We can't easily verify it didn't run without a marker file,
-	// but the important thing is no error
 	err := runCustomPrepare(ei, scriptPath, cfg)
 	if err != nil {
 		t.Fatalf("runCustomPrepare dry-run returned error: %v", err)
 	}
+	// ManifestRunner should NOT have been called in dry-run.
+	if rec.called() {
+		t.Error("ManifestRunner should not be called in dry-run mode")
+	}
 }
 
 func TestRunCustomPrepare_Success(t *testing.T) {
-	tmpDir := t.TempDir()
-	ebuildPath := filepath.Join(tmpDir, "test-1.0.ebuild")
-	filesDir := filepath.Join(tmpDir, "files")
-	os.MkdirAll(filesDir, 0755)
+	// Proper dir structure: <tmpdir>/test/test-1.0.ebuild
+	pkgDir := filepath.Join(t.TempDir(), "test")
+	ebuildPath := filepath.Join(pkgDir, "test-1.0.ebuild")
+	os.MkdirAll(pkgDir, 0755)
 	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
 
+	filesDir := filepath.Join(pkgDir, "files")
+	os.MkdirAll(filesDir, 0755)
 	scriptPath := filepath.Join(filesDir, "prepare.sh")
 	os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	// Stub ManifestRunner so the manifest call doesn't try a real tool.
+	rec := newRecorder()
+	orig := ManifestRunner
+	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
+		rec.record(bin, args, dir, env)
+		return nil
+	}
+	t.Cleanup(func() { ManifestRunner = orig })
 
 	ei := &ebuild.EbuildInfo{
 		Path: ebuildPath,
@@ -290,21 +345,27 @@ func TestRunCustomPrepare_Success(t *testing.T) {
 		PVal: "test-1.0",
 	}
 	cfg := &PrepareConfig{
-		Distdir: tmpDir,
+		Distdir: t.TempDir(),
 	}
 
 	err := runCustomPrepare(ei, scriptPath, cfg)
 	if err != nil {
 		t.Fatalf("runCustomPrepare returned error: %v", err)
 	}
+	// Manifest should have been called.
+	if !rec.called() {
+		t.Error("ManifestRunner should have been called")
+	}
 }
 
 func TestRunCustomPrepare_Failure(t *testing.T) {
-	tmpDir := t.TempDir()
-	ebuildPath := filepath.Join(tmpDir, "test-1.0.ebuild")
-	filesDir := filepath.Join(tmpDir, "files")
-	os.MkdirAll(filesDir, 0755)
+	// Proper dir structure: <tmpdir>/test/test-1.0.ebuild
+	pkgDir := filepath.Join(t.TempDir(), "test")
+	ebuildPath := filepath.Join(pkgDir, "test-1.0.ebuild")
+	os.MkdirAll(pkgDir, 0755)
 	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	filesDir := filepath.Join(pkgDir, "files")
+	os.MkdirAll(filesDir, 0755)
 
 	scriptPath := filepath.Join(filesDir, "prepare.sh")
 	os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 42\n"), 0755)
@@ -316,7 +377,7 @@ func TestRunCustomPrepare_Failure(t *testing.T) {
 		PVal: "test-1.0",
 	}
 	cfg := &PrepareConfig{
-		Distdir: tmpDir,
+		Distdir: t.TempDir(),
 	}
 
 	err := runCustomPrepare(ei, scriptPath, cfg)
@@ -326,11 +387,16 @@ func TestRunCustomPrepare_Failure(t *testing.T) {
 	if !strings.Contains(err.Error(), "custom prepare script") {
 		t.Errorf("expected 'custom prepare script' in error, got: %v", err)
 	}
+	// No .bak should remain after rollback.
+	if _, err := os.Stat(ebuildPath + ".bak"); !os.IsNotExist(err) {
+		t.Error(".bak file should not remain after rollback")
+	}
 }
 
 func TestRunCustomPrepare_ScriptNotFound(t *testing.T) {
-	tmpDir := t.TempDir()
-	ebuildPath := filepath.Join(tmpDir, "test-1.0.ebuild")
+	pkgDir := filepath.Join(t.TempDir(), "test")
+	ebuildPath := filepath.Join(pkgDir, "test-1.0.ebuild")
+	os.MkdirAll(pkgDir, 0755)
 	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
 
 	ei := &ebuild.EbuildInfo{
@@ -340,10 +406,10 @@ func TestRunCustomPrepare_ScriptNotFound(t *testing.T) {
 		PVal: "test-1.0",
 	}
 	cfg := &PrepareConfig{
-		Distdir: tmpDir,
+		Distdir: t.TempDir(),
 	}
 
-	// Script doesn't exist — this shouldn't be called, but let's verify
+	// Script doesn't exist — exec.Command will fail.
 	err := runCustomPrepare(ei, "/nonexistent/prepare.sh", cfg)
 	if err == nil {
 		t.Fatal("expected error for non-existent script")
@@ -351,17 +417,25 @@ func TestRunCustomPrepare_ScriptNotFound(t *testing.T) {
 }
 
 func TestRunCustomPrepare_UsesCmdDir(t *testing.T) {
-	tmpDir := t.TempDir()
-	ebuildPath := filepath.Join(tmpDir, "test-1.0.ebuild")
-	filesDir := filepath.Join(tmpDir, "files")
-	os.MkdirAll(filesDir, 0755)
+	// Proper dir structure: <tmpdir>/test/test-1.0.ebuild
+	pkgDir := filepath.Join(t.TempDir(), "test")
+	ebuildPath := filepath.Join(pkgDir, "test-1.0.ebuild")
+	os.MkdirAll(pkgDir, 0755)
 	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
 
 	// Create script that writes CWD to a file
-	marker := filepath.Join(tmpDir, "marker.txt")
-	scriptPath := filepath.Join(filesDir, "prepare.sh")
+	marker := filepath.Join(pkgDir, "marker.txt")
+	os.MkdirAll(filepath.Join(pkgDir, "files"), 0755)
+	scriptPath := filepath.Join(pkgDir, "files", "prepare.sh")
 	script := "#!/bin/sh\npwd > " + marker + "\n"
 	os.WriteFile(scriptPath, []byte(script), 0755)
+
+	// Stub ManifestRunner so the manifest call doesn't fail.
+	orig := ManifestRunner
+	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
+		return nil
+	}
+	t.Cleanup(func() { ManifestRunner = orig })
 
 	ei := &ebuild.EbuildInfo{
 		Path: ebuildPath,
@@ -370,7 +444,7 @@ func TestRunCustomPrepare_UsesCmdDir(t *testing.T) {
 		PVal: "test-1.0",
 	}
 	cfg := &PrepareConfig{
-		Distdir: tmpDir,
+		Distdir: t.TempDir(),
 	}
 
 	err := runCustomPrepare(ei, scriptPath, cfg)
@@ -383,9 +457,70 @@ func TestRunCustomPrepare_UsesCmdDir(t *testing.T) {
 		t.Fatalf("Failed to read marker: %v", err)
 	}
 
-	// Script should have run with Dir = filepath.Dir(ebuildPath) = tmpDir
-	expectedCwd := tmpDir + "\n"
+	// Script should have run with Dir = filepath.Dir(ebuildPath) = pkgDir
+	expectedCwd := pkgDir + "\n"
 	if string(cwd) != expectedCwd {
 		t.Errorf("Script ran with wrong dir: got %q, want %q", string(cwd), expectedCwd)
+	}
+}
+
+// TestRunCustomPrepare_SandboxWarningSuppressible verifies the sandbox
+// warning uses the logger's Warn method (quiet-suppressed).
+func TestRunCustomPrepare_SandboxWarningSuppressible(t *testing.T) {
+	// Proper dir structure: <tmpdir>/test/test-1.0.ebuild
+	pkgDir := filepath.Join(t.TempDir(), "test")
+	ebuildPath := filepath.Join(pkgDir, "test-1.0.ebuild")
+	os.MkdirAll(pkgDir, 0755)
+	os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644)
+	os.MkdirAll(filepath.Join(pkgDir, "files"), 0755)
+	scriptPath := filepath.Join(pkgDir, "files", "prepare.sh")
+	os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	// Stub ManifestRunner so the manifest call doesn't try pkgdev.
+	orig := ManifestRunner
+	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
+		return nil
+	}
+	t.Cleanup(func() { ManifestRunner = orig })
+
+	for _, quiet := range []bool{false, true} {
+		label := "false"
+		if quiet {
+			label = "true"
+		}
+		t.Run("quiet="+label, func(t *testing.T) {
+			var buf strings.Builder
+			lgr, err := output.NewLogger(0, quiet, nil)
+			if err != nil {
+				t.Fatalf("NewLogger: %v", err)
+			}
+			lgr.SetErr(&buf)
+
+			ei := &ebuild.EbuildInfo{
+				Path: ebuildPath,
+				Pkg:  "test",
+				PVVal: "1.0",
+				PVal: "test-1.0",
+			}
+			cfg := &PrepareConfig{
+				Distdir: t.TempDir(),
+				Log:     lgr,
+			}
+
+			err = runCustomPrepare(ei, scriptPath, cfg)
+			if err != nil {
+				t.Fatalf("runCustomPrepare: %v", err)
+			}
+
+			if !quiet {
+				if !strings.Contains(buf.String(), customPrepareSandboxWarning) {
+					t.Errorf("quiet=false: stderr = %q, want %q", buf.String(), customPrepareSandboxWarning)
+				}
+			} else {
+				if strings.Contains(buf.String(), "partial sandboxing") {
+					t.Errorf("quiet=true: stderr = %q, should NOT contain 'partial sandboxing'", buf.String())
+				}
+			}
+		})
 	}
 }

@@ -4,13 +4,12 @@ package ebuild
 type PackageType string
 
 const (
-	TypeNPM        PackageType = "npm"
-	TypeCargo      PackageType = "cargo"
-	TypeGo         PackageType = "go"
-	TypeRpiKernel  PackageType = "rpi-kernel"
-	TypeVendored   PackageType = "vendored" // vendored deps in GitHub releases (MIXED_DEPS.md)
-	TypeGeneric    PackageType = "generic"
-	TypeUnknown    PackageType = "unknown"
+	TypeNPM      PackageType = "npm"
+	TypeCargo    PackageType = "cargo"
+	TypeGo       PackageType = "go"
+	TypeVendored PackageType = "vendored" // vendored deps in GitHub releases (MIXED_DEPS.md)
+	TypeGeneric  PackageType = "generic"
+	TypeUnknown  PackageType = "unknown"
 )
 
 // EbuildInfo holds structured information extracted from an ebuild via

@@ -11,7 +11,7 @@ import (
 var cratesRe = regexp.MustCompile(`(?m)^CRATES=`)
 
 // validPackageTypes lists the accepted package-type strings.
-var validPackageTypes = []string{"npm", "cargo", "go", "vendored", "rpi-kernel", "generic"}
+var validPackageTypes = []string{"npm", "cargo", "go", "vendored", "generic"}
 
 // detectFromRaw is the one and only detection algorithm, operating on the
 // raw, unexpanded ebuild text. Order: first match wins.
@@ -108,12 +108,18 @@ func DetectTypeFromInfoForce(info *EbuildInfo, force PackageType) (PackageType, 
 }
 
 // ParsePackageType validates a --type value.
-// Accepted: npm, cargo, go, vendored, rpi-kernel, generic.
+// Accepted: npm, cargo, go, vendored, generic.
+// "rpi-kernel" → error pointing to files/prepare.sh.
 // "" → (TypeUnknown, nil). Anything else returns an error listing valid types.
 func ParsePackageType(s string) (PackageType, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return TypeUnknown, nil
+	}
+
+	// rpi-kernel is explicitly rejected — handled by custom scripts.
+	if s == "rpi-kernel" {
+		return "", fmt.Errorf("unknown type %q: rpi-kernel ebuilds require a custom prepare script (see files/prepare.sh)", s)
 	}
 
 	for _, pt := range validPackageTypes {

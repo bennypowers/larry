@@ -23,7 +23,7 @@ func init() {
 	rootCmd.AddCommand(&prepareCmd)
 
 	prepareCmd.Flags().StringVarP(&prepareType, "type", "t", "",
-		"force package type: npm, cargo, go, vendored, generic (overrides auto-detection)")
+		"force package type: npm, cargo, go, vendored, generic (overrides auto-detection; rpi-kernel requires files/prepare.sh)")
 	prepareCmd.Flags().BoolVarP(&prepareAll, "all", "a", false,
 		"regenerate Manifest for all packages via pkgdev (manifest-only, no type-specific pipeline)")
 	prepareCmd.Flags().BoolVarP(&prepareDryRun, "dry-run", "n", false,
@@ -37,12 +37,13 @@ var prepareCmd = cobra.Command{
 	Short: "Prepare an ebuild for commit (manifest, distfiles, etc.)",
 	Long: `Prepare an ebuild for commit by running the appropriate type-specific pipeline.
 
-Custom prepare scripts:
+Custom prepare scripts (escape hatch):
   If files/prepare.sh exists in the ebuild's directory, it runs instead
   of any built-in pipeline. The script runs in a userspace sandbox:
   PATH is restricted to system dirs, dangerous env vars are stripped,
   and writes are policy-limited to the ebuild dir + DISTDIR.
   Dry-run skips script execution.
+  Example: docs/examples/rpi-kernel-prepare.sh
 
 Type detection (auto):
   Detects package type from ebuild content:
@@ -50,7 +51,10 @@ Type detection (auto):
   - cargo:     CRATES= variable present
   - go:        inherits go-module
   - vendored:  releases/download/${PN}/ in SRC_URI
-  - generic:   everything else
+  - generic:   everything else (including rpi-kernel)
+
+  rpi-kernel packages are detected as generic. Use a custom
+  files/prepare.sh for those — see docs/examples/rpi-kernel-prepare.sh.
 
 Override detection with --type flag.
 

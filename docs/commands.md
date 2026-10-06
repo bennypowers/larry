@@ -137,9 +137,21 @@ Runs the appropriate pipeline based on the ebuild's `INHERIT` line:
 | `npm` | Download `package-lock.json`, update `NPM_DEPS` |
 | `go-module` | `go mod vendor`, create vendor tarball |
 | `vendor` | Download vendor tarball from SRC_URI |
-| (none) | Generic: download from SRC_URI, manifest |
+| (none) | Generic: manifest only (no pipeline) |
 
-Custom `files/prepare.sh` scripts take priority over built-in pipelines.
+#### Escape hatch: `files/prepare.sh`
+
+Any package type can be handled by placing an executable `files/prepare.sh`
+script in the ebuild's directory. The script runs with a sandboxed environment
+(PATH restricted, dangerous vars stripped) and receives `EBUILD`, `PN`, `PV`,
+`P`, `CATEGORY`, and `DISTDIR` as environment variables.
+
+Example reference script: [rpi-kernel-prepare.sh](../docs/examples/rpi-kernel-prepare.sh)
+for `sys-kernel/raspberrypi-kernel` ebuilds.
+
+If a custom script is present, it runs **before** any built-in pipeline.
+The framework automatically regenerates the Manifest after the script succeeds,
+and rolls back the ebuild on any failure.
 
 ### Flags
 
@@ -147,7 +159,7 @@ Custom `files/prepare.sh` scripts take priority over built-in pipelines.
 |------|---------|-------------|
 | `-a, --all` | `false` | Prepare all ebuilds in the directory |
 | `-n, --dry-run` | `false` | Show what would be done |
-| `-t, --type` | auto | Force type: npm, cargo, go, vendored, generic |
+| `-t, --type` | auto | Force type: npm, cargo, go, vendored, generic (rpi-kernel requires a custom `files/prepare.sh` script) |
 | `--distdir` | `$LARRY_DISTDIR` | Distdir path |
 | `--overlay` | `$LARRY_OVERLAY` | Overlay root path |
 | `-h, --help` | | Help for prepare |

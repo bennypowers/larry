@@ -12,6 +12,7 @@ import (
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
 	"bennypowers.dev/larry/internal/logger"
+	"bennypowers.dev/larry/internal/output"
 	"bennypowers.dev/larry/internal/upstream"
 )
 
@@ -32,6 +33,12 @@ type PrepareConfig struct {
 	GitHubBaseURL string
 	// Runner executes external commands (go mod vendor). Nil means the real runner.
 	Runner github.CmdRunner
+
+	// Log is the logger used for structured output. When nil, prepareGeneric
+	// emits warnings to stderr directly (fallback for code paths that don't
+	// construct a full config). Tests inject a logger with SetOut/SetErr
+	// pointing at bytes.Buffer for capture.
+	Log *output.Logger
 }
 
 // Prepare handles the ebuild preparation pipeline.
@@ -199,8 +206,15 @@ func PrepareDir(dir string, cfg *PrepareConfig) error {
 	return nil
 }
 
+// genericManifestOnlyWarning is emitted when a package type has no pipeline
+// and only the Manifest was regenerated. It points the user at the escape hatch.
+const genericManifestOnlyWarning = "this package type has no pipeline; only the Manifest was regenerated — add files/prepare.sh to do more"
+
 // prepareGeneric runs pkgdev manifest on a generic ebuild.
 func prepareGeneric(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
+	// Warn: this type has no pipeline beyond the Manifest.
+	warnToLogger(cfg, genericManifestOnlyWarning)
+
 	// In dry-run mode, skip manifest
 	if cfg.DryRun {
 		return nil
@@ -227,6 +241,16 @@ func prepareGeneric(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	}
 
 	return nil
+}
+
+// warnToLogger emits a warning via cfg.Log.Warn when available, falling back
+// to a bare fmt.Fprintf to stderr (the old behaviour) when Log is nil.
+func warnToLogger(cfg *PrepareConfig, msg string) {
+	if cfg != nil && cfg.Log != nil {
+		cfg.Log.Warn("%s", msg)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "*** %s\n", msg)
 }
 
 // prepareNpm runs the npm-specific prepare pipeline.
@@ -320,8 +344,17 @@ func extractDistfilesFromSRCURI(srcURI string) []string {
 	return distfiles
 }
 
+// customPrepareSandboxWarning is printed once to alert users that the
+// custom prepare script runs in a userspace sandbox (not a full container).
+const customPrepareSandboxWarning = "custom prepare.sh runs with partial sandboxing. " +
+	"Network access is NOT blocked and file writes are only policy-restricted. " +
+	"For full sandboxing, use larry test --emerge or run inside a container."
+
 // runCustomPrepare executes a per-package custom prepare script.
-// If dry-run mode is enabled, it logs the script path but does not execute it.
+// If dry-run mode is enabled, it returns immediately without executing anything.
+//
+// Pipeline: backup → run script → manifest → restore on any failure.
+// The framework owns rollback, not the script.
 //
 // The script runs inside a userspace sandbox modeled after Portage's sandbox:
 //
@@ -342,10 +375,14 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 		return nil
 	}
 
-	// Warn about sandbox limitations (once)
-	fmt.Fprint(os.Stderr, "\nWARNING: custom prepare.sh runs with partial sandboxing. "+
-		"Network access is NOT blocked and file writes are only policy-restricted. "+
-		"For full sandboxing, use larry test --emerge or run inside a container.\n")
+	// Warn about sandbox limitations (quiet-suppressed)
+	warnToLogger(cfg, customPrepareSandboxWarning)
+
+	// Backup the ebuild before running the script.
+	if err := Backup(ei.Path); err != nil {
+		return fmt.Errorf("backup: %w", err)
+	}
+	defer os.Remove(ei.Path + ".bak")
 
 	// Build sandboxed environment
 	env := sandboxEnv(ei, cfg)
@@ -354,14 +391,30 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 	cmd.Env = env
 	cmd.Dir = filepath.Dir(ei.Path)
 
-	// Pipe stdout/stderr unless TUI is active
+	// Pipe stdout/stderr unless TUI is active (TUI has its own stream isolation).
 	if !cfg.UseTUI {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 	}
 
 	if err := cmd.Run(); err != nil {
+		// Rollback ebuild on script failure.
+		Restore(ei.Path)
 		return fmt.Errorf("custom prepare script %q failed: %w", scriptPath, err)
+	}
+
+	// Run manifest for this package (catPkg, not a file path).
+	req := manifestRequest{
+		Overlay:    cfg.Overlay,
+		CatPkg:     ei.Category + "/" + ei.PN(),
+		Distdir:    cfg.Distdir,
+		EbuildPath: ei.Path,
+		Prefetch:   nil,
+	}
+	if err := runManifest(req); err != nil {
+		// Rollback ebuild on manifest failure.
+		Restore(ei.Path)
+		return fmt.Errorf("manifest: %w", err)
 	}
 
 	return nil

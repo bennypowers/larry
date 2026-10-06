@@ -227,9 +227,60 @@ func TestDetectType_NilInfo(t *testing.T) {
 	})
 }
 
-// --- ParsePackageType tests ---
+// --- rpi-kernel removed tests (plan 25a) ---
 
-func TestParsePackageType(t *testing.T) {
+func TestDetectType_RpiKernelEbuildIsGeneric(t *testing.T) {
+	// A2: linux-info + _p version must NOT detect rpi-kernel; it is generic.
+	info := &EbuildInfo{Inherit: []string{"linux-info"}, PVVal: "6.18.46_p20260824", Pkg: "raspberrypi-kernel"}
+	got, err := DetectTypeFromInfo(info)
+	if err != nil {
+		t.Fatalf("DetectTypeFromInfo error: %v", err)
+	}
+	if got != TypeGeneric {
+		t.Errorf("DetectTypeFromInfo(rpi-kernel fixture) = %q, want %q", got, TypeGeneric)
+	}
+}
+
+func TestDetectType_LinuxInfoPreReleaseIsGeneric(t *testing.T) {
+	// A2: linux-info + _pre version must NOT detect rpi-kernel; it is generic.
+	info := &EbuildInfo{Inherit: []string{"linux-info"}, PVVal: "6.18.0_pre1"}
+	got, err := DetectTypeFromInfo(info)
+	if err != nil {
+		t.Fatalf("DetectTypeFromInfo error: %v", err)
+	}
+	if got != TypeGeneric {
+		t.Errorf("DetectTypeFromInfo(linux-info_pre) = %q, want %q", got, TypeGeneric)
+	}
+}
+
+func TestParsePackageType_RejectsRpiKernel(t *testing.T) {
+	// A3: rpi-kernel must be rejected; error must point to files/prepare.sh.
+	_, err := ParsePackageType("rpi-kernel")
+	if err == nil {
+		t.Fatal("ParsePackageType(\"rpi-kernel\") expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "files/prepare.sh") {
+		t.Errorf("error = %q, want substring \"files/prepare.sh\"", err.Error())
+	}
+}
+
+func TestParsePackageType_AcceptsTheFive(t *testing.T) {
+	// A3: the five accepted types must still work.
+	for _, pt := range []PackageType{TypeNPM, TypeCargo, TypeGo, TypeVendored, TypeGeneric} {
+		got, err := ParsePackageType(string(pt))
+		if err != nil {
+			t.Errorf("ParsePackageType(%q) unexpected error: %v", pt, err)
+			continue
+		}
+		if got != pt {
+			t.Errorf("ParsePackageType(%q) = %q, want %q", pt, got, pt)
+		}
+	}
+}
+
+// --- Legacy ParsePackageType tests (rpi-kernel removed) ---
+
+func TestParsePackageType_Legacy(t *testing.T) {
 	tests := []struct {
 		input    string
 		want     PackageType
@@ -240,10 +291,9 @@ func TestParsePackageType(t *testing.T) {
 		{"cargo", TypeCargo, false, ""},
 		{"go", TypeGo, false, ""},
 		{"vendored", TypeVendored, false, ""},
-		{"rpi-kernel", TypeRpiKernel, false, ""},
 		{"generic", TypeGeneric, false, ""},
 		{"", TypeUnknown, false, ""},
-		{"npmm", "", true, "unknown type \"npmm\": valid types are npm, cargo, go, vendored, rpi-kernel, generic"},
+		{"npmm", "", true, "unknown type \"npmm\": valid types are npm, cargo, go, vendored, generic"},
 		{"NPM", "", true, "unknown type \"NPM\""},
 	}
 
