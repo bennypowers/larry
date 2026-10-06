@@ -255,3 +255,11 @@ func (r *realRunner) Run(name string, args ...string) error {
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
+
+func (r *realRunner) RunWithEnv(env []string, name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Env = env
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}

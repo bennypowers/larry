@@ -444,3 +444,8 @@ func (s *stubRunner) Run(name string, args ...string) error {
 	s.Cmds = append(s.Cmds, cmd)
 	return s.Err
 }
+
+func (s *stubRunner) RunWithEnv(env []string, name string, args ...string) error {
+	_ = s.Run(name, args...)
+	return s.Err
+}

@@ -11,8 +11,23 @@ import (
 
 // execCmd builds a fresh root command tree, runs it with args,
 // and returns stdout, stderr and the error.
+// It also sets os.Args and resets test-specific flags so that
+// bare phase flag parsing (splitPhaseFlags) works correctly.
 func execCmd(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
+
+	// Set os.Args for splitPhaseFlags to parse bare --<phase> flags.
+	origArgs := os.Args
+	defer func() { os.Args = origArgs }()
+	os.Args = append([]string{"larry"}, args...)
+
+	// Reset test-specific flags to prevent state leakage between calls.
+	testCompile = false
+	testMerge = false
+	testPretend = false
+	testPhases = nil
+	testEmerge = false
+	testPortageTmpdir = ""
 
 	var outBuf, errBuf []byte
 	cmd := newRootCmd()

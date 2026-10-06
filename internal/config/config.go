@@ -28,8 +28,9 @@ type Config struct {
 	Remote        string
 	Overlay       string
 	GitHubRepo    string
-	MaintainerName  string
-	MaintainerEmail string
+	MaintainerName    string
+	MaintainerEmail   string
+	PortageTmpdir     string
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -46,8 +47,9 @@ func DefaultConfig() *Config {
 		Overlay:       "",
 		GitHubToken:   "",
 		GitHubRepo:    "",
-		MaintainerName:  "",
-		MaintainerEmail: "",
+		MaintainerName:    "",
+		MaintainerEmail:   "",
+		PortageTmpdir:     "/tmp/portage-test",
 	}
 }
 
@@ -104,6 +106,9 @@ func applyConfig(v *viper.Viper, c *Config) error {
 	if v.Get("cache_dir") != nil {
 		c.CacheDir = v.GetString("cache_dir")
 	}
+	if v.Get("portage_tmpdir") != nil {
+		c.PortageTmpdir = v.GetString("portage_tmpdir")
+	}
 	if v.Get("distdir") != nil {
 		c.Distdir = v.GetString("distdir")
 	}
@@ -148,6 +153,9 @@ func applyEnvOverrides(c *Config) {
 	}
 	if v := os.Getenv("LARRY_CACHE_DIR"); v != "" {
 		c.CacheDir = v
+	}
+	if v := os.Getenv("LARRY_PORTAGE_TMPDIR"); v != "" {
+		c.PortageTmpdir = v
 	}
 	if v := os.Getenv("LARRY_DISTDIR"); v != "" {
 		c.Distdir = v
@@ -200,6 +208,25 @@ func (c *Config) ResolveOverlay(override string) (string, error) {
 		return gitDir, nil
 	}
 	return "", fmt.Errorf("no overlay directory found; set it via --overlay, $LARRY_OVERLAY, or the overlay config key (or run inside a git repo)")
+}
+
+// ResolvePortageTmpdir returns the PORTAGE_TMPDIR override using the following priority:
+//
+//	1. override — explicit value from --portage-tmpdir flag
+//	2. $LARRY_PORTAGE_TMPDIR
+//	3. cfg.PortageTmpdir — from config file
+//	4. /tmp/portage-test
+func (c *Config) ResolvePortageTmpdir(override string) string {
+	if override != "" {
+		return override
+	}
+	if v := os.Getenv("LARRY_PORTAGE_TMPDIR"); v != "" {
+		return v
+	}
+	if c.PortageTmpdir != "" {
+		return c.PortageTmpdir
+	}
+	return "/tmp/portage-test"
 }
 
 // ResolveDistdir returns the distdir path using the following priority:

@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/test"
@@ -11,55 +13,73 @@ import (
 )
 
 var (
-	testCompile  bool
-	testMerge    bool
-	testPretend  bool
-	testDistdir  string
-	testPhases   []string
-	testEmerge bool
+	testCompile       bool
+	testMerge         bool
+	testPretend       bool
+	testPhases        []string
+	testPortageTmpdir string
+	testEmerge        bool
 )
 
 func init() {
 	rootCmd.AddCommand(&testCmd)
 
-	testCmd.Flags().BoolVar(&testCompile, "compile", false,
-		"run clean + compile phases")
-	testCmd.Flags().BoolVar(&testMerge, "merge", false,
-		"run clean + fetch + unpack + compile + install + qmerge phases")
-	testCmd.Flags().BoolVar(&testPretend, "pretend", false,
+	testCmd.Flags().BoolVarP(&testCompile, "compile", "c", false,
+		"run clean + fetch + unpack + compile phases")
+	testCmd.Flags().BoolVarP(&testMerge, "merge", "m", false,
+		"run clean + fetch + unpack + compile + install phases")
+	testCmd.Flags().BoolVarP(&testPretend, "pretend", "", false,
 		"show what would be done without executing")
 	testCmd.Flags().BoolVarP(&testEmerge, "emerge", "e", false,
 		"run in podman container with GPU passthrough (requires Containerfile.larry-test)")
-	testCmd.Flags().StringArrayVar(&testPhases, "phase", nil,
+	testCmd.Flags().StringArrayVarP(&testPhases, "phase", "p", nil,
 		"specific phase to run (can be specified multiple times; overrides --compile/--merge)")
+	testCmd.Flags().StringVar(&testPortageTmpdir, "portage-tmpdir", "",
+		"override PORTAGE_TMPDIR for test runs")
+
+	// Allow unknown flags (e.g. bare --<phase>) so splitPhaseFlags can detect them.
+	testCmd.FParseErrWhitelist = cobra.FParseErrWhitelist{
+		UnknownFlags: true,
+	}
 }
 
 var testCmd = cobra.Command{
-	Use:   "test <category/package|ebuild-path>",
+	Use:   "test [flags] <category/package|ebuild-path>",
 	Short: "Run ebuild test phases",
-	Long: `Run ebuild test phases for a package. By default runs 'clean' phase.
+	Long: `Run ebuild test phases for a package. By default runs 'clean fetch unpack'.
 
-With --compile, runs 'clean' + 'compile'.
-With --merge, runs 'clean' + 'fetch' + 'unpack' + 'compile' + 'install' + 'qmerge'.
-With --phase, specifies exact phase(s) to run (can be repeated).
+With --compile/-c, runs clean + fetch + unpack + compile.
+With --merge/-m, runs clean + fetch + unpack + compile + install.
+With --phase/-p, specifies exact phase(s) to run (can be repeated).
 
-The --pretend flag shows what would be executed without actually running.
+Bare --<phase> flags (e.g., --prepare, --install) are appended to the phase list.
 
-The --emerge flag runs the test inside a podman container with GPU passthrough
-(requires Containerfile.larry-test).
+The --pretend/-n flag shows what would be executed without actually running.
 
 Examples:
-  larry test dev-lisp/sbcl-unicode-dictionary     # Clean only (default)
-  larry test --compile dev-lisp/sbcl-unicode-dictionary
-  larry test --merge dev-lisp/sbcl-unicode-dictionary
+  larry test dev-lisp/sbcl-unicode-dictionary     # Clean fetch unpack
+  larry test -c dev-lisp/sbcl-unicode-dictionary  # Compile
+  larry test -m dev-lisp/sbcl-unicode-dictionary  # Merge (install)
+  larry test --prepare dev-lisp/foo               # Add prepare phase
   larry test --phase fetch --phase unpack dev-lisp/foo
+  larry test -p fetch -p unpack dev-lisp/foo
   larry test --pretend dev-lisp/foo               # Preview only
   larry test --emerge dev-lisp/foo             # Run in podman container
   larry test /var/db/repos/gentoo/foo/foo-1.0.0.ebuild  # Direct ebuild path
 `,
-	Args: cobra.ExactArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return &test.ExitError{Code: 1, Err: fmt.Errorf("missing package argument")}
+		}
 		input := args[0]
+
+		// Extract bare --<phase> flags and detect unknown flags.
+		extraPhases, unknownFlag := splitPhaseFlags()
+		if unknownFlag != "" {
+			log.Error("Unknown option or phase: %s", unknownFlag)
+			return &test.ExitError{Code: 1, Err: fmt.Errorf("unknown option or phase: %s", unknownFlag)}
+		}
 
 		// Resolve overlay directory.
 		overlayDir, err := cfg.ResolveOverlay(rootFlags.Overlay)
@@ -69,10 +89,13 @@ Examples:
 
 		// Resolve ebuild path.
 		var ebuildPath string
-		if filepath.IsAbs(input) {
-			ebuildPath = input
+		if filepath.IsAbs(input) || strings.HasSuffix(input, ".ebuild") {
+			ebuildPath, err = filepath.Abs(input)
+			if err != nil {
+				return fmt.Errorf("resolving ebuild path: %w", err)
+			}
 		} else {
-			// Treat as cat/pkg — resolve atom and find latest ebuild.
+			// Treat as cat/pkg — resolve atom and find ebuild.
 			a, err := atom.ParseAtom(overlayDir, input)
 			if err != nil {
 				return fmt.Errorf("resolving atom %q: %w", input, err)
@@ -101,12 +124,59 @@ Examples:
 		} else {
 			// Local mode.
 			runner := test.NewCmdRunner()
-			err := test.TestLocal(ebuildPath, nil, runner, testPretend, true)
-			if err != nil {
-				return fmt.Errorf("test failed: %w", err)
+			testCfg := &test.TestLocalConfig{
+				Compile:       testCompile,
+				Merge:         testMerge,
+				Pretend:       testPretend,
+				Overlay:       overlayDir,
+				Distdir:       rootFlags.Distdir,
+				PortageTmpdir: testPortageTmpdir,
+				Phases:        testPhases,
+				ExtraPhases:   extraPhases,
+				Cfg:           cfg,
+				Log:           log,
 			}
-			log.Msg("Test completed successfully.")
+			err := test.TestLocalWithConfig(ebuildPath, nil, runner, testPretend, true, testCfg)
+			if err != nil {
+				return &test.ExitError{Code: 1, Err: err}
+			}
 		}
 		return nil
 	},
+}
+
+// splitPhaseFlags extracts bare --<phase> flags from os.Args[2:].
+// It skips known cobra flags and reports unknown ones.
+// Returns (extraPhases, unknownFlagOrEmpty).
+func splitPhaseFlags() (extraPhases []string, unknownFlag string) {
+	// All known cobra flags (test-local + inherited from root).
+	knownFlags := map[string]bool{
+		"compile": true, "c": true,
+		"merge": true, "m": true,
+		"pretend": true,
+		"emerge": true, "e": true,
+		"phase": true, "p": true,
+		"portage-tmpdir": true,
+		// Root persistent flags.
+		"verbose": true, "quiet": true, "color": true, "dry-run": true,
+		"cache-dir": true, "distdir": true, "jobs": true,
+		"github-token": true, "remote": true, "config": true,
+		"overlay": true,
+	}
+
+	for _, arg := range os.Args[2:] {
+		if !strings.HasPrefix(arg, "--") || strings.Contains(arg, "=") {
+			continue
+		}
+		suffix := strings.TrimPrefix(arg, "--")
+		if knownFlags[suffix] {
+			continue
+		}
+		if test.ValidPhases(suffix) {
+			extraPhases = append(extraPhases, suffix)
+		} else {
+			return nil, arg
+		}
+	}
+	return extraPhases, ""
 }
