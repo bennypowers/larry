@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"bennypowers.dev/larry/internal/git"
+	"bennypowers.dev/larry/internal/version"
 )
 
 // CmdRunner abstracts exec.Command for testing.
@@ -115,9 +116,42 @@ func (c *Client) LatestRelease(owner, repo string) (tag string, prerelease, draf
 	return tag, rel.Prerelease, rel.Draft, nil
 }
 
-// LatestReleaseTag gets the most recent release tag name using
-// `gh release list`. When !allowPrereleases the --exclude-pre-releases
-// flag is added (D2).
+// stripTagPrefix strips common tag prefixes like v, v., release-, bun-, rocm-, pios/.
+func stripTagPrefix(tag string) string {
+	tag = strings.ReplaceAll(tag, "%20", " ")
+	tag = strings.TrimPrefix(tag, "release-")
+	tag = strings.TrimPrefix(tag, "bun-")
+	tag = strings.TrimPrefix(tag, "rocm-")
+	tag = strings.TrimPrefix(tag, "pios/")
+	if len(tag) >= 2 && (tag[0] == 'v' || tag[0] == 'V') {
+		if tag[1] == '.' {
+			if len(tag) >= 3 && versionStartsWithDigit(tag[2:]) {
+				tag = tag[2:]
+			}
+		} else if versionStartsWithDigit(tag[1:]) {
+			tag = tag[1:]
+		}
+	}
+	tag = version.Normalize(tag)
+	if i := strings.Index(tag, " "); i > 0 {
+		tag = tag[i+1:]
+	}
+	return strings.TrimSpace(tag)
+}
+
+// versionStartsWithDigit checks if the string starts with a digit.
+func versionStartsWithDigit(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	return s[0] >= '0' && s[0] <= '9'
+}
+
+// LatestReleaseTag gets the highest-version release tag name using
+// `gh release list`. Unlike the script which takes .[0] (creation-date
+// order), this sorts all 100 releases by version number and returns
+// the highest. This deliberately diverges from the script (Plan 31).
+// When !allowPrereleases the --exclude-pre-releases flag is added (D2).
 func (c *Client) LatestReleaseTag(owner, repo string, allowPrereleases bool) (string, error) {
 	args := []string{
 		"release", "list", "-R", owner + "/" + repo,
@@ -126,17 +160,46 @@ func (c *Client) LatestReleaseTag(owner, repo string, allowPrereleases bool) (st
 	if !allowPrereleases {
 		args = append(args, "--exclude-pre-releases")
 	}
-	args = append(args, "--json", "tagName", "-q", ".[0].tagName")
+	args = append(args, "--json", "tagName")
 
 	output, err := c.gh(args...)
 	if err != nil {
 		return "", fmt.Errorf("gh release list: %w", err)
 	}
-	tag := strings.TrimSpace(string(output))
-	if tag == "" {
-		return "", fmt.Errorf("no tags found for %s/%s", owner, repo)
+
+	var releases []struct {
+		TagName string `json:"tagName"`
 	}
-	return tag, nil
+	if err := json.Unmarshal(output, &releases); err != nil {
+		return "", fmt.Errorf("parse release list: %w", err)
+	}
+
+	// Sort by version number, return the highest.
+	var best string
+	var bestV *version.Version
+	for _, r := range releases {
+		tag := strings.TrimSpace(r.TagName)
+		if tag == "" {
+			continue
+		}
+		stripped := stripTagPrefix(tag)
+		if stripped == "" || !versionStartsWithDigit(stripped) {
+			continue
+		}
+		v, err := version.Parse(version.Normalize(stripped))
+		if err != nil {
+			continue
+		}
+		if bestV == nil || v.Compare(bestV) > 0 {
+			bestV = v
+			best = tag
+		}
+	}
+
+	if best == "" {
+		return "", fmt.Errorf("no version-like releases found for %s/%s", owner, repo)
+	}
+	return best, nil
 }
 
 // EnsureRelease ensures a GitHub release exists for the given tag.

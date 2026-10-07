@@ -63,7 +63,7 @@ func TestGitHub_Tier1_RejectsDraft(t *testing.T) {
 	stub := github.NewStubRunner()
 	kRel := key("api", "repos/o/r/releases/latest")
 	kList := key("release", "list", "-R", "o/r", "--limit", "100",
-		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+		"--exclude-pre-releases", "--json", "tagName")
 
 	relJSON, _ := json.Marshal(map[string]interface{}{
 		"tag_name":   "v9.9.9",
@@ -71,7 +71,7 @@ func TestGitHub_Tier1_RejectsDraft(t *testing.T) {
 		"draft":      true,
 	})
 	stub.Outputs[kRel] = relJSON
-	stub.Outputs[kList] = []byte("v1.2.3\n")
+	stub.Outputs[kList] = []byte(`[{"tagName":"v1.2.3"}]`)
 
 	client := github.NewClientWithRunner(stub)
 	p := &GitHubProvider{Client: client}
@@ -89,7 +89,7 @@ func TestGitHub_Tier1_RejectsPrereleaseFlag(t *testing.T) {
 	stub := github.NewStubRunner()
 	kRel := key("api", "repos/o/r/releases/latest")
 	kList := key("release", "list", "-R", "o/r", "--limit", "100",
-		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+		"--exclude-pre-releases", "--json", "tagName")
 
 	relJSON, _ := json.Marshal(map[string]interface{}{
 		"tag_name":   "v1.2.3",
@@ -97,7 +97,7 @@ func TestGitHub_Tier1_RejectsPrereleaseFlag(t *testing.T) {
 		"draft":      false,
 	})
 	stub.Outputs[kRel] = relJSON
-	stub.Outputs[kList] = []byte("v1.0.0\n")
+	stub.Outputs[kList] = []byte(`[{"tagName":"v1.0.0"}]`)
 
 	client := github.NewClientWithRunner(stub)
 	p := &GitHubProvider{Client: client}
@@ -139,10 +139,10 @@ func TestGitHub_NoSortParamOnTagsEndpoint(t *testing.T) {
 	stub := rec.inner
 	kRel := key("api", "repos/o/r/releases/latest")
 	kList := key("release", "list", "-R", "o/r", "--limit", "100",
-		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+		"--exclude-pre-releases", "--json", "tagName")
 
 	stub.Outputs[kRel] = []byte(`{"tag_name":"v99.0","prerelease":false,"draft":false}`)
-	stub.Outputs[kList] = []byte("v1.0.0\n")
+	stub.Outputs[kList] = []byte(`[{"tagName":"v1.0.0"}]`)
 
 	client := github.NewClientWithRunner(rec)
 	p := &GitHubProvider{Client: client}
@@ -167,16 +167,16 @@ func TestGitHub_ReconcileTiers(t *testing.T) {
 		list string // tier 2 output
 		want string // expected Version
 	}{
-		{"tier2_wins", `{"tag_name":"v1.0.0","prerelease":false,"draft":false}`, "v1.2.0\n", "1.2.0"},
-		{"tier1_wins", `{"tag_name":"v2.0.0","prerelease":false,"draft":false}`, "v1.9.0\n", "2.0.0"},
-		{"tier1_not_version", `{"tag_name":"pios/1","prerelease":false,"draft":false}`, "v1.5.0\n", "1.5.0"},
+		{"tier2_wins", `{"tag_name":"v1.0.0","prerelease":false,"draft":false}`, `[{"tagName":"v1.2.0"}]`, "1.2.0"},
+		{"tier1_wins", `{"tag_name":"v2.0.0","prerelease":false,"draft":false}`, `[{"tagName":"v1.9.0"}]`, "2.0.0"},
+		{"tier1_not_version", `{"tag_name":"pios/1","prerelease":false,"draft":false}`, `[{"tagName":"v1.5.0"}]`, "1.5.0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stub := github.NewStubRunner()
 			kRel := key("api", "repos/o/r/releases/latest")
 			kList := key("release", "list", "-R", "o/r", "--limit", "100",
-				"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+				"--exclude-pre-releases", "--json", "tagName")
 
 			stub.Outputs[kRel] = []byte(tt.rel)
 			stub.Outputs[kList] = []byte(tt.list)
@@ -199,12 +199,12 @@ func TestGitHub_ReconcileTiers(t *testing.T) {
 func TestGitHub_Tier2_ExcludesPrereleases(t *testing.T) {
 	stub := github.NewStubRunner()
 	kListNoPre := key("release", "list", "-R", "o/r", "--limit", "100",
-		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+		"--exclude-pre-releases", "--json", "tagName")
 	kListPre := key("release", "list", "-R", "o/r", "--limit", "100",
-		"--json", "tagName", "-q", ".[0].tagName")
+		"--json", "tagName")
 
-	stub.Outputs[kListNoPre] = []byte("2.0.0\n")
-	stub.Outputs[kListPre] = []byte("3.0.0-rc1\n")
+	stub.Outputs[kListNoPre] = []byte(`[{"tagName":"2.0.0"}]`)
+	stub.Outputs[kListPre] = []byte(`[{"tagName":"3.0.0-rc1"}]`)
 
 	rec := &recordingRunner{inner: stub}
 	client := github.NewClientWithRunner(rec)
@@ -237,7 +237,7 @@ func TestGitHub_Tier3_LsRemoteFallback(t *testing.T) {
 	stub := github.NewStubRunner()
 	kRel := key("api", "repos/o/r/releases/latest")
 	kList := key("release", "list", "-R", "o/r", "--limit", "100",
-		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+		"--exclude-pre-releases", "--json", "tagName")
 	// Both tier 1 and 2 fail
 	stub.Errors[kRel] = fmt.Errorf("gh error")
 	stub.Errors[kList] = fmt.Errorf("gh error")
@@ -262,7 +262,7 @@ func TestGitHub_Tier3_DropsPeeledRefs(t *testing.T) {
 	stub := github.NewStubRunner()
 	kRel := key("api", "repos/o/r/releases/latest")
 	kList := key("release", "list", "-R", "o/r", "--limit", "100",
-		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+		"--exclude-pre-releases", "--json", "tagName")
 	stub.Errors[kRel] = fmt.Errorf("gh error")
 	stub.Errors[kList] = fmt.Errorf("gh error")
 
@@ -290,7 +290,7 @@ func TestGitHub_Tier4_ReturnsTagAndDate(t *testing.T) {
 	stub := github.NewStubRunner()
 	kRel := key("api", "repos/o/r/releases/latest")
 	kList := key("release", "list", "-R", "o/r", "--limit", "100",
-		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+		"--exclude-pre-releases", "--json", "tagName")
 	kGQL := key("api", "graphql", "-f", "query="+graphqlTagsQuery, "-f", "owner=o", "-f", "name=r")
 	stub.Errors[kRel] = fmt.Errorf("gh error")
 	stub.Errors[kList] = fmt.Errorf("gh error")
@@ -340,7 +340,7 @@ func TestGitHub_Tier4_SkipsPrereleaseTagNames(t *testing.T) {
 	kGQL := key("api", "graphql", "-f", "query="+graphqlTagsQuery, "-f", "owner=o", "-f", "name=r")
 	kRel := key("api", "repos/o/r/releases/latest")
 	kList := key("release", "list", "-R", "o/r", "--limit", "100",
-		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+		"--exclude-pre-releases", "--json", "tagName")
 	stub.Errors[kRel] = fmt.Errorf("gh error")
 	stub.Errors[kList] = fmt.Errorf("gh error")
 
@@ -390,7 +390,7 @@ func TestGitHub_Tier4_DatePrefersTagName(t *testing.T) {
 	kGQL := key("api", "graphql", "-f", "query="+graphqlTagsQuery, "-f", "owner=o", "-f", "name=r")
 	kRel := key("api", "repos/o/r/releases/latest")
 	kList := key("release", "list", "-R", "o/r", "--limit", "100",
-		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+		"--exclude-pre-releases", "--json", "tagName")
 	stub.Errors[kRel] = fmt.Errorf("gh error")
 	stub.Errors[kList] = fmt.Errorf("gh error")
 
@@ -435,7 +435,7 @@ func TestGitHub_PrereleaseErrorMessage(t *testing.T) {
 	stub := github.NewStubRunner()
 	kRel := key("api", "repos/o/r/releases/latest")
 	kList := key("release", "list", "-R", "o/r", "--limit", "100",
-		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+		"--exclude-pre-releases", "--json", "tagName")
 	kGQL := key("api", "graphql", "-f", "query="+graphqlTagsQuery, "-f", "owner=o", "-f", "name=r")
 
 	// Tier 1 returns prerelease, tier 2 returns empty, tier 3 returns prerelease tag, tier 4 errors.
@@ -445,7 +445,7 @@ func TestGitHub_PrereleaseErrorMessage(t *testing.T) {
 		"draft":      false,
 	})
 	stub.Outputs[kRel] = relJSON
-	stub.Outputs[kList] = []byte("\n")
+	stub.Outputs[kList] = []byte(`[]`)
 	stub.Errors[kGQL] = fmt.Errorf("gh error")
 
 	client := github.NewClientWithRunner(stub)
@@ -520,7 +520,7 @@ func TestFetchLatestVersion_ByDate(t *testing.T) {
 	kGQL := key("api", "graphql", "-f", "query="+graphqlTagsQuery, "-f", "owner=o", "-f", "name=r")
 	kRel := key("api", "repos/o/r/releases/latest")
 	kList := key("release", "list", "-R", "o/r", "--limit", "100",
-		"--exclude-pre-releases", "--json", "tagName", "-q", ".[0].tagName")
+		"--exclude-pre-releases", "--json", "tagName")
 	stub.Errors[kRel] = fmt.Errorf("gh error")
 	stub.Errors[kList] = fmt.Errorf("gh error")
 

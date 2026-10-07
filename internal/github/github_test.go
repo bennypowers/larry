@@ -103,7 +103,7 @@ func TestLatestRelease_MalformedJSON(t *testing.T) {
 func TestLatestReleaseTag_ExcludesPrereleases(t *testing.T) {
 	// Plan 17b test: assert --exclude-pre-releases is in argv when allowPrereleases == false.
 	stub := NewStubRunner()
-	stub.Outputs["gh release list -R o/r --limit 100 --exclude-pre-releases --json tagName -q .[0].tagName"] = []byte("1.0.0\n")
+	stub.Outputs["gh release list -R o/r --limit 100 --exclude-pre-releases --json tagName"] = []byte(`[{"tagName":"1.0.0"}]`)
 
 	c := NewClientWithRunner(stub)
 	tag, err := c.LatestReleaseTag("o", "r", false)
@@ -117,7 +117,7 @@ func TestLatestReleaseTag_ExcludesPrereleases(t *testing.T) {
 
 func TestLatestReleaseTag_AllowsPrereleases(t *testing.T) {
 	stub := NewStubRunner()
-	stub.Outputs["gh release list -R o/r --limit 100 --json tagName -q .[0].tagName"] = []byte("2.0.0-rc1\n")
+	stub.Outputs["gh release list -R o/r --limit 100 --json tagName"] = []byte(`[{"tagName":"2.0.0-rc1"}]`)
 
 	c := NewClientWithRunner(stub)
 	tag, err := c.LatestReleaseTag("o", "r", true)
@@ -131,7 +131,7 @@ func TestLatestReleaseTag_AllowsPrereleases(t *testing.T) {
 
 func TestLatestReleaseTag_EmptyOutput(t *testing.T) {
 	stub := NewStubRunner()
-	stub.Outputs["gh release list -R o/r --limit 100 --exclude-pre-releases --json tagName -q .[0].tagName"] = []byte("\n")
+	stub.Outputs["gh release list -R o/r --limit 100 --exclude-pre-releases --json tagName"] = []byte(`[]`)
 
 	c := NewClientWithRunner(stub)
 	_, err := c.LatestReleaseTag("o", "r", false)
@@ -361,5 +361,96 @@ func TestListReleaseAssets_MalformedJSON(t *testing.T) {
 	_, err := c.ListReleaseAssets("owner", "repo", "v1.0.0")
 	if err == nil {
 		t.Error("ListReleaseAssets() should return error for malformed JSON")
+	}
+}
+
+// ---- Plan 31: LatestReleaseTag sorts by version, not creation date ----
+
+func TestLatestReleaseTag_SortsByVersion(t *testing.T) {
+	// cockpit-project/cockpit: 310.10 (newest by creation date) vs 368 (highest version)
+	listJSON := `[` +
+		`{"tagName":"310.10"},` +
+		`{"tagName":"368"},` +
+		`{"tagName":"356.4"}` +
+		`]`
+	stub := NewStubRunner()
+	stub.Outputs["gh release list -R cockpit-project/cockpit --limit 100 --exclude-pre-releases --json tagName"] = []byte(listJSON)
+
+	c := NewClientWithRunner(stub)
+	tag, err := c.LatestReleaseTag("cockpit-project", "cockpit", false)
+	if err != nil {
+		t.Fatalf("LatestReleaseTag(): %v", err)
+	}
+	// 368 > 356.4 > 310.10 when compared as versions
+	if tag != "368" {
+		t.Errorf("tag = %q, want 368 (highest version, not 310.10)", tag)
+	}
+}
+
+func TestLatestReleaseTag_SortsByVersion_Prefixed(t *testing.T) {
+	// Tags with v prefix
+	listJSON := `[` +
+		`{"tagName":"v1.0.0"},` +
+		`{"tagName":"v2.0.0"},` +
+		`{"tagName":"v1.9.0"}` +
+		`]`
+	stub := NewStubRunner()
+	stub.Outputs["gh release list -R o/r --limit 100 --json tagName"] = []byte(listJSON)
+
+	c := NewClientWithRunner(stub)
+	tag, err := c.LatestReleaseTag("o", "r", true)
+	if err != nil {
+		t.Fatalf("LatestReleaseTag(): %v", err)
+	}
+	if tag != "v2.0.0" {
+		t.Errorf("tag = %q, want v2.0.0", tag)
+	}
+}
+
+func TestLatestReleaseTag_EmptyReleases(t *testing.T) {
+	stub := NewStubRunner()
+	stub.Outputs["gh release list -R o/r --limit 100 --exclude-pre-releases --json tagName"] = []byte(`[]`)
+
+	c := NewClientWithRunner(stub)
+	_, err := c.LatestReleaseTag("o", "r", false)
+	if err == nil {
+		t.Fatal("LatestReleaseTag() should return error for empty releases")
+	}
+}
+
+func TestLatestReleaseTag_NoVersionLike(t *testing.T) {
+	listJSON := `[` +
+		`{"tagName":"nightly"},` +
+		`{"tagName":"dev"},` +
+		`{"tagName":"main"}` +
+		`]`
+	stub := NewStubRunner()
+	stub.Outputs["gh release list -R o/r --limit 100 --exclude-pre-releases --json tagName"] = []byte(listJSON)
+
+	c := NewClientWithRunner(stub)
+	_, err := c.LatestReleaseTag("o", "r", false)
+	if err == nil {
+		t.Fatal("LatestReleaseTag() should return error when no version-like tags exist")
+	}
+}
+
+func TestLatestReleaseTag_SortsByVersion_Mixed(t *testing.T) {
+	// Mix of version-like and non-version-like; should pick highest version
+	listJSON := `[` +
+		`{"tagName":"nightly"},` +
+		`{"tagName":"v1.2.3"},` +
+		`{"tagName":"v0.9.0"},` +
+		`{"tagName":"latest"}` +
+		`]`
+	stub := NewStubRunner()
+	stub.Outputs["gh release list -R o/r --limit 100 --exclude-pre-releases --json tagName"] = []byte(listJSON)
+
+	c := NewClientWithRunner(stub)
+	tag, err := c.LatestReleaseTag("o", "r", false)
+	if err != nil {
+		t.Fatalf("LatestReleaseTag(): %v", err)
+	}
+	if tag != "v1.2.3" {
+		t.Errorf("tag = %q, want v1.2.3", tag)
 	}
 }
