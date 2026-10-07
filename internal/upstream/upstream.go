@@ -797,11 +797,13 @@ func resolveOne(
 			latestV, err = p.FetchLatestVersion(*rid, allowPrereleases)
 		}
 		if err != nil {
+			// Provider resolved but version fetch failed — show source, not "unknown".
 			return UpstreamResult{
 				Package: einfo.Category + "/" + einfo.Pkg,
 				Current: eb.PVR,
 				Latest:  "",
 				Status:  StatusUnknown,
+				Source:  resolveSourceInfo(rid),
 				Error:   err.Error(),
 				Depth:   depth,
 			}

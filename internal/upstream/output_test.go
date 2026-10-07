@@ -422,6 +422,33 @@ func TestCheckTag_IsSignificant(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// TestSourceCell_ErrorRowShowsSource — D1
+// An error row with populated SourceInfo must show the source label+URL,
+// not the generic "unknown" fallback.
+// ---------------------------------------------------------------------------
+func TestSourceCell_ErrorRowShowsSource(t *testing.T) {
+	r := UpstreamResult{
+		Package: "dev-util/fixjson",
+		Current: "1.1.2-r1",
+		Latest:  "",
+		Status:  StatusUnknown,
+		Source:  SourceInfo{Label: "GitHub:rhysd/fixjson", URL: "https://github.com/rhysd/fixjson", Glyph: string(dev.Github)},
+		Error:   "gh api releases/latest: 404 Not Found",
+	}
+	cell := SourceCell(r, true)
+	if !strings.Contains(cell, "https://github.com/rhysd/fixjson") {
+		t.Errorf("SourceCell must contain the URL; got: %s", cell)
+	}
+	if !strings.Contains(cell, "rhysd/fixjson") {
+		t.Errorf("SourceCell must contain the short label; got: %s", cell)
+	}
+	// Must NOT fall back to "unknown".
+	if cell == "unknown" {
+		t.Error("SourceCell must not show 'unknown' when Source is populated")
+	}
+}
+
 func TestRenderTable_Indentation(t *testing.T) {
 	var buf bytes.Buffer
 	results := []UpstreamResult{

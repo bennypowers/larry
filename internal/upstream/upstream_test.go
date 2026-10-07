@@ -1122,3 +1122,63 @@ inherit systemd tmpfiles
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Plan 34 — TestResolveOne_UnknownWithSource
+// When the provider is resolved and a RemoteId is found, but version fetch
+// fails, the Source must still be populated — not left empty ("unknown").
+// ---------------------------------------------------------------------------
+func TestResolveOne_UnknownWithSource(t *testing.T) {
+	overlay := setupTestOverlay(t)
+	writeEbuild(t, overlay, "dev-util/fixjson/fixjson-1.1.2-r1.ebuild", `
+EAPI=8
+DESCRIPTION="Text formatter for JSON files"
+SRC_URI="mirror://github/rhysd/fixjson/archive/v1.1.2.tar.gz"
+LICENSE="MIT"
+SLOT="0"
+`)
+	metaDir := filepath.Join(overlay, "dev-util", "fixjson")
+	metaXML := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+<upstream>
+<remote-id type="github">rhysd/fixjson</remote-id>
+</upstream>
+</pkgmetadata>
+`
+	if err := os.WriteFile(filepath.Join(metaDir, "metadata.xml"), []byte(metaXML), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Registry with a fake provider that returns an error — simulates
+	// GitHub API 404 (no releases on the repo).
+	reg := provider.NewProviderRegistry()
+	reg.Register(&fakeTagResolver{
+		res: nil,
+		err: fmt.Errorf("gh api releases/latest: 404 Not Found"),
+	})
+
+	results, err := RunWithTargets(overlay, reg, nil, false, true)
+	if err != nil {
+		t.Fatalf("RunWithTargets: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	r := results[0]
+	if r.Package != "dev-util/fixjson" {
+		t.Errorf("Package = %q, want \"dev-util/fixjson\"", r.Package)
+	}
+	if r.Status != StatusUnknown {
+		t.Errorf("Status = %v, want %v", r.Status, StatusUnknown)
+	}
+	if r.Source.Label != "GitHub:rhysd/fixjson" {
+		t.Errorf("Source.Label = %q, want \"GitHub:rhysd/fixjson\"", r.Source.Label)
+	}
+	if r.Source.URL != "https://github.com/rhysd/fixjson" {
+		t.Errorf("Source.URL = %q, want \"https://github.com/rhysd/fixjson\"", r.Source.URL)
+	}
+	if r.Error == "" {
+		t.Error("Error must be non-empty")
+	}
+}

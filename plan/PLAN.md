@@ -37,6 +37,12 @@ Phase 2 is therefore **parity and correctness**, not new surface area.
 
 ---
 
+## Next up
+
+Plan 34 completed 2026-01-01. Adds `Source: resolveSourceInfo(rid)` to the error-return
+path in `resolveOne` so that provider-resolved packages show their source label even when
+version fetch fails (e.g. GitHub 404, no tags). Two new tests added.
+
 ## Phase 1 — build-out (historical)
 
 Plan files `01`–`11` describe what was built. Their per-task ✅ marks reflect "code and
@@ -106,7 +112,8 @@ stated acceptance check. Respect preconditions — the first four unblock the re
 - [x] `31-PLAN-UPSTREAM-COCKPIT-VERSION-SORT.md` - `LatestReleaseTag`: sort all 100 releases by version number, return highest (diverge from creation-date sort). Fixes `cockpit` showing `310.10` instead of `368`.                                                                                          | 17b                   |
 - [x] `32-PLAN-UPSTREAM-RPI-TIER4-FILTER.md` - Per-package `.larry.yaml` upstream rules replace global `IsPureDateTag` filter. Fixes `raspberrypi-kernel` without over-filtering other repos.                             | 17b                   |
 - [x] `33-upstream-regex-tag-match.md` - Per-package `.larry.yaml` `pv_match`/`tag_match`/`version_template` for generic version assembly (e.g. raspberrypi-kernel `stable_YYYYMMDD` → `6.18.46_pYYYYMMDD`). | 32 |
-- [ ] `34-UPSTREAM-UNKNOWN-SOURCE-FIX.md` - various packages show `UNKNOWN` for version
+- [x] `34-UPSTREAM-UNKNOWN-SOURCE-FIX.md` - various packages show `UNKNOWN` for version
+  (fix: `Source: resolveSourceInfo(rid)` on error branches in `resolveOne`)
 
 
 ## Module structure
