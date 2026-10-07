@@ -134,6 +134,12 @@ func ScanDependencies(
 			continue
 		}
 
+		// Skip system account categories — the script never recurses
+		// into them from a dependency scan.
+		if shouldSkip(parsed.Category) {
+			continue
+		}
+
 		atomKey := parsed.Category + "/" + parsed.PN
 		if visited[atomKey] {
 			continue

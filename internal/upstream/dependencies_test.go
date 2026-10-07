@@ -650,6 +650,66 @@ RDEPEND="c/a"
 	}
 }
 
+// TestScanDependencies_SkipsAcctPackages verifies that acct-group/* and
+// acct-user/* dependencies are silently skipped (D1). The root depends on
+// both acct packages and a real dep; only the real dep should appear.
+func TestScanDependencies_SkipsAcctPackages(t *testing.T) {
+	ov := setupFixtureOverlay(t, map[string]string{
+		"app-misc/root/root-1.0.0.ebuild": `EAPI=8
+DESCRIPTION="Root"
+SRC_URI=""
+LICENSE="MIT"
+SLOT="0"
+RDEPEND="acct-group/foo acct-user/foo dev-libs/bar"
+`,
+		"acct-group/foo/foo-1.0.0.ebuild": `EAPI=8
+DESCRIPTION="Acct group"
+SRC_URI=""
+LICENSE="MIT"
+SLOT="0"
+`,
+		"acct-user/foo/foo-1.0.0.ebuild": `EAPI=8
+DESCRIPTION="Acct user"
+SRC_URI=""
+LICENSE="MIT"
+SLOT="0"
+`,
+		"dev-libs/bar/bar-2.0.0.ebuild": `EAPI=8
+DESCRIPTION="Bar dep"
+SRC_URI=""
+LICENSE="MIT"
+SLOT="0"
+`,
+	})
+
+	registry := provider.NewProviderRegistry()
+	cache := NewVersionCacheWithPath(t.TempDir(), 60)
+
+	rootEbuild, err := atom.FindLatest(filepath.Join(ov, "app-misc", "root"))
+	if err != nil {
+		t.Fatalf("FindLatest(root): %v", err)
+	}
+
+	visited := map[string]bool{}
+	results := ScanDependencies(ov, rootEbuild, registry, false, cache, 0, visited)
+
+	// Expect exactly one row: dev-libs/bar (Depth 1). No acct-group/acct-user rows.
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d: %v", len(results), results)
+	}
+	if results[0].Package != "dev-libs/bar" {
+		t.Errorf("expected dev-libs/bar, got %s", results[0].Package)
+	}
+	if results[0].Depth != 1 {
+		t.Errorf("expected depth 1, got %d", results[0].Depth)
+	}
+	for _, r := range results {
+		if strings.HasPrefix(r.Package, "acct-group/") || strings.HasPrefix(r.Package, "acct-user/") {
+			t.Errorf("acct package should be skipped: %s", r.Package)
+		}
+	}
+}
+
 // TestScanDependencies_NoDepends verifies that an ebuild with no deps returns
 // an empty result.
 func TestScanDependencies_NoDepends(t *testing.T) {
