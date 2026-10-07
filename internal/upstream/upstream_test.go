@@ -914,11 +914,7 @@ var _ provider.ResolverWithTags = (*fakeTagResolver)(nil)
 
 func TestStatus_NewerTag(t *testing.T) {
 	// D4a: dated tag is newer than the ebuild date.
-	status, latest := deriveTagStatus("6.18.46_p20260824", &provider.Resolution{
-		Tag:     "6.18.47",
-		TagDate: "20270101",
-		ByDate:  true,
-	})
+	status, latest := deriveTagStatus("6.18.46_p20260824", "6.18.47", "20270101")
 	if status != StatusNewerTag {
 		t.Errorf("status = %v, want %v", status, StatusNewerTag)
 	}
@@ -928,11 +924,7 @@ func TestStatus_NewerTag(t *testing.T) {
 }
 
 func TestStatus_TagDateEqual(t *testing.T) {
-	status, latest := deriveTagStatus("6.18.46_p20260824", &provider.Resolution{
-		Tag:     "v6.18.46",
-		TagDate: "20260824",
-		ByDate:  true,
-	})
+	status, latest := deriveTagStatus("6.18.46_p20260824", "v6.18.46", "20260824")
 	if status != StatusUpToDate {
 		t.Errorf("status = %v, want %v", status, StatusUpToDate)
 	}
@@ -942,11 +934,7 @@ func TestStatus_TagDateEqual(t *testing.T) {
 }
 
 func TestStatus_TagDateOlder(t *testing.T) {
-	status, latest := deriveTagStatus("6.18.46_p20260824", &provider.Resolution{
-		Tag:     "6.18.45",
-		TagDate: "20250101",
-		ByDate:  true,
-	})
+	status, latest := deriveTagStatus("6.18.46_p20260824", "6.18.45", "20250101")
 	if status != StatusAhead {
 		t.Errorf("status = %v, want %v", status, StatusAhead)
 	}
@@ -957,11 +945,7 @@ func TestStatus_TagDateOlder(t *testing.T) {
 
 func TestStatus_CheckTag(t *testing.T) {
 	// D4b: non-version-like tag → CHECK-TAG.
-	status, latest := deriveTagStatus("1.2.3", &provider.Resolution{
-		Tag:     "nightly-build",
-		TagDate: "20260101",
-		ByDate:  true,
-	})
+	status, latest := deriveTagStatus("1.2.3", "nightly-build", "20260101")
 	if status != StatusCheckTag {
 		t.Errorf("status = %v, want %v", status, StatusCheckTag)
 	}
@@ -971,11 +955,7 @@ func TestStatus_CheckTag(t *testing.T) {
 }
 
 func TestStatus_ByDate_NoDatesFallsBackToVersionCompare(t *testing.T) {
-	status, latest := deriveTagStatus("1.2.3", &provider.Resolution{
-		Tag:     "v1.3.0",
-		TagDate: "",
-		ByDate:  true,
-	})
+	status, latest := deriveTagStatus("1.2.3", "v1.3.0", "")
 	if status != StatusOutdated {
 		t.Errorf("status = %v, want %v", status, StatusOutdated)
 	}
@@ -986,11 +966,7 @@ func TestStatus_ByDate_NoDatesFallsBackToVersionCompare(t *testing.T) {
 
 func TestStatus_StripsVPrefixOnlyBeforeDigit(t *testing.T) {
 	// vV only stripped when followed by a digit.
-	status, latest := deriveTagStatus("1.2.3", &provider.Resolution{
-		Tag:     "v1.3.0",
-		TagDate: "",
-		ByDate:  true,
-	})
+	status, latest := deriveTagStatus("1.2.3", "v1.3.0", "")
 	if status != StatusOutdated {
 		t.Errorf("v-prefixed tag: status = %v, want %v", status, StatusOutdated)
 	}
@@ -998,11 +974,7 @@ func TestStatus_StripsVPrefixOnlyBeforeDigit(t *testing.T) {
 		t.Errorf("v-prefixed tag: latest = %q, want %q", latest, "1.3.0")
 	}
 
-	status2, latest2 := deriveTagStatus("1.2.3", &provider.Resolution{
-		Tag:     "verbose-1.0",
-		TagDate: "",
-		ByDate:  true,
-	})
+	status2, latest2 := deriveTagStatus("1.2.3", "verbose-1.0", "")
 	// "verbose-1.0" starts with a letter, so isVersionLike(currentPV) && isVersionLike(tagName) is
 	// true (both match ^[0-9][0-9.]* after stripping nothing). currentPV is "1.2.3" (version-like),
 	// tagName is "verbose-1.0" — wait, "verbose-1.0" starts with 'v', not a digit, so isVersionLike

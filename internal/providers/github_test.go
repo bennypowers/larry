@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 
 	"bennypowers.dev/larry/internal/github"
+	"bennypowers.dev/larry/internal/larryconfig"
 	"bennypowers.dev/larry/internal/remoteid"
 	"bennypowers.dev/larry/internal/version"
 )
@@ -557,5 +559,422 @@ func TestFetchLatestVersion_ByDate(t *testing.T) {
 	want, _ := version.Parse("20260824")
 	if v.String() != want.String() {
 		t.Errorf("Version = %q, want %q", v.String(), want.String())
+	}
+}
+
+// ---- Tier 4: firmware date filtering (D1) ----
+
+func TestGitHub_Tier4_SkipsFirmwareDates(t *testing.T) {
+	// Two nodes: 1.20230405 (firmware date → skip), v6.1.75 (real version).
+	stub := github.NewStubRunner()
+	kGQL := key("api", "graphql", "-f", "query="+graphqlTagsQuery, "-f", "owner=o", "-f", "name=r")
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName")
+	stub.Errors[kRel] = fmt.Errorf("gh error")
+	stub.Errors[kList] = fmt.Errorf("gh error")
+
+	gqlOutput, _ := json.Marshal(map[string]interface{}{
+		"data": map[string]interface{}{
+			"repository": map[string]interface{}{
+				"refs": map[string]interface{}{
+					"nodes": []map[string]interface{}{
+						{
+							"name": "1.20230405",
+							"target": map[string]interface{}{
+								"committedDate": "2023-04-05T00:00:00Z",
+							},
+						},
+						{
+							"name": "v6.1.75",
+							"target": map[string]interface{}{
+								"committedDate": "2024-01-01T00:00:00Z",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	stub.Outputs[kGQL] = gqlOutput
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{
+		Client:    client,
+		TagLister: func(url string) ([]string, error) { return nil, fmt.Errorf("no tags") },
+		ResolveOptions: &larryconfig.ResolveOptions{
+			IgnoreTagRe: []*regexp.Regexp{regexp.MustCompile(`^\d+\.\d{8}$`)},
+		},
+	}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.Tag != "v6.1.75" {
+		t.Errorf("Tag = %q, want v6.1.75 (firmware date skipped)", res.Tag)
+	}
+	if !res.ByDate {
+		t.Error("ByDate should be true")
+	}
+}
+
+func TestGitHub_Tier4_AllFirmwareDates(t *testing.T) {
+	// All nodes are firmware date tags → error (no version-like tags).
+	stub := github.NewStubRunner()
+	kGQL := key("api", "graphql", "-f", "query="+graphqlTagsQuery, "-f", "owner=o", "-f", "name=r")
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName")
+	stub.Errors[kRel] = fmt.Errorf("gh error")
+	stub.Errors[kList] = fmt.Errorf("gh error")
+
+	gqlOutput, _ := json.Marshal(map[string]interface{}{
+		"data": map[string]interface{}{
+			"repository": map[string]interface{}{
+				"refs": map[string]interface{}{
+					"nodes": []map[string]interface{}{
+						{
+							"name": "1.20230405",
+							"target": map[string]interface{}{
+								"committedDate": "2023-04-05T00:00:00Z",
+							},
+						},
+						{
+							"name": "1.20260519",
+							"target": map[string]interface{}{
+								"committedDate": "2026-05-19T00:00:00Z",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	stub.Outputs[kGQL] = gqlOutput
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{
+		Client:    client,
+		TagLister: func(url string) ([]string, error) { return nil, fmt.Errorf("no tags") },
+		ResolveOptions: &larryconfig.ResolveOptions{
+			IgnoreTagRe: []*regexp.Regexp{regexp.MustCompile(`^\d+\.\d{8}$`)},
+		},
+	}
+	_, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err == nil {
+		t.Fatal("FetchResolution() should error when all nodes are firmware dates")
+	}
+}
+
+func TestTryParseVersion_SkipsFirmwareDates(t *testing.T) {
+	// With ignore_tags configured, firmware dates are rejected.
+	p := &GitHubProvider{
+		ResolveOptions: &larryconfig.ResolveOptions{
+			IgnoreTagRe: []*regexp.Regexp{regexp.MustCompile(`^\d+\.\d{8}$`)},
+		},
+	}
+	tests := []struct {
+		tag      string
+		errorSub string
+	}{
+		{"1.20230405", "ignore pattern"},
+		{"1.20260519", "ignore pattern"},
+		{"v1.20230405", "ignore pattern"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.tag, func(t *testing.T) {
+			_, err := p.tryParseVersion(tt.tag)
+			if err == nil {
+				t.Fatalf("tryParseVersion(%q) should error", tt.tag)
+			}
+			if !strings.Contains(err.Error(), tt.errorSub) {
+				t.Errorf("error = %q, want to contain %q", err.Error(), tt.errorSub)
+			}
+		})
+	}
+}
+
+// ---- Step 3-4: tryParseVersion with ResolveOptions (ignore_tags, strip_prefixes) ----
+
+func TestGitHub_TryParseVersion_IgnoreTags(t *testing.T) {
+	p := &GitHubProvider{
+		ResolveOptions: &larryconfig.ResolveOptions{
+			IgnoreTagRe: []*regexp.Regexp{regexp.MustCompile(`^\d+\.\d{8}$`)},
+		},
+	}
+
+	// Raw tag matches ignore pattern
+	if _, err := p.tryParseVersion("1.20230405"); err == nil {
+		t.Fatal("expected 1.20230405 to be ignored")
+	}
+
+	// Stripped tag matches ignore pattern (v prefix stripped)
+	if _, err := p.tryParseVersion("v1.20230405"); err == nil {
+		t.Fatal("expected v1.20230405 to be ignored (stripped matches)")
+	}
+
+	// Raw tag doesn't match, stripped doesn't match → should parse
+	v, err := p.tryParseVersion("v1.2.3")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v.String() != "1.2.3" {
+		t.Errorf("parsed version = %q, want 1.2.3", v.String())
+	}
+
+	// No ResolveOptions → no filtering
+	p.ResolveOptions = nil
+	v, err = p.tryParseVersion("1.20230405")
+	if err != nil {
+		t.Fatalf("without options, 1.20230405 should parse: %v", err)
+	}
+	if v.String() != "1.20230405" {
+		t.Errorf("parsed version = %q, want 1.20230405", v.String())
+	}
+}
+
+func TestGitHub_TryParseVersion_StripPrefixes(t *testing.T) {
+	p := &GitHubProvider{
+		ResolveOptions: &larryconfig.ResolveOptions{
+			StripPrefixes: []string{"stable_", "oldstable_"},
+		},
+	}
+
+	// stable_ prefix stripped before version parsing
+	v, err := p.tryParseVersion("stable_1.2.3")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v.String() != "1.2.3" {
+		t.Errorf("parsed version = %q, want 1.2.3", v.String())
+	}
+}
+
+// ---- Tier 3: strip_prefixes in ls-remote list ----
+
+func TestGitHub_Tier3_StripPrefixes(t *testing.T) {
+	stub := github.NewStubRunner()
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName")
+	stub.Errors[kRel] = fmt.Errorf("gh error")
+	stub.Errors[kList] = fmt.Errorf("gh error")
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{
+		Client:    client,
+		TagLister: func(url string) ([]string, error) { return []string{"stable_1.0", "stable_2.0", "v1.5"}, nil },
+		ResolveOptions: &larryconfig.ResolveOptions{
+			StripPrefixes: []string{"stable_"},
+		},
+	}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.Version != "2.0" {
+		t.Errorf("Version = %q, want 2.0 (stable_ prefix stripped, highest version)", res.Version)
+	}
+}
+
+// ---- Tier 4: ignore_tags in GraphQL ----
+
+func TestGitHub_Tier4_IgnoreTags(t *testing.T) {
+	stub := github.NewStubRunner()
+	kGQL := key("api", "graphql", "-f", "query="+graphqlTagsQuery, "-f", "owner=o", "-f", "name=r")
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName")
+	stub.Errors[kRel] = fmt.Errorf("gh error")
+	stub.Errors[kList] = fmt.Errorf("gh error")
+
+	gqlOutput, _ := json.Marshal(map[string]interface{}{
+		"data": map[string]interface{}{
+			"repository": map[string]interface{}{
+				"refs": map[string]interface{}{
+					"nodes": []map[string]interface{}{
+						{
+							"name": "1.20230405",
+							"target": map[string]interface{}{
+								"committedDate": "2023-04-05T00:00:00Z",
+							},
+						},
+						{
+							"name": "20240115-stable",
+							"target": map[string]interface{}{
+								"committedDate": "2024-01-15T00:00:00Z",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	stub.Outputs[kGQL] = gqlOutput
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{
+		Client:    client,
+		TagLister: func(url string) ([]string, error) { return nil, fmt.Errorf("no tags") },
+		ResolveOptions: &larryconfig.ResolveOptions{
+			IgnoreTagRe: []*regexp.Regexp{regexp.MustCompile(`^\d+\.\d{8}$`)},
+		},
+	}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.Tag != "20240115-stable" {
+		t.Errorf("Tag = %q, want 20240115-stable (firmware date skipped via ignore_tags)", res.Tag)
+	}
+	if !res.ByDate {
+		t.Error("ByDate should be true")
+	}
+}
+
+// ---- ProviderOptionsReset: state doesn't leak between packages ----
+
+func TestGitHub_ProviderOptionsReset(t *testing.T) {
+	p := &GitHubProvider{}
+
+	// 1. Package A with ignore rule (e.g. ignore firmware dates)
+	p.ResolveOptions = &larryconfig.ResolveOptions{
+		IgnoreTagRe: []*regexp.Regexp{regexp.MustCompile(`^\d+\.\d{8}$`)},
+	}
+	if _, err := p.tryParseVersion("1.20230405"); err == nil {
+		t.Fatal("Package A: expected 1.20230405 to be ignored")
+	}
+
+	// 2. Clear options (mimicking resolveOne resetting options for Package B with no .larry.yaml)
+	p.ResolveOptions = nil
+
+	// 3. Package B with no ignore rule
+	v, err := p.tryParseVersion("1.20230405")
+	if err != nil {
+		t.Fatalf("Package B: expected 1.20230405 to parse successfully when options are reset, got: %v", err)
+	}
+	if v.String() != "1.20230405" {
+		t.Errorf("Package B: parsed version = %q, want 1.20230405", v.String())
+	}
+}
+
+// ---- Plan 33: tag_match, version_template in tryParseVersion ----
+
+func TestGitHub_TryParseVersion_TemplateExpansion(t *testing.T) {
+	// Simulates raspberrypi-linux: PV=6.18.46_p20260824, tag=stable_20260911
+	p := &GitHubProvider{
+		ResolveOptions: &larryconfig.ResolveOptions{
+			PVCaptures:      map[string]string{"BASE": "6.18.46"},
+			TagMatchRe:      regexp.MustCompile(`^stable_(?P<DATE>\d{8})$`),
+			VersionTemplate: "${BASE}_p${DATE}",
+		},
+	}
+
+	v, err := p.tryParseVersion("stable_20260911")
+	if err != nil {
+		t.Fatalf("tryParseVersion(%q): %v", "stable_20260911", err)
+	}
+
+	// The template expands BASE + DATE → "6.18.46_p20260911"
+	want := "6.18.46_p20260911"
+	if v.String() != want {
+		t.Errorf("parsed version = %q, want %q", v.String(), want)
+	}
+}
+
+func TestGitHub_TryParseVersion_TagMatchRejects(t *testing.T) {
+	p := &GitHubProvider{
+		ResolveOptions: &larryconfig.ResolveOptions{
+			TagMatchRe: regexp.MustCompile(`^stable_`),
+		},
+	}
+
+	// Non-matching tag should be rejected
+	_, err := p.tryParseVersion("oldstable_1.0.0")
+	if err == nil {
+		t.Fatal("tryParseVersion should reject tags not matching tag_match")
+	}
+}
+
+func TestGitHub_Tier3_TagMatchFilter(t *testing.T) {
+	// Tier 3 should filter tags by TagMatchRe before sorting
+	stub := github.NewStubRunner()
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName")
+	stub.Errors[kRel] = fmt.Errorf("gh error")
+	stub.Errors[kList] = fmt.Errorf("gh error")
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{
+		Client:  client,
+		TagLister: func(url string) ([]string, error) {
+			return []string{"stable_20260911", "oldstable_20260824", "stable_20260901"}, nil
+		},
+		ResolveOptions: &larryconfig.ResolveOptions{
+			TagMatchRe:    regexp.MustCompile(`^stable_`),
+			StripPrefixes: []string{"stable_"},
+		},
+	}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+
+	// oldstable_ should be filtered out by TagMatchRe; highest stable_ version should win
+	if res.Version != "20260911" {
+		t.Errorf("Version = %q, want 20260911 (oldstable filtered, highest stable_ wins)", res.Version)
+	}
+}
+
+func TestGitHub_Tier4_TagMatchFilter(t *testing.T) {
+	// Tier 4 should skip nodes that don't match TagMatchRe
+	stub := github.NewStubRunner()
+	kGQL := key("api", "graphql", "-f", "query="+graphqlTagsQuery, "-f", "owner=o", "-f", "name=r")
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100",
+		"--exclude-pre-releases", "--json", "tagName")
+	stub.Errors[kRel] = fmt.Errorf("gh error")
+	stub.Errors[kList] = fmt.Errorf("gh error")
+
+	// Two nodes: stable_20260911 (matches) and oldstable_20260824 (doesn't match)
+	gqlOutput, _ := json.Marshal(map[string]interface{}{
+		"data": map[string]interface{}{
+			"repository": map[string]interface{}{
+				"refs": map[string]interface{}{
+					"nodes": []map[string]interface{}{
+						{
+							"name": "stable_20260911",
+							"target": map[string]interface{}{
+								"committedDate": "2026-09-11T00:00:00Z",
+							},
+						},
+						{
+							"name": "oldstable_20260824",
+							"target": map[string]interface{}{
+								"committedDate": "2026-08-24T00:00:00Z",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	stub.Outputs[kGQL] = gqlOutput
+
+	client := github.NewClientWithRunner(stub)
+	p := &GitHubProvider{
+		Client:  client,
+		TagLister: func(url string) ([]string, error) { return nil, fmt.Errorf("no tags") },
+		ResolveOptions: &larryconfig.ResolveOptions{
+			TagMatchRe: regexp.MustCompile(`^stable_`),
+		},
+	}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.Tag != "stable_20260911" {
+		t.Errorf("Tag = %q, want stable_20260911 (oldstable filtered)", res.Tag)
 	}
 }

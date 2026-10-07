@@ -13,6 +13,7 @@ import (
 	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
+	"bennypowers.dev/larry/internal/larryconfig"
 )
 
 // DepType identifies the dependency ecosystem.
@@ -257,7 +258,7 @@ func ghUploadAsset(tag, tarballPath, repo string, runner github.CmdRunner) error
 // resolveBuildDir returns the working directory for a vendored dep spec.
 // When vendor_dirs is configured for this package, it uses the first entry;
 // otherwise it falls back to the extract root.
-func resolveBuildDir(extractDir string, pe *atom.ParsedEbuild, pkgCfg *Config, ds DepSpec) string {
+func resolveBuildDir(extractDir string, pe *atom.ParsedEbuild, pkgCfg *larryconfig.Config, ds DepSpec) string {
 	if pkgCfg != nil {
 		if dirs, ok := pkgCfg.VendorDirs[pe.PN]; ok && len(dirs) > 0 {
 			return filepath.Join(extractDir, dirs[0])
@@ -288,7 +289,7 @@ func PrepareVendored(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	}
 
 	// 2. Load per-package config for vendor_dirs
-	pkgCfg, err := LoadConfig(ei.Path)
+	pkgCfg, err := larryconfig.LoadConfig(filepath.Dir(ei.Path))
 	if err != nil {
 		return fmt.Errorf("vendored: read .larry.yaml: %w", err)
 	}

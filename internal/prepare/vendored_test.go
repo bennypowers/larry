@@ -13,6 +13,7 @@ import (
 	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
+	"bennypowers.dev/larry/internal/larryconfig"
 )
 
 // ---------------------------------------------------------------------------
@@ -488,7 +489,7 @@ func TestParseDepSpecs_NoMatch(t *testing.T) {
 // Vendor dirs — resolveBuildDir tests (C2)
 // ---------------------------------------------------------------------------
 
-func resolveBuildDirForTest(extractDir string, pe *atom.ParsedEbuild, pkgCfg *Config, ds DepSpec) string {
+func resolveBuildDirForTest(extractDir string, pe *atom.ParsedEbuild, pkgCfg *larryconfig.Config, ds DepSpec) string {
 	return resolveBuildDir(extractDir, pe, pkgCfg, ds)
 }
 
@@ -501,7 +502,7 @@ func TestVendored_VendorDirsConfigIsHonoured(t *testing.T) {
 		P:        "fish-lsp-1.1.3",
 		Path:     filepath.Join(overlayDir, "fish-lsp-1.1.3.ebuild"),
 	}
-	pkgCfg := &Config{
+	pkgCfg := &larryconfig.Config{
 		VendorDirs: map[string][]string{
 			"fish-lsp": {"sub/pkg"},
 		},
@@ -538,7 +539,7 @@ func TestVendored_VendorDirsForOtherPackageIsIgnored(t *testing.T) {
 		P:        "fish-lsp-1.1.3",
 		Path:     t.TempDir(),
 	}
-	pkgCfg := &Config{
+	pkgCfg := &larryconfig.Config{
 		VendorDirs: map[string][]string{
 			"some-other-pkg": {"sub/pkg"},
 		},

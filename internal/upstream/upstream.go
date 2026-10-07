@@ -12,6 +12,7 @@ import (
 
 	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
+	"bennypowers.dev/larry/internal/larryconfig"
 	"bennypowers.dev/larry/internal/provider"
 	"bennypowers.dev/larry/internal/providers"
 	"bennypowers.dev/larry/internal/remoteid"
@@ -541,13 +542,15 @@ var versionLikeRe = regexp.MustCompile(`^[0-9][0-9.]*`)
 func isVersionLike(s string) bool { return versionLikeRe.MatchString(s) }
 
 // deriveTagStatus implements the script's `fetch_result == 2` branch.
-// currentPV is the ebuild's PV. Returns the status and the Latest cell text.
+// currentPV is the ebuild's PV. tag is the (optionally template-expanded) tag string.
+// tagDate is an optional YYYYMMDD date from the commit or tag name.
+// Returns the status and the Latest cell text.
 //
 // Both tag dates are "YYYYMMDD" strings, so lexicographic comparison is correct
 // and no strconv conversion is needed.
-func deriveTagStatus(currentPV string, res *provider.Resolution) (Status, string) {
+func deriveTagStatus(currentPV string, tag string, tagDate string) (Status, string) {
 	// Strip leading v/V only when followed by a digit (script L1471: ^[vV](?=\d)).
-	tagName := res.Tag
+	tagName := tag
 	if len(tagName) > 1 && (tagName[0] == 'v' || tagName[0] == 'V') && tagName[1] >= '0' && tagName[1] <= '9' {
 		tagName = tagName[1:]
 	}
@@ -557,12 +560,12 @@ func deriveTagStatus(currentPV string, res *provider.Resolution) (Status, string
 
 	// Both sides version-like: compare dates if available, fall back to version compare.
 	if isVersionLike(currentPV) && isVersionLike(tagName) {
-		if curOK && res.TagDate != "" {
+		if curOK && tagDate != "" {
 			// YYYYMMDD comparison is lexicographic.
 			switch {
-			case res.TagDate > curDate:
+			case tagDate > curDate:
 				return StatusNewerTag, latest
-			case res.TagDate == curDate:
+			case tagDate == curDate:
 				return StatusUpToDate, latest
 			default:
 				return StatusAhead, latest
@@ -632,6 +635,18 @@ func resolveOne(
 		}
 	}
 
+	// Load per-package .larry.yaml upstream rules. Unconditionally set
+	// ResolveOptions on any GitHubProvider so that state does not leak
+	// between packages during a multi-package walk.
+	var resOpts *larryconfig.ResolveOptions
+	if eb.Path != "" {
+		if cfg, err := larryconfig.LoadConfig(filepath.Dir(eb.Path)); err == nil && cfg.Upstream != nil {
+			if opts, err := cfg.Upstream.Compile(einfo.PVVal); err == nil {
+				resOpts = opts
+			}
+		}
+	}
+
 	// Live-only handling
 	if eb.Live {
 		providerType := ResolveProviderType(einfo.Path, einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
@@ -650,6 +665,10 @@ func resolveOne(
 					ridType := mapTypeToRemoteIdType(providerType)
 					p, err := registry.Resolve(remoteid.RemoteId{Type: ridType, Name: rid.Name, Owner: rid.Owner, Repo: rid.Repo})
 					if err == nil {
+						// Wire per-package ResolveOptions onto any GitHubProvider.
+						if ghProv, ok := p.(*providers.GitHubProvider); ok {
+							ghProv.ResolveOptions = resOpts
+						}
 						latestV, err = p.FetchLatestVersion(*rid, allowPrereleases)
 						if err == nil && latestV != nil {
 							cache.Set(cacheKey, latestV.Format())
@@ -730,12 +749,36 @@ func resolveOne(
 			}
 		}
 
+			// Wire per-package ResolveOptions onto any GitHubProvider before
+		// resolution so that ignore_tags / strip_prefixes apply. UNCONDITIONAL
+		// set (even if resOpts is nil) to prevent state leaking from a
+		// previously resolved package.
+		if ghProv, ok := p.(*providers.GitHubProvider); ok {
+			ghProv.ResolveOptions = resOpts
+		}
+
 		// Try ResolverWithTags first (e.g. GitHubProvider — plan 17b),
 		// fall back to plain FetchLatestVersion for other providers.
 		if rt, ok := p.(provider.ResolverWithTags); ok {
 			res, rerr := rt.FetchResolution(*rid, allowPrereleases)
 			if rerr == nil && res != nil && res.ByDate {
-				status, latest := deriveTagStatus(einfo.PVVal, res)
+				// Apply tag_match captures + version_template for date-based
+				// resolution (tier 4), the only path that bypasses tryParseVersion.
+				tagForStatus := res.Tag
+				if resOpts != nil && resOpts.TagMatchRe != nil {
+					tagCaps := larryconfig.ExtractCaptures(resOpts.TagMatchRe, res.Tag)
+					allVars := make(map[string]string)
+					for k, v := range resOpts.PVCaptures {
+						allVars[k] = v
+					}
+					for k, v := range tagCaps {
+						allVars[k] = v
+					}
+					if resOpts.VersionTemplate != "" {
+						tagForStatus = larryconfig.ExpandTemplate(resOpts.VersionTemplate, allVars)
+					}
+				}
+				status, latest := deriveTagStatus(einfo.PVVal, tagForStatus, res.TagDate)
 				return UpstreamResult{
 					Package: einfo.Category + "/" + einfo.Pkg,
 					Current: einfo.PVVal,

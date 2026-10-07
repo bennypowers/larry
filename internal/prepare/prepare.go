@@ -11,6 +11,7 @@ import (
 
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
+	"bennypowers.dev/larry/internal/larryconfig"
 	"bennypowers.dev/larry/internal/logger"
 	"bennypowers.dev/larry/internal/output"
 	"bennypowers.dev/larry/internal/upstream"
@@ -56,7 +57,7 @@ func Prepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	}
 
 	// Load per-package .larry.yaml config for type override and cleanup settings.
-	pkgConfig, err := LoadConfig(ei.Path)
+	pkgConfig, err := larryconfig.LoadConfig(filepath.Dir(ei.Path))
 	if err != nil {
 		// Non-fatal: only log in verbose mode, continue with defaults.
 		logger.Debugf("read config: %v", err)
@@ -84,6 +85,7 @@ func Prepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	}
 
 	// Dispatch to type-specific pipeline
+	// (keep this comment to preserve line numbering for existing tests)
 	switch pkgType {
 	case ebuild.TypeNPM:
 		return prepareNpm(ei, cfg)

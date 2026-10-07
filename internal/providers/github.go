@@ -8,6 +8,7 @@ import (
 
 	"bennypowers.dev/larry/internal/github"
 	"bennypowers.dev/larry/internal/git"
+	"bennypowers.dev/larry/internal/larryconfig"
 	"bennypowers.dev/larry/internal/remoteid"
 	"bennypowers.dev/larry/internal/provider"
 	"bennypowers.dev/larry/internal/ratelimit"
@@ -40,6 +41,9 @@ type GitHubProvider struct {
 	// TagLister lists remote tag names for a clone URL. Defaults to
 	// git.ListRemoteTags; tests substitute a closure.
 	TagLister func(url string) ([]string, error)
+	// ResolveOptions holds per-package upstream resolution rules compiled
+	// from .larry.yaml. Set to nil when a package has no overrides.
+	ResolveOptions *larryconfig.ResolveOptions
 }
 
 func (p *GitHubProvider) Type() remoteid.RemoteIdType {
@@ -56,6 +60,33 @@ func (p *GitHubProvider) Metadata() provider.ProviderMetadata {
 
 func (p *GitHubProvider) Name() string {
 	return "GitHub"
+}
+
+// isIgnored checks if raw or stripped tag matches any ignore_tags pattern.
+func (p *GitHubProvider) isIgnored(raw, stripped string) bool {
+	if p.ResolveOptions == nil {
+		return false
+	}
+	for _, re := range p.ResolveOptions.IgnoreTagRe {
+		if re.MatchString(raw) || re.MatchString(stripped) {
+			return true
+		}
+	}
+	return false
+}
+
+// stripCustomPrefixes applies standard prefix stripping followed by custom
+// strip_prefixes from .larry.yaml. Applied in order; first match wins.
+func (p *GitHubProvider) stripCustomPrefixes(tag string) string {
+	stripped := stripTagPrefix(tag)
+	if p.ResolveOptions != nil {
+		for _, pfx := range p.ResolveOptions.StripPrefixes {
+			if strings.HasPrefix(stripped, pfx) {
+				return strings.TrimPrefix(stripped, pfx)
+			}
+		}
+	}
+	return stripped
 }
 
 // var _ provider.ResolverWithTags = (*GitHubProvider)(nil)
@@ -76,7 +107,7 @@ func (p *GitHubProvider) FetchResolution(rid remoteid.RemoteId, allowPrereleases
 	relTag, prerelease, draft, _ := p.Client.LatestRelease(rid.Owner, rid.Repo)
 	var relV *version.Version
 	if relTag != "" && !draft && (!prerelease || allowPrereleases) {
-		if v, err := tryParseVersion(relTag); err == nil {
+		if v, err := p.tryParseVersion(relTag); err == nil {
 			relV = v
 		}
 	}
@@ -85,7 +116,7 @@ func (p *GitHubProvider) FetchResolution(rid remoteid.RemoteId, allowPrereleases
 	tagTag, _ := p.Client.LatestReleaseTag(rid.Owner, rid.Repo, allowPrereleases)
 	var tagV *version.Version
 	if tagTag != "" {
-		if v, err := tryParseVersion(tagTag); err == nil {
+		if v, err := p.tryParseVersion(tagTag); err == nil {
 			tagV = v
 		}
 	}
@@ -108,7 +139,7 @@ func (p *GitHubProvider) FetchResolution(rid remoteid.RemoteId, allowPrereleases
 	// Tier 3 — remote tags via go-git.
 	tag, err := p.fetchLatestTagByRemote(rid.Owner, rid.Repo)
 	if err == nil && tag != "" {
-		if v, err := tryParseVersion(tag); err == nil {
+		if v, err := p.tryParseVersion(tag); err == nil {
 			return &provider.Resolution{Version: v.Format()}, nil
 		}
 	}
@@ -140,7 +171,7 @@ func (p *GitHubProvider) FetchLatestVersion(rid remoteid.RemoteId, allowPrerelea
 			return nil, fmt.Errorf("github: date-based resolution produced no tag")
 		}
 		// Try to parse tag as a version first
-		if v, err := tryParseVersion(tag); err == nil {
+		if v, err := p.tryParseVersion(tag); err == nil {
 			if !allowPrereleases && v.IsPrerelease() {
 				return nil, fmt.Errorf("github: latest tag %q is a prerelease", tag)
 			}
@@ -166,11 +197,44 @@ func (p *GitHubProvider) FetchLatestVersion(rid remoteid.RemoteId, allowPrerelea
 	return nil, fmt.Errorf("github: no version resolved for %s/%s", rid.Owner, rid.Repo)
 }
 
-// tryParseVersion tries to parse a tag as a version, stripping common prefixes.
-func tryParseVersion(tag string) (*version.Version, error) {
-	stripped := stripTagPrefix(tag)
+// tryParseVersion tries to parse a tag as a version, applying tag_match
+// capture extraction, version_template expansion, prefix stripping, and
+// per-package ignore rules.
+func (p *GitHubProvider) tryParseVersion(tag string) (*version.Version, error) {
+	candidateStr := tag
+
+	if p.ResolveOptions != nil {
+		// 1. Tag Match Check & Capture Extraction
+		if p.ResolveOptions.TagMatchRe != nil {
+			if !p.ResolveOptions.TagMatchRe.MatchString(tag) {
+				return nil, fmt.Errorf("tag %q did not match tag_match pattern", tag)
+			}
+			tagCaps := larryconfig.ExtractCaptures(p.ResolveOptions.TagMatchRe, tag)
+
+			// Merge PVCaptures and TagCaptures
+			allVars := make(map[string]string)
+			for k, v := range p.ResolveOptions.PVCaptures {
+				allVars[k] = v
+			}
+			for k, v := range tagCaps {
+				allVars[k] = v
+			}
+
+			// Render version template if provided
+			if p.ResolveOptions.VersionTemplate != "" {
+				candidateStr = larryconfig.ExpandTemplate(p.ResolveOptions.VersionTemplate, allVars)
+			}
+		}
+	}
+
+	// 2. Standard Prefix Stripping & Ignore Filter
+	stripped := p.stripCustomPrefixes(candidateStr)
+	if p.isIgnored(tag, stripped) {
+		return nil, fmt.Errorf("tag %q matches ignore pattern", tag)
+	}
+
 	if stripped == "" || !versionStartsWithDigit(stripped) {
-		return nil, fmt.Errorf("tag %q does not look like a version", tag)
+		return nil, fmt.Errorf("tag %q does not look like a version", candidateStr)
 	}
 	norm := version.Normalize(stripped)
 	return version.Parse(norm)
@@ -182,6 +246,12 @@ func versionStartsWithDigit(s string) bool {
 		return false
 	}
 	return s[0] >= '0' && s[0] <= '9'
+}
+
+// candidate holds a tag alongside its custom-prefix-stripped form.
+type candidate struct {
+	raw      string
+	stripped string
 }
 
 // stripTagPrefix strips common tag prefixes like v, v., release-, bun-, rocm-, pios/.
@@ -217,7 +287,8 @@ func stripTagPrefix(tag string) string {
 }
 
 // fetchLatestTagByRemote lists remote tags via go-git and returns the latest
-// version-like tag.
+// version-like tag. Applies TagMatchRe filter, custom prefix stripping,
+// and ignore rules.
 func (p *GitHubProvider) fetchLatestTagByRemote(owner, repo string) (string, error) {
 	if p.TagLister == nil {
 		p.TagLister = git.ListRemoteTags
@@ -229,45 +300,53 @@ func (p *GitHubProvider) fetchLatestTagByRemote(owner, repo string) (string, err
 		return "", fmt.Errorf("list remote tags for %s/%s: %w", owner, repo, err)
 	}
 
-	// Filter to version-like tags and sort
-	var tags []string
+	// Filter candidates: apply tag_match, custom prefixes and ignore rules.
+	var candidates []candidate
 	for _, tag := range rawTags {
-		stripped := stripTagPrefix(tag)
+		// TagMatchRe: reject tags that don't match before any other processing.
+		if p.ResolveOptions != nil && p.ResolveOptions.TagMatchRe != nil {
+			if !p.ResolveOptions.TagMatchRe.MatchString(tag) {
+				continue
+			}
+		}
+		stripped := p.stripCustomPrefixes(tag)
+		if p.isIgnored(tag, stripped) {
+			continue
+		}
 		if stripped != "" && versionStartsWithDigit(stripped) {
-			tags = append(tags, stripped)
+			candidates = append(candidates, candidate{raw: tag, stripped: stripped})
 		}
 	}
 
-	if len(tags) == 0 {
+	if len(candidates) == 0 {
 		return "", fmt.Errorf("no version-like tags found")
 	}
 
-	// Sort versions and return the latest
-	return sortAndLatestVersion(tags)
+	// Sort by stripped version and return the raw tag (tryParseVersion
+	// will re-apply tag_match + template expansion).
+	return latestCandidate(candidates)
 }
 
-// sortAndLatestVersion sorts versions and returns the latest.
-func sortAndLatestVersion(tags []string) (string, error) {
-	if len(tags) == 0 {
-		return "", fmt.Errorf("no tags provided")
-	}
+// latestCandidate finds the candidate with the highest stripped version
+// and returns its raw tag name.
+func latestCandidate(candidates []candidate) (string, error) {
 	var latest *version.Version
-	var latestTag string
-	for _, tag := range tags {
-		norm := version.Normalize(tag)
+	var latestRaw string
+	for _, c := range candidates {
+		norm := version.Normalize(c.stripped)
 		v, err := version.Parse(norm)
 		if err != nil {
 			continue
 		}
 		if latest == nil || v.Compare(latest) > 0 {
 			latest = v
-			latestTag = tag
+			latestRaw = c.raw
 		}
 	}
-	if latest == nil {
-		return "", fmt.Errorf("no valid versions found in %d tags", len(tags))
+	if latestRaw == "" {
+		return "", fmt.Errorf("no valid versions found in %d candidates", len(candidates))
 	}
-	return latestTag, nil
+	return latestRaw, nil
 }
 
 // extractVersionFromDate extracts a YYYYMMDD date from non-standard tag names.
@@ -321,7 +400,21 @@ func (p *GitHubProvider) fetchLatestTagByDate(owner, repo string) (tag, date str
 			continue
 		}
 
+		// TagMatchRe: skip tags that don't match the configured pattern.
+		if p.ResolveOptions != nil && p.ResolveOptions.TagMatchRe != nil {
+			if !p.ResolveOptions.TagMatchRe.MatchString(rawName) {
+				continue
+			}
+		}
+
+		prefixStripped := p.stripCustomPrefixes(rawName)
+		if p.isIgnored(rawName, prefixStripped) {
+			continue
+		}
+
 		// D3: Try to extract a date from the tag name itself
+		// NOTE: ExtractDate operates on rawName (not prefixStripped)
+		// to extract YYYYMMDD directly from tag names like firmware-20260824
 		if extractedDate, ok := version.ExtractDate(rawName); ok {
 			return rawName, extractedDate, nil
 		}
