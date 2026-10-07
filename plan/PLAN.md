@@ -113,7 +113,9 @@ stated acceptance check. Respect preconditions — the first four unblock the re
 - [x] `32-PLAN-UPSTREAM-RPI-TIER4-FILTER.md` - Per-package `.larry.yaml` upstream rules replace global `IsPureDateTag` filter. Fixes `raspberrypi-kernel` without over-filtering other repos.                             | 17b                   |
 - [x] `33-upstream-regex-tag-match.md` - Per-package `.larry.yaml` `pv_match`/`tag_match`/`version_template` for generic version assembly (e.g. raspberrypi-kernel `stable_YYYYMMDD` → `6.18.46_pYYYYMMDD`). | 32 |
 - [x] `34-UPSTREAM-UNKNOWN-SOURCE-FIX.md` - various packages show `UNKNOWN` for version
-  (fix: `Source: resolveSourceInfo(rid)` on error branches in `resolveOne`)
+  (fix: `Source: resolveSourceInfo(rid)` on error branches in `resolveOne`; also fixed `tokenize` in
+  `internal/remoteid` which was too aggressively filtering URLs containing `${PV}` — prevented
+  source extraction from SRC_URI for packages like hylki, resulting in `unknown` source)
 
 
 ## Module structure

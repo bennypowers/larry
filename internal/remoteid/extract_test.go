@@ -189,6 +189,55 @@ func TestExtractFromURLs_SkipsUnexpandedVars(t *testing.T) {
 	}
 }
 
+// ---- TestExtractFromURLs_KeepsURLsWithEmbeddedVars ----
+// URLs where owner/repo are concrete but the path contains ${PV} etc.
+// must still resolve — the ${} is in the version part, not the repo.
+func TestExtractFromURLs_KeepsURLsWithEmbeddedVars(t *testing.T) {
+	// hylki: https://github.com/hyprlab/hylki/archive/.../${PV}...
+	r := ExtractFromURLs(TypeGitHub,
+		"https://github.com/hyprlab/hylki/archive/refs/tags/v${PV}.tar.gz",
+		"")
+	if r == nil {
+		t.Fatal("expected RemoteId for hylki-style GitHub URL")
+	}
+	if r.Owner != "hyprlab" || r.Repo != "hylki" {
+		t.Errorf("Owner=%q Repo=%q, want hyprlab hylki", r.Owner, r.Repo)
+	}
+
+	// Codeberg with ${PV} in path
+	r2 := ExtractFromURLs(TypeCodeberg,
+		"https://codeberg.org/acme/widget/archive/v${PV}.tar.gz",
+		"")
+	if r2 == nil {
+		t.Fatal("expected RemoteId for codeberg-style URL with ${PV}")
+	}
+	if r2.Owner != "acme" || r2.Repo != "widget" {
+		t.Errorf("Owner=%q Repo=%q, want acme widget", r2.Owner, r2.Repo)
+	}
+
+	// SourceHut with ${PV} in path
+	r3 := ExtractFromURLs(TypeSourceHut,
+		"https://git.sr.ht/~tsdh/scdoc/archive/v${PV}.tar.gz",
+		"")
+	if r3 == nil {
+		t.Fatal("expected RemoteId for sourcehut-style URL with ${PV}")
+	}
+	if r3.Path != "~tsdh/scdoc" {
+		t.Errorf("Path=%q, want ~tsdh/scdoc", r3.Path)
+	}
+
+	// GitLab with ${PV} in path (GitLab uses /-/archive/ format)
+	r4 := ExtractFromURLs(TypeGitLab,
+		"https://gitlab.gnome.org/GNOME/geary/-/archive/v${PV}/geary-${PV}.tar.gz",
+		"")
+	if r4 == nil {
+		t.Fatal("expected RemoteId for gitlab-style URL with ${PV}")
+	}
+	if r4.Path != "GNOME/geary" {
+		t.Errorf("Path=%q, want GNOME/geary", r4.Path)
+	}
+}
+
 // ---- TestExtractFromURLs_IgnoresAboutGitlabCom ----
 
 func TestExtractFromURLs_IgnoresAboutGitlabCom(t *testing.T) {

@@ -91,14 +91,23 @@ func tryMirrorSourceHut(text string) *RemoteId {
 	return &RemoteId{Type: TypeSourceHut, Host: "git.sr.ht", Path: "~" + m[1] + "/" + m[2]}
 }
 
-// tokenize splits text on whitespace and removes tokens containing "${".
+// tokenize splits text on whitespace and removes tokens that are purely
+// variable references (e.g. "${CARGO_CRATE_URIS}", "${P}.tar.gz").
+// Tokens that start with a URL scheme (http/https/ftp) are kept even if
+// they contain embedded variable expansions like "v${PV}.tar.gz".
 func tokenize(text string) []string {
 	if text == "" {
 		return nil
 	}
 	var out []string
 	for _, tok := range strings.Fields(text) {
-		if strings.Contains(tok, "${") {
+		// Keep tokens that look like URLs (contain http://, https://, ftp://).
+		if strings.Contains(tok, "http://") || strings.Contains(tok, "https://") || strings.HasPrefix(tok, "ftp://") {
+			out = append(out, tok)
+			continue
+		}
+		// Skip pure variable references starting with "${".
+		if strings.HasPrefix(tok, "${") {
 			continue
 		}
 		out = append(out, tok)
@@ -122,9 +131,10 @@ func tryForge(forge RemoteIdType, token string) *RemoteId {
 }
 
 // tryGitHub matches https://github.com/owner/repo and returns a RemoteId.
+// Rejects captures containing "${" (unexpanded variable like ${PN}).
 func tryGitHub(url string) *RemoteId {
 	m := reGitHub.FindStringSubmatch(url)
-	if len(m) < 3 {
+	if len(m) < 3 || containsVarRef(m[1]) || containsVarRef(m[2]) {
 		return nil
 	}
 	return &RemoteId{
@@ -135,9 +145,10 @@ func tryGitHub(url string) *RemoteId {
 }
 
 // tryCodeberg matches https://codeberg.org/owner/repo and returns a RemoteId.
+// Rejects captures containing "${" (unexpanded variable like ${PN}).
 func tryCodeberg(url string) *RemoteId {
 	m := reCodeberg.FindStringSubmatch(url)
-	if len(m) < 3 {
+	if len(m) < 3 || containsVarRef(m[1]) || containsVarRef(m[2]) {
 		return nil
 	}
 	return &RemoteId{
@@ -149,9 +160,10 @@ func tryCodeberg(url string) *RemoteId {
 
 // tryGitLab matches https://gitlab.<host>/<path>/-/ and returns a RemoteId.
 // The path is truncated at the first /-/ (everything after the host up to /-/).
+// Rejects captures containing "${" (unexpanded variable like ${PN}).
 func tryGitLab(url string) *RemoteId {
 	m := reGitLab.FindStringSubmatch(url)
-	if len(m) < 3 {
+	if len(m) < 3 || containsVarRef(m[1]) || containsVarRef(m[2]) {
 		return nil
 	}
 	host := m[1]
@@ -165,9 +177,10 @@ func tryGitLab(url string) *RemoteId {
 }
 
 // trySourceHut matches https://git.sr.ht/~user/project or https://sr.ht/~user/project.
+// Rejects captures containing "${" (unexpanded variable like ${PN}).
 func trySourceHut(url string) *RemoteId {
 	m := reSourceHut.FindStringSubmatch(url)
-	if len(m) < 3 {
+	if len(m) < 3 || containsVarRef(m[1]) || containsVarRef(m[2]) {
 		return nil
 	}
 	// m[1] is optional "git." prefix; normalise to "git.sr.ht".
@@ -181,3 +194,8 @@ func trySourceHut(url string) *RemoteId {
 		Path: m[2],
 	}
 }
+
+// containsVarRef reports whether s contains a shell variable reference
+// (e.g. "${PN}", "${PV}"). Used to reject regex captures that reference
+// unexpanded variables — the actual value isn't known at parse time.
+func containsVarRef(s string) bool { return strings.Contains(s, "${") }
