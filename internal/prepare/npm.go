@@ -385,6 +385,10 @@ func npmCreateDepsTarball(npmTarball, distDir, assetName string) error {
 	// from inside the tarball and resolves all transitive dependencies through the cache.
 	// Unlike extracting first (which triggers shrinkwrap's resolved URLs to bypass cache),
 	// passing the .tgz directly causes npm to resolve from the registry cache.
+	// npmTarball is a filename relative to distDir — resolve to the full path.
+	if !filepath.IsAbs(npmTarball) {
+		npmTarball = filepath.Join(distDir, npmTarball)
+	}
 	cmd := exec.Command("npm", "--cache", npmCacheDir, "install", npmTarball)
 	cmd.Dir = tmpDir
 	logger.Debug("running: " + strings.Join(cmd.Args, " "))
