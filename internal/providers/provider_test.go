@@ -2,8 +2,10 @@ package providers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"bennypowers.dev/larry/internal/httpclient"
@@ -467,4 +469,53 @@ func (t *sourceHutReplacingTransport) RoundTrip(req *http.Request) (*http.Respon
 		req.URL.Scheme = "http"
 	}
 	return http.DefaultTransport.RoundTrip(req)
+}
+
+// TestSourceHutHTMLFallback — end-to-end HTML fallback for SourceHut
+func TestSourceHutHTMLFallback(t *testing.T) {
+	html := `<a href="/~tsdh/nirius/refs/nirius-0.10.0">0.10.0</a>
+<a href="/~tsdh/nirius/refs/nirius-0.9.0">0.9.0</a>
+<pre class="pb-0">Release nirius-0.10.0
+</pre>`
+
+	// Use TLS server so the provider's https:// prefix works
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/~tsdh/nirius/refs" {
+			_, _ = fmt.Fprint(w, html)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	// Replace rid.Host with the TLS server's host (ip:port)
+	host := srv.Listener.Addr().String()
+	// Strip the leading [] for IPv6 if present
+	if idx := strings.Index(host, "]"); idx >= 0 {
+		host = host[idx+1:]
+	}
+
+	client := httpclient.NewClientWithTransport(&http.Transport{
+		TLSClientConfig: srv.Client().Transport.(*http.Transport).TLSClientConfig,
+	})
+
+	rl := ratelimit.NewRateLimiter()
+	prov := NewSourceHutProviderWithClient(rl, client)
+
+	rid := remoteid.RemoteId{
+		Type: remoteid.TypeSourceHut,
+		Host: host,
+		Path: "~tsdh/nirius",
+	}
+
+	v, err := prov.FetchLatestVersion(rid, false)
+	if err != nil {
+		t.Fatalf("FetchLatestVersion: %v", err)
+	}
+	if v == nil {
+		t.Fatal("expected non-nil version")
+	}
+	if v.String() != "0.10.0" {
+		t.Errorf("version = %q, want \"0.10.0\"", v.String())
+	}
 }

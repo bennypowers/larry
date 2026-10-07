@@ -234,22 +234,38 @@ func (p *SourceHutProvider) fetchViaHTML(rid remoteid.RemoteId, allowPrereleases
 		return nil, fmt.Errorf("sourcehut: failed to read response: %w", err)
 	}
 
-	// Parse HTML for tag links
-	// SourceHut uses a format like: /~user/project/commit/<hash>/<tag-name>
-	// We need to extract tag names from the refs page
-	// Look for <a> tags with href containing refs/tags/
-	tagRe := `<a[^>]*href=["'].*?refs/tags/([^"'>]+)["']`
-	tags := extractTagsFromHTML(string(body), tagRe)
+	// Extract tags from HTML.
+	// SourceHut provides two patterns:
+	//   1. Link hrefs like /~user/project/refs/<tagname>
+	//   2. "Release <name>" text inside <pre> blocks
+	tags := extractSourceHutTags(string(body))
 
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("sourcehut: no tags found")
 	}
 
-	// Take the first tag (should be sorted by date on the page)
-	normVer := version.Normalize(tags[0])
+	// Extract package name from rid.Path (format: ~user/project → project)
+	pkgName := extractSourceHutPkgName(rid.Path)
+
+	// Filter to only tags that look like versions (contain digits).
+	// SourceHut's refs page also has non-version links like /refs/rss.xml.
+	var versionTags []string
+	for _, t := range tags {
+		if containsDigit(t) {
+			versionTags = append(versionTags, t)
+		}
+	}
+	if len(versionTags) == 0 {
+		return nil, fmt.Errorf("sourcehut: no version-looking tags found")
+	}
+
+	// Take the first version-like tag, strip package name prefix, then parse.
+	// SourceHut tags are often named <pkg>-<version> (e.g. nirius-0.10.0).
+	tag := stripPkgNamePrefix(versionTags[0], pkgName)
+	normVer := version.Normalize(tag)
 	v, err := version.Parse(normVer)
 	if err != nil {
-		return nil, fmt.Errorf("sourcehut: failed to parse version %q: %w", tags[0], err)
+		return nil, fmt.Errorf("sourcehut: failed to parse version %q (from tag %q): %w", tag, tags[0], err)
 	}
 
 	if !allowPrereleases && v.IsPrerelease() {
@@ -259,40 +275,111 @@ func (p *SourceHutProvider) fetchViaHTML(rid remoteid.RemoteId, allowPrereleases
 	return v, nil
 }
 
-// extractTagsFromHTML extracts tag names from HTML.
-func extractTagsFromHTML(html, pattern string) []string {
-	_ = pattern // unused in simple implementation
-
-	// Simple extraction: look for refs/tags/ in anchor hrefs
+// extractSourceHutTags extracts tag names from a SourceHut refs page.
+// Handles two patterns:
+//   - <a href=".../refs/<tagname>"> — tag link hrefs
+//   - <pre class="pb-0">Release <name></pre> — release name text
+func extractSourceHutTags(html string) []string {
 	var tags []string
-	start := 0
-	for {
-		idx := strings.Index(html[start:], "refs/tags/")
-		if idx == -1 {
+	seen := make(map[string]bool)
+
+	addTag := func(tag string) {
+		if tag != "" && !seen[tag] {
+			seen[tag] = true
+			tags = append(tags, tag)
+		}
+	}
+
+	// Pattern 1: href=".../refs/<tagname>" — match /refs/ followed by a tag name.
+	for idx := 0; ; {
+		rest := html[idx:]
+		i := strings.Index(rest, "/refs/")
+		if i < 0 {
 			break
 		}
-		idx += start + len("refs/tags/")
-		// Extract until end of path
+		idx += i + len("/refs/")
 		end := idx
 		for end < len(html) {
 			ch := html[end]
-			if ch == '"' || ch == '\'' || ch == '>' || ch == ' ' {
+			if ch == '"' || ch == '\'' || ch == '>' || ch == ' ' || ch == '/' {
 				break
 			}
 			end++
 		}
 		if end > idx {
-			tag := html[idx:end]
-			tags = append(tags, tag)
+			addTag(html[idx:end])
 		}
-		start = end
 	}
+
+	// Pattern 2: "Release <name>" inside <pre> blocks.
+	for idx := 0; ; {
+		rest := html[idx:]
+		i := strings.Index(rest, "Release ")
+		if i < 0 {
+			break
+		}
+		idx += i + len("Release ")
+		end := idx
+		for end < len(html) {
+			ch := html[end]
+			if ch == '\n' || ch == '\r' || ch == ' ' || ch == '<' {
+				break
+			}
+			end++
+		}
+		if end > idx {
+			addTag(html[idx:end])
+		}
+	}
+
 	return tags
 }
 
 // IsPrerelease reports whether v is a pre-release version.
 func (p *SourceHutProvider) IsPrerelease(v *version.Version) bool {
 	return v.IsPrerelease()
+}
+
+// containsDigit reports whether s contains at least one digit character.
+// Used to filter out non-version link targets like "rss.xml".
+func containsDigit(s string) bool {
+	for _, c := range s {
+		if c >= '0' && c <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
+// extractSourceHutPkgName extracts the package name from a SourceHut path.
+// Path format: ~user/project → returns "project"
+func extractSourceHutPkgName(path string) string {
+	// Strip ~user/ prefix
+	path = strings.TrimPrefix(path, "~")
+	if idx := strings.Index(path, "/"); idx >= 0 {
+		return path[idx+1:]
+	}
+	return path
+}
+
+// stripPkgNamePrefix removes the package name prefix from a tag name.
+// E.g. "nirius-0.10.0" with pkgName "nirius" → "0.10.0".
+// Also handles tags like "nirius_v0.10.0" (underscore separator).
+func stripPkgNamePrefix(tag, pkgName string) string {
+	// Try dash separator first: pkg-name
+	if strings.HasPrefix(tag, pkgName+"-") {
+		return strings.TrimPrefix(tag, pkgName+"-")
+	}
+	// Try underscore separator: pkg_name
+	if strings.HasPrefix(tag, pkgName+"_") {
+		return strings.TrimPrefix(tag, pkgName+"_")
+	}
+	// Try v-prefix after package name: pkg-v0.10.0
+	if strings.HasPrefix(tag, pkgName+"-v") {
+		return strings.TrimPrefix(tag, pkgName+"-v")
+	}
+	// No prefix to strip
+	return tag
 }
 
 // NewSourceHutProvider creates a new SourceHutProvider with the given rate limiter.
