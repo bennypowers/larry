@@ -4,9 +4,10 @@ Project structure, workflow, and hard constraints for coding agents.
 
 ## Reference implementation
 
-`~/Developer/gentoo-overlay/scripts/larry` (fish, ~1860 lines) is the **behavioural
-spec**. When Go and the script disagree, the script is right unless a plan file says
-otherwise. Read the relevant script function before changing a pipeline.
+**This Go binary is larry.** The original fish script
+(`gentoo-overlay/scripts/larry`, ~1860 lines) has been deleted — the Go
+implementation fully replaced it, and there is no second implementation to
+diverge from. Behavioural decisions live here and in the plan files.
 
 `~/Developer/gentoo-overlay/` is the reference overlay — use it for manual verification.
 Its `Containerfile` (gentoo/stage3) is the reference test image.
@@ -60,7 +61,7 @@ etc.) silently leak literal `${...}` into URLs. Use `internal/ebuild.ExpandVaria
 
 ### One type detector
 `internal/ebuild.DetectType*` is the sole owner of package-type detection. Detection
-order is npm → cargo → go → vendored → generic, matching the script. Two detectors that
+order is npm → cargo → go → vendored → generic. Two detectors that
 disagree on the same file is a bug, not a feature.
 
 ### Single DISTDIR through the whole call chain
@@ -84,8 +85,8 @@ pkgdev cannot resolve it. Pre-populate DISTDIR by hand before manifesting.
 
 ### Replicate external invocations exactly
 Argument order, working directory, and input form (extracted dir vs. `.tgz` passed
-directly) change behaviour in ways unit tests cannot catch. Replay the script's exact
-command when in doubt.
+directly) change behaviour in ways unit tests cannot catch. Replay the exact
+external command when in doubt.
 
 ### Cache format compatibility
 npm v11 writes `_cacache` with `index-v5`/`content-v2`. A mismatched format fails
