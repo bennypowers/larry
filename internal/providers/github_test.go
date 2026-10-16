@@ -845,7 +845,7 @@ func TestGitHub_ProviderOptionsReset(t *testing.T) {
 		t.Fatal("Package A: expected 1.20230405 to be ignored")
 	}
 
-	// 2. Clear options (mimicking resolveOne resetting options for Package B with no .larry.yaml)
+	// 2. Clear options (mimicking resolveOne resetting options for Package B with no .larry/config.yaml)
 	p.ResolveOptions = nil
 
 	// 3. Package B with no ignore rule

@@ -90,7 +90,7 @@ func PrepareCargo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 		CatPkg:     ei.Category + "/" + ei.PN(),
 		Distdir:    cfg.Distdir,
 		EbuildPath: ei.Path,
-		Prefetch:   nil,
+		Prefetch:   cargoPrefetchPackage,
 	}); err != nil {
 		return fmt.Errorf("cargo: manifest: %w", err)
 	}
@@ -474,6 +474,116 @@ func updateCargoEbuildNative(ebuildPath string, crates []CargoCrate) (int, error
 		return 0, fmt.Errorf("write ebuild: %w", err)
 	}
 	return entryCount, nil
+}
+
+// cargoPrefetchPackage downloads, into distdir, every cargo crate declared by
+// every *.ebuild in pkgDir. Files already present and non-empty are skipped.
+// Errors on individual crates are logged and skipped.
+func cargoPrefetchPackage(pkgDir, distdir string) error {
+	// Create distdir if it doesn't exist
+	if err := os.MkdirAll(distdir, 0o755); err != nil {
+		return fmt.Errorf("create distdir: %w", err)
+	}
+
+	// Glob for *.ebuild files (not .bak)
+	files, err := filepath.Glob(filepath.Join(pkgDir, "*.ebuild"))
+	if err != nil {
+		return fmt.Errorf("glob ebuilds: %w", err)
+	}
+	if len(files) == 0 {
+		return nil
+	}
+
+	client := httpclient.NewClient()
+
+	for _, ebuildPath := range files {
+		// Skip .bak files
+		if strings.HasSuffix(ebuildPath, ".ebuild.bak") {
+			continue
+		}
+
+		data, err := os.ReadFile(ebuildPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[larry] cargo prefetch: skip %s: %v\n", ebuildPath, err)
+			continue
+		}
+
+		// Extract CRATES variable from ebuild
+		crates := extractCrates(string(data))
+		if len(crates) == 0 {
+			continue
+		}
+
+		for _, c := range crates {
+			crateURL := "https://static.crates.io/crates/" + c.Name + "/" + c.Name + "-" + c.Version + ".crate"
+			filename := c.Name + "-" + c.Version + ".crate"
+			destPath := filepath.Join(distdir, filename)
+
+			// Skip if already exists and is non-empty
+			if info, err := os.Stat(destPath); err == nil && info.Size() > 0 {
+				continue
+			}
+
+			// Download
+			resp, err := client.Get(crateURL)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[larry] cargo prefetch: %s: %v\n", filename, err)
+				continue
+			}
+			// Close body immediately — we only care about the status code
+			resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				fmt.Fprintf(os.Stderr, "[larry] cargo prefetch: %s: HTTP %d\n", filename, resp.StatusCode)
+				continue
+			}
+
+			// Download the actual file
+			resp, err = client.Get(crateURL)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[larry] cargo prefetch: %s: %v\n", filename, err)
+				continue
+			}
+			if resp.StatusCode != http.StatusOK {
+				resp.Body.Close()
+				fmt.Fprintf(os.Stderr, "[larry] cargo prefetch: %s: HTTP %d\n", filename, resp.StatusCode)
+				continue
+			}
+
+			out, err := os.Create(destPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[larry] cargo prefetch: %s: %v\n", filename, err)
+				resp.Body.Close()
+				continue
+			}
+			if _, err := io.Copy(out, resp.Body); err != nil {
+				fmt.Fprintf(os.Stderr, "[larry] cargo prefetch: %s: %v\n", filename, err)
+			}
+			out.Close()
+			resp.Body.Close()
+		}
+	}
+
+	return nil
+}
+
+// crateEntry represents a parsed crate from the CRATES variable.
+type crateEntry struct {
+	Name    string
+	Version string
+}
+
+var cratesRe = regexp.MustCompile(`(?m)^[ \t]+([^@\s]+)@([^\s]+)\n`)
+
+// extractCrates parses the CRATES variable from ebuild content.
+
+func extractCrates(content string) []crateEntry {
+	matches := cratesRe.FindAllStringSubmatch(content, -1)
+	var crates []crateEntry
+	for _, m := range matches {
+		crates = append(crates, crateEntry{Name: m[1], Version: m[2]})
+	}
+	return crates
 }
 
 

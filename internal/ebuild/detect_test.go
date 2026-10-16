@@ -254,13 +254,13 @@ func TestDetectType_LinuxInfoPreReleaseIsGeneric(t *testing.T) {
 }
 
 func TestParsePackageType_RejectsRpiKernel(t *testing.T) {
-	// A3: rpi-kernel must be rejected; error must point to files/prepare.sh.
+	// A3: rpi-kernel must be rejected; error must point to .larry/prepare.sh.
 	_, err := ParsePackageType("rpi-kernel")
 	if err == nil {
 		t.Fatal("ParsePackageType(\"rpi-kernel\") expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "files/prepare.sh") {
-		t.Errorf("error = %q, want substring \"files/prepare.sh\"", err.Error())
+	if !strings.Contains(err.Error(), ".larry/prepare.sh") {
+		t.Errorf("error = %q, want substring \".larry/prepare.sh\"", err.Error())
 	}
 }
 

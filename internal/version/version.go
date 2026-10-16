@@ -78,6 +78,10 @@ var (
 	// Requires at least one digit after the suffix keyword (e.g., "1.0.0-beta.1" → "1.0.0_beta1")
 	// Bare suffixes like "1.0-alpha" are left unchanged (not recognized as Gentoo suffixes).
 	dashSuffixRe = regexp.MustCompile(`[-.](alpha|beta|pre|rc)\.?([0-9]+)$`)
+	// bareSuffixRe normalizes bare PyPI-style pre-release suffixes (e.g., "3.3.1b3")
+	// to underscore form so Parse can recognize them as prereleases.
+	// Matches digit + single letter (a/b/c) + digits at end of string.
+	bareSuffixRe = regexp.MustCompile(`([0-9])([abc])([0-9]+)$`)
 )
 
 // Normalize strips known prefix noise from a version string.
@@ -126,6 +130,10 @@ func Parse(s string) (*Version, error) {
 		}
 		s = s[:len(s)-len(m[0])]
 	}
+
+	// Step 3.5: Normalize bare PyPI-style pre-release suffixes.
+	// Converts "3.3.1b3" → "3.3.1_b3" so parseSuffix can recognize it.
+	s = bareSuffixRe.ReplaceAllString(s, "_${1}_${2}$3")
 
 	// Step 4: Dashed pre-release rewrite — one substitution
 	s = dashSuffixRe.ReplaceAllString(s, "_$1$2")

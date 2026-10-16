@@ -42,7 +42,7 @@ type GitHubProvider struct {
 	// git.ListRemoteTags; tests substitute a closure.
 	TagLister func(url string) ([]string, error)
 	// ResolveOptions holds per-package upstream resolution rules compiled
-	// from .larry.yaml. Set to nil when a package has no overrides.
+	// from .larry/config.yaml. Set to nil when a package has no overrides.
 	ResolveOptions *larryconfig.ResolveOptions
 }
 
@@ -76,7 +76,7 @@ func (p *GitHubProvider) isIgnored(raw, stripped string) bool {
 }
 
 // stripCustomPrefixes applies standard prefix stripping followed by custom
-// strip_prefixes from .larry.yaml. Applied in order; first match wins.
+// strip_prefixes from .larry/config.yaml. Applied in order; first match wins.
 func (p *GitHubProvider) stripCustomPrefixes(tag string) string {
 	stripped := stripTagPrefix(tag)
 	if p.ResolveOptions != nil {

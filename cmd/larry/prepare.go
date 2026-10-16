@@ -23,7 +23,7 @@ func init() {
 	rootCmd.AddCommand(&prepareCmd)
 
 	prepareCmd.Flags().StringVarP(&prepareType, "type", "t", "",
-		"force package type: npm, cargo, go, vendored, generic (overrides auto-detection; rpi-kernel requires files/prepare.sh)")
+		"force package type: npm, cargo, go, vendored, generic (overrides auto-detection)")
 	prepareCmd.Flags().BoolVarP(&prepareAll, "all", "a", false,
 		"regenerate Manifest for all packages via pkgdev (manifest-only, no type-specific pipeline)")
 	prepareCmd.Flags().BoolVarP(&prepareDryRun, "dry-run", "n", false,
@@ -38,8 +38,10 @@ var prepareCmd = cobra.Command{
 	Long: `Prepare an ebuild for commit by running the appropriate type-specific pipeline.
 
 Custom prepare scripts (escape hatch):
-  If files/prepare.sh exists in the ebuild's directory, it runs instead
-  of any built-in pipeline. The script runs in a userspace sandbox:
+  If <pkg>/.larry/prepare.sh exists, it runs instead of any built-in
+  pipeline. The script lives under .larry/ so it doesn't ship to end
+  users — it's purely an overlay-maintainer concern.
+  The script runs in a userspace sandbox:
   PATH is restricted to system dirs, dangerous env vars are stripped,
   and writes are policy-limited to the ebuild dir + DISTDIR.
   Dry-run skips script execution.
@@ -54,7 +56,7 @@ Type detection (auto):
   - generic:   everything else (including rpi-kernel)
 
   rpi-kernel packages are detected as generic. Use a custom
-  files/prepare.sh for those — see docs/examples/rpi-kernel-prepare.sh.
+  .larry/prepare.sh for those — see docs/examples/rpi-kernel-prepare.sh.
 
 Override detection with --type flag.
 
@@ -66,6 +68,7 @@ Commands:
 
 Flags:
   -t, --type string       Force package type (overrides auto-detection)
+  -n, --dry-run           Show what would be done without making changes
   -a, --all               Manifest-only: pkgdev for every cat/pkg in overlay (no pipeline)
   -n, --dry-run           Show what would be done without making changes
       --distdir string    Distdir path for source downloads

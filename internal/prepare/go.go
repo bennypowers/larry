@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/ulikunitz/xz"
+
 	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
@@ -93,8 +95,8 @@ func PrepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 		return fmt.Errorf("go: go mod vendor: %w", err)
 	}
 
-	// 7. Create vendor tarball in package directory
-	outPath := filepath.Join(filepath.Dir(ei.Path), ei.P()+"-deps.tar.gz")
+	// 7. Create vendor tarball (xz compressed) in package directory
+	outPath := filepath.Join(filepath.Dir(ei.Path), ei.P()+"-deps.tar.xz")
 	if err := createGoVendorTarball(srcDir, outPath); err != nil {
 		return fmt.Errorf("go: create vendor tarball: %w", err)
 	}
@@ -104,7 +106,16 @@ func PrepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 		return fmt.Errorf("go: copy to distdir: %w", err)
 	}
 
-	// 9. Run pkgdev manifest with catPkg (plan 21)
+	// 9. Upload to GitHub release (if repo configured)
+	if cfg.GitHubRepo != "" {
+		gh := github.NewClient()
+		tag := "v" + atom.StripRevision(ei.PVVal)
+		if err := npmUploadAsset(tag, filepath.Base(outPath), distDir, cfg.GitHubRepo, ei.PN(), gh.Runner()); err != nil {
+			fmt.Fprintf(os.Stderr, "[larry] go: upload deps asset: %v (manifest may fail if distfiles are unavailable)\n", err)
+		}
+	}
+
+	// 10. Run pkgdev manifest with catPkg (plan 21)
 	pe, err := atom.ParseEbuildPath(ei.Path)
 	if err != nil {
 		return fmt.Errorf("go: parse ebuild path: %w", err)
@@ -226,8 +237,9 @@ func runGoModVendor(dir string, runner github.CmdRunner) error {
 	return runner.Run(cmd)
 }
 
-// createGoVendorTarball creates a gzip tarball of the vendor/ directory at outPath.
-// The tarball root is vendor/ (matching what the go-module eclass expects).
+// createGoVendorTarball creates an xz-compressed tarball of the vendor/
+// directory at outPath.  The tarball root is vendor/ (matching what the
+// go-module eclass expects).
 func createGoVendorTarball(srcDir, outPath string) error {
 	vendorDir := filepath.Join(srcDir, "vendor")
 	if _, err := os.Stat(vendorDir); err != nil {
@@ -245,13 +257,13 @@ func createGoVendorTarball(srcDir, outPath string) error {
 	}
 	defer func() { _ = outFile.Close() }() // best-effort close
 
-	gzw, err := gzip.NewWriterLevel(outFile, gzip.BestCompression)
+	xzw, err := xz.WriterConfig{DictCap: 64 * 1024 * 1024}.NewWriter(outFile)
 	if err != nil {
-		return fmt.Errorf("create gzip writer: %w", err)
+		return fmt.Errorf("create xz writer: %w", err)
 	}
-	defer func() { _ = gzw.Close() }() // best-effort close
+	defer func() { _ = xzw.Close() }() // best-effort close
 
-	tr := tar.NewWriter(gzw)
+	tr := tar.NewWriter(xzw)
 	defer func() { _ = tr.Close() }() // best-effort close
 
 	// Walk vendor/ and write entries with "vendor/" prefix

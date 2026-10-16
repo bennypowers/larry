@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	"bennypowers.dev/larry/internal/atom"
+	"bennypowers.dev/larry/internal/larryconfig"
 	"bennypowers.dev/larry/internal/provider"
+	"bennypowers.dev/larry/internal/providers"
 	"bennypowers.dev/larry/internal/upstream"
 )
 
@@ -103,6 +105,11 @@ func Bump(cfg BumpConfig) (*BumpResult, error) {
 	}
 
 	// Generate new ebuild with bumped version
+	// Skip if old and new versions are the same (no bump needed).
+	if result.NewVersion == result.OldVersion {
+		return nil, fmt.Errorf("already at latest version %s", result.OldVersion)
+	}
+
 	newFileName, newContent, err := generateBumpedEbuild(latest, content, pn, pv, result.NewVersion)
 	if err != nil {
 		return nil, fmt.Errorf("bump: %w", err)
@@ -163,7 +170,9 @@ func extractPVFromContent(content string) string {
 }
 
 // getUpstreamVersion queries the provider registry for the latest upstream version.
-// Uses the same provider resolution logic as the upstream command.
+// Loads .larry/config.yaml per-package config (tag_match, version_template) and wires it
+// onto the GitHubProvider so that date-based tags like stable_20260911 are expanded
+// into the full Gentoo version (e.g. 6.18.46_p20260911).
 func getUpstreamVersion(cfg BumpConfig, pn string, ebuildPath string) (string, error) {
 	if cfg.ProviderReg == nil {
 		return "", fmt.Errorf("no provider registry configured for auto-version")
@@ -193,10 +202,60 @@ func getUpstreamVersion(cfg BumpConfig, pn string, ebuildPath string) (string, e
 		return "", fmt.Errorf("could not resolve remote id for %s", providerType)
 	}
 
-	// Get provider and fetch latest version
+	// Load per-package .larry/config.yaml upstream config and wire ResolveOptions
+	// onto the provider (same logic as upstream command's resolveOne).
+	var resOpts *larryconfig.ResolveOptions
+	if pkgDir := filepath.Dir(ebuildPath); pkgDir != "" {
+		if lcfg, lerr := larryconfig.LoadConfig(pkgDir); lerr == nil && lcfg.Upstream != nil {
+			if opts, cerr := lcfg.Upstream.Compile(ebi.PVVal); cerr == nil {
+				resOpts = opts
+			}
+		}
+	}
+
+	// Get provider and wire ResolveOptions onto GitHubProvider.
 	p, err := cfg.ProviderReg.Resolve(*rid)
 	if err != nil {
 		return "", fmt.Errorf("resolving provider: %w", err)
+	}
+	if ghProv, ok := p.(*providers.GitHubProvider); ok {
+		ghProv.ResolveOptions = resOpts
+	}
+
+	// Try FetchResolution first so we can apply version_template for ByDate.
+	if rt, ok := p.(provider.ResolverWithTags); ok {
+		res, rerr := rt.FetchResolution(*rid, cfg.AllowPrerelease)
+		if rerr == nil && res != nil {
+			if res.ByDate && resOpts != nil {
+				// Apply tag_match captures + version_template for date-based
+				// resolution — same path as the upstream command.
+				tagForVersion := res.Tag
+				if resOpts.TagMatchRe != nil {
+					tagCaps := larryconfig.ExtractCaptures(resOpts.TagMatchRe, res.Tag)
+					allVars := make(map[string]string)
+					for k, v := range resOpts.PVCaptures {
+						allVars[k] = v
+					}
+					for k, v := range tagCaps {
+						allVars[k] = v
+					}
+					if resOpts.VersionTemplate != "" {
+						tagForVersion = larryconfig.ExpandTemplate(resOpts.VersionTemplate, allVars)
+					}
+				}
+				// Return the template-expanded string directly (already in
+				// correct Gentoo version format).
+				if tagForVersion != res.Tag {
+					return tagForVersion, nil
+				}
+			}
+			if res.Version != "" {
+				return res.Version, nil
+			}
+		}
+		if rerr != nil {
+			// FetchResolution failed — fall through to plain FetchLatestVersion.
+		}
 	}
 
 	latest, err := p.FetchLatestVersion(*rid, cfg.AllowPrerelease)

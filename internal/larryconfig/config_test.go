@@ -27,7 +27,9 @@ func TestLoadConfig_NotFound(t *testing.T) {
 
 func TestLoadConfig_InvalidYAML(t *testing.T) {
 	tmp := t.TempDir()
-	cfgPath := filepath.Join(tmp, ".larry.yaml")
+	larryDir := filepath.Join(tmp, ".larry")
+	os.MkdirAll(larryDir, 0o755)
+	cfgPath := filepath.Join(larryDir, "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte("{{{{invalid yaml"), 0644); err != nil {
 		t.Fatalf("write test file: %v", err)
 	}
@@ -41,7 +43,9 @@ func TestLoadConfig_InvalidYAML(t *testing.T) {
 
 func TestLoadConfig_Valid(t *testing.T) {
 	tmp := t.TempDir()
-	cfgPath := filepath.Join(tmp, ".larry.yaml")
+	larryDir := filepath.Join(tmp, ".larry")
+	os.MkdirAll(larryDir, 0o755)
+	cfgPath := filepath.Join(larryDir, "config.yaml")
 	yaml := `
 type_override: cargo
 vendor_dirs:
@@ -102,7 +106,9 @@ upstream:
 
 func TestLoadConfig_EmptyUpstream(t *testing.T) {
 	tmp := t.TempDir()
-	cfgPath := filepath.Join(tmp, ".larry.yaml")
+	larryDir := filepath.Join(tmp, ".larry")
+	os.MkdirAll(larryDir, 0o755)
+	cfgPath := filepath.Join(larryDir, "config.yaml")
 	yaml := `
 upstream:
   ignore_tags: []

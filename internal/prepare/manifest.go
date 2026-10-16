@@ -48,7 +48,7 @@ type manifestRequest struct {
 	CatPkg     string            // "dev-util/fish-lsp" — NEVER a file path
 	Distdir    string            // must be non-empty
 	Distfiles  []string          // distfile basenames the caller expects; may be nil
-	EbuildPath string            // only consulted when the runner is ebuild; pkgdev ignores it
+	EbuildPath string            // ebuild file path; used to target a single ebuild instead of the whole cat/pkg
 	Prefetch   func(pkgDir, distdir string) error // runs before Manifest removal; may be nil
 }
 
@@ -66,12 +66,18 @@ func findManifestRunner() (bin string, style manifestStyle, err error) {
 }
 
 // manifestArgs builds the command arguments for manifest.
+// When ebuildPath is non-empty, it is passed to pkgdev manifest to target
+// only that specific ebuild (avoids fetching distfiles for sibling ebuilds).
 func manifestArgs(style manifestStyle, distdir, catPkg, ebuildPath string) []string {
+	target := catPkg
+	if ebuildPath != "" {
+		target = ebuildPath
+	}
 	switch style {
 	case stylePkgdev:
-		return []string{"manifest", "-d", distdir, catPkg}
+		return []string{"manifest", "-d", distdir, target}
 	case styleEbuildDigest:
-		return []string{ebuildPath, "digest"}
+		return []string{target, "digest"}
 	default:
 		return nil
 	}
@@ -91,15 +97,30 @@ func runManifest(req manifestRequest) error {
 	pkgDir := filepath.Join(req.Overlay, req.CatPkg)
 
 	// Prefetch runs BEFORE Manifest removal
+	// Save Manifest before prefetch so we can restore it on any failure.
+	manifestPath := filepath.Join(pkgDir, "Manifest")
+	var manifestData []byte
+	if data, err := os.ReadFile(manifestPath); err == nil {
+		manifestData = data
+	}
+
 	if req.Prefetch != nil {
 		if err := req.Prefetch(pkgDir, req.Distdir); err != nil {
+			// Restore Manifest on prefetch failure so it's not left deleted.
+			if manifestData != nil {
+				_ = os.WriteFile(manifestPath, manifestData, 0644)
+			}
 			return err
 		}
 	}
 
-	// Remove stale Manifest
-	manifestPath := filepath.Join(pkgDir, "Manifest")
-	_ = os.Remove(manifestPath)
+	// Remove stale Manifest before regen, but only when processing a full cat/pkg.
+	// When targeting a single ebuild path, preserve the existing Manifest so
+	// pkgdev manifest can merge in the new ebuild's entries without clobbering
+	// entries from sibling ebuilds.
+	if req.EbuildPath == "" {
+		_ = os.Remove(manifestPath)
+	}
 
 	// Resolve runner
 	bin, style, err := findManifestRunner()
@@ -113,6 +134,10 @@ func runManifest(req manifestRequest) error {
 	// No GENTOO_MIRRORS — do not set it at all.
 
 	if err := ManifestRunner(bin, args, req.Overlay, env); err != nil {
+		// Manifest generation failed — restore the old Manifest if we had one.
+		if manifestData != nil {
+			_ = os.WriteFile(manifestPath, manifestData, 0644)
+		}
 		return err
 	}
 

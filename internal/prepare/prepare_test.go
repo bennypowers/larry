@@ -336,6 +336,14 @@ func TestManifestArgs_MatchesRunner(t *testing.T) {
 			distdir:      "/d",
 			catPkg:       "dev-util/foo",
 			ebuildPath:   "/ov/dev-util/foo/foo-1.0.ebuild",
+			want:         []string{"manifest", "-d", "/d", "/ov/dev-util/foo/foo-1.0.ebuild"},
+		},
+		{
+			name:         "pkgdev-no-ebuild-path",
+			style:        stylePkgdev,
+			distdir:      "/d",
+			catPkg:       "dev-util/foo",
+			ebuildPath:   "",
 			want:         []string{"manifest", "-d", "/d", "dev-util/foo"},
 		},
 		{
@@ -705,7 +713,7 @@ func TestExampleRpiScriptExists(t *testing.T) {
 }
 
 func TestPrepare_RpiKernelEbuildWarnsManifestOnly(t *testing.T) {
-	// A1 — generic pipeline emits a warning pointing at files/prepare.sh.
+	// A1 — generic pipeline emits a warning pointing at .larry/prepare.sh.
 	// The ebuild is unchanged; dry-run avoids needing a real manifest.
 	pkgDir := t.TempDir()
 	ebuildPath := filepath.Join(pkgDir, "rpi-6.18.46_p20260824.ebuild")

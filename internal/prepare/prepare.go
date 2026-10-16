@@ -28,6 +28,7 @@ type PrepareConfig struct {
 	HTTPClient              *http.Client
 	CleanupOrphanedAssets   bool // removes orphaned GitHub assets on prepare failure
 	RevisionBump            bool // skip source download, only run manifest
+	CustomPrepareScript     string // relative path (from pkg dir) to custom prepare script; default: .larry/prepare.sh
 
 	// GitHubBaseURL is the scheme+host used to build archive URLs.
 	// Empty means "https://github.com". Tests set it to an httptest server URL.
@@ -48,22 +49,24 @@ func Prepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 		cfg = &PrepareConfig{}
 	}
 
-	// Check for custom prepare script first.
-	// If files/prepare.sh exists in the ebuild's directory, run it
-	// instead of any built-in pipeline.
-	customScript := filepath.Join(filepath.Dir(ei.Path), "files", "prepare.sh")
-	if _, err := os.Stat(customScript); err == nil {
-		return runCustomPrepare(ei, customScript, cfg)
-	}
-
-	// Load per-package .larry.yaml config for type override and cleanup settings.
-	pkgConfig, err := larryconfig.LoadConfig(filepath.Dir(ei.Path))
+	// Load per-package config (reads .larry/config.yaml).
+	pkgDir := filepath.Dir(ei.Path)
+	pkgConfig, err := larryconfig.LoadConfig(pkgDir)
 	if err != nil {
 		// Non-fatal: only log in verbose mode, continue with defaults.
 		logger.Debugf("read config: %v", err)
 	}
 
-	// Detect type: CLI --type flag > .larry.yaml type_override > auto-detection.
+	// Check for custom prepare script first.
+	// If it exists under .larry/ in the package dir, run it instead of
+	// any built-in pipeline. This is an overlay-maintainer concern —
+	// it lives outside the ebuild's files/ so it doesn't ship to end users.
+	customScript := larryconfig.ResolvePrepareScript(pkgDir, pkgConfig)
+	if has, _ := larryconfig.HasPrepareScript(pkgDir); has {
+		return runCustomPrepare(ei, customScript, cfg)
+	}
+
+	// Detect type: CLI --type flag > .larry/config.yaml type_override > auto-detection.
 	var pkgType ebuild.PackageType
 	if cfg.ForceType != "" {
 		pkgType = cfg.ForceType
@@ -79,7 +82,8 @@ func Prepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	logger.Debug("detected type: " + string(pkgType))
 	logger.Debug("ebuild: " + ei.Path)
 
-	// Propagate cleanup setting from .larry.yaml if not already set via CLI.
+	// Propagate cleanup setting from .larry/config.yaml if not already
+	// set via CLI.
 	if !cfg.CleanupOrphanedAssets && pkgConfig != nil {
 		cfg.CleanupOrphanedAssets = pkgConfig.CleanupOrphanedAssets
 	}
@@ -210,7 +214,7 @@ func PrepareDir(dir string, cfg *PrepareConfig) error {
 
 // genericManifestOnlyWarning is emitted when a package type has no pipeline
 // and only the Manifest was regenerated. It points the user at the escape hatch.
-const genericManifestOnlyWarning = "this package type has no pipeline; only the Manifest was regenerated — add files/prepare.sh to do more"
+const genericManifestOnlyWarning = "this package type has no pipeline; only the Manifest was regenerated — add " + larryconfig.Dir + "/" + larryconfig.PrepareScript + " to do more"
 
 // prepareGeneric runs pkgdev manifest on a generic ebuild.
 func prepareGeneric(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
@@ -472,7 +476,7 @@ func sandboxEnv(ei *ebuild.EbuildInfo, cfg *PrepareConfig) []string {
 	)
 
 	// Temp dir — restrict to a larry-owned temp dir
-	tmpDir, _ := os.MkdirTemp("", "larry-prepare-")
+	tmpDir, _ := os.MkdirTemp("/tmp", "larry-prepare-")
 	defer func() { _ = os.RemoveAll(tmpDir) }() // best-effort cleanup
 	env = append(env,
 		"TMPDIR="+tmpDir,

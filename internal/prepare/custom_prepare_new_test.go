@@ -17,7 +17,7 @@ import (
 
 // fixtureCustomPrepare sets up the shared fixture for custom prepare tests:
 //   - <tmpdir>/foo/foo-1.0.0.ebuild containing EAPI=8\nCOMMIT="aaaa"\n
-//   - <tmpdir>/foo/files/prepare.sh (mode 0o755)
+//   - <tmpdir>/foo/.larry/prepare.sh (mode 0o755)
 //   - stubs ManifestRunner to record (bin, args, dir, env) calls.
 // Returns (ebuildPath, pkgDir, stubRecorder, cleanup).
 func fixtureCustomPrepare(t *testing.T, scriptBody string) (ebuildPath, pkgDir string, rec *callRecorder, cleanup func()) {
@@ -31,11 +31,11 @@ func fixtureCustomPrepare(t *testing.T, scriptBody string) (ebuildPath, pkgDir s
 		t.Fatal(err)
 	}
 
-	filesDir := filepath.Join(pkgDir, "files")
-	if err := os.MkdirAll(filesDir, 0755); err != nil {
+	larryDir := filepath.Join(pkgDir, ".larry")
+	if err := os.MkdirAll(larryDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	scriptPath := filepath.Join(filesDir, "prepare.sh")
+	scriptPath := filepath.Join(larryDir, "prepare.sh")
 	if err := os.WriteFile(scriptPath, []byte(scriptBody), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,8 @@ func fixtureCustomPrepare(t *testing.T, scriptBody string) (ebuildPath, pkgDir s
 }
 
 // TestCustomPrepare_RunsManifest verifies that runCustomPrepare runs the
-// manifest after the script succeeds, with catPkg (not a file path).
+// manifest after the script succeeds, passing the ebuild path (not cat/pkg).
+// This avoids fetching distfiles for sibling ebuilds.
 func TestCustomPrepare_RunsManifest(t *testing.T) {
 	ebuildPath, _, rec, cleanup := fixtureCustomPrepare(t, "#!/bin/sh\nexit 0\n")
 	defer cleanup()
@@ -90,15 +91,15 @@ func TestCustomPrepare_RunsManifest(t *testing.T) {
 		Overlay: t.TempDir(),
 	}
 
-	err := runCustomPrepare(ei, filepath.Join(filepath.Dir(ebuildPath), "files", "prepare.sh"), cfg)
+	err := runCustomPrepare(ei, filepath.Join(filepath.Dir(ebuildPath), ".larry", "prepare.sh"), cfg)
 	if err != nil {
 		t.Fatalf("runCustomPrepare: %v", err)
 	}
 	if !rec.called() {
 		t.Fatal("ManifestRunner was not called")
 	}
-	if rec.calls[0].args[3] != "dev-util/foo" {
-		t.Errorf("catPkg arg = %q, want %q", rec.calls[0].args[3], "dev-util/foo")
+	if rec.calls[0].args[3] != ebuildPath {
+		t.Errorf("target arg = %q, want %q", rec.calls[0].args[3], ebuildPath)
 	}
 }
 
@@ -119,7 +120,7 @@ func TestCustomPrepare_RestoresOnScriptFailure(t *testing.T) {
 		Distdir: t.TempDir(),
 	}
 
-	err := runCustomPrepare(ei, filepath.Join(filepath.Dir(ebuildPath), "files", "prepare.sh"), cfg)
+	err := runCustomPrepare(ei, filepath.Join(filepath.Dir(ebuildPath), ".larry", "prepare.sh"), cfg)
 	if err == nil {
 		t.Fatal("expected error from failed script")
 	}
@@ -153,11 +154,11 @@ func TestCustomPrepare_RestoresOnManifestFailure(t *testing.T) {
 	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\nCOMMIT=\"aaaa\"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	filesDir := filepath.Join(pkgDir, "files")
-	if err := os.MkdirAll(filesDir, 0755); err != nil {
+	larryDir := filepath.Join(pkgDir, ".larry")
+	if err := os.MkdirAll(larryDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	scriptPath := filepath.Join(filesDir, "prepare.sh")
+	scriptPath := filepath.Join(larryDir, "prepare.sh")
 	// Script modifies ebuild in place and exits 0.
 	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nsed -i 's/aaaa/bbbb/' foo-1.0.0.ebuild\nexit 0\n"), 0755); err != nil {
 		t.Fatal(err)
@@ -220,7 +221,7 @@ func TestCustomPrepare_DryRunDoesNotExecute(t *testing.T) {
 		Distdir: t.TempDir(),
 	}
 
-	err := runCustomPrepare(ei, filepath.Join(filepath.Dir(ebuildPath), "files", "prepare.sh"), cfg)
+	err := runCustomPrepare(ei, filepath.Join(filepath.Dir(ebuildPath), ".larry", "prepare.sh"), cfg)
 	if err != nil {
 		t.Fatalf("runCustomPrepare: %v", err)
 	}
@@ -265,7 +266,7 @@ func TestCustomPrepare_QuietSuppressesWarning(t *testing.T) {
 				Log:     lgr,
 			}
 
-			err = runCustomPrepare(ei, filepath.Join(filepath.Dir(ebuildPath), "files", "prepare.sh"), cfg)
+			err = runCustomPrepare(ei, filepath.Join(filepath.Dir(ebuildPath), ".larry", "prepare.sh"), cfg)
 			if err != nil {
 				t.Fatalf("runCustomPrepare: %v", err)
 			}

@@ -39,9 +39,9 @@ Phase 2 is therefore **parity and correctness**, not new surface area.
 
 ## Next up
 
-Plan 34 completed 2026-01-01. Adds `Source: resolveSourceInfo(rid)` to the error-return
-path in `resolveOne` so that provider-resolved packages show their source label even when
-version fetch fails (e.g. GitHub 404, no tags). Two new tests added.
+Plan 35 (performance) — P2a (regex compile in `extractAtoms`) done 2026-01-01. Full plan
+in `plan/35-PLAN-PERFORMANCE.md`. Highest-impact items: P1 (parallelise upstream checks),
+P8 (share HTTP client), P4 (parallelise prepare --all).
 
 ## Phase 1 — build-out (historical)
 
@@ -116,6 +116,9 @@ stated acceptance check. Respect preconditions — the first four unblock the re
   (fix: `Source: resolveSourceInfo(rid)` on error branches in `resolveOne`; also fixed `tokenize` in
   `internal/remoteid` which was too aggressively filtering URLs containing `${PV}` — prevented
   source extraction from SRC_URI for packages like hylki, resulting in `unknown` source)
+- [ ] `35-PLAN-PERFORMANCE.md` — Performance optimisations: parallelise upstream checks (P1,
+  highest impact), parallelise prepare --all (P4), share HTTP clients (P8), compile regexes
+  once (P2), reduce ebuild reads (P3), cache variable maps (P5), minor polish (P6–P10)
 
 
 ## Module structure

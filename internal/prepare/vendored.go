@@ -53,7 +53,8 @@ func parseDepSpec(distName string) DepSpec {
 		strings.HasSuffix(distName, "-cargo-deps.tar.zst"):
 		depType = DepCargo
 		tarballContent = "vendor"
-	case strings.HasSuffix(distName, "-go-deps.tar.gz"):
+	case strings.HasSuffix(distName, "-go-deps.tar.gz") ||
+		strings.HasSuffix(distName, "-go-deps.tar.xz"):
 		depType = DepGo
 		tarballContent = "vendor"
 	default:
@@ -291,7 +292,7 @@ func PrepareVendored(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	// 2. Load per-package config for vendor_dirs
 	pkgCfg, err := larryconfig.LoadConfig(filepath.Dir(ei.Path))
 	if err != nil {
-		return fmt.Errorf("vendored: read .larry.yaml: %w", err)
+		return fmt.Errorf("vendored: read .larry/config.yaml: %w", err)
 	}
 
 	// 3. Extract dep specs from SRC_URI
@@ -326,7 +327,7 @@ func PrepareVendored(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	// 4. For each dep, resolve build dir, run vendor command, create tarball, upload
 	gh := github.NewClient()
 	for _, ds := range depSpecs {
-		// Resolve working directory (uses vendor_dirs from .larry.yaml when present)
+		// Resolve working directory (uses vendor_dirs from .larry/config.yaml when present)
 		buildDir := resolveBuildDir(extractDir, pe, pkgCfg, ds)
 		if err := runVendorCommand(ds.Type, buildDir); err != nil {
 			return fmt.Errorf("vendor %s: %w", ds.Type, err)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 
 	"bennypowers.dev/larry/internal/httpclient"
 	"bennypowers.dev/larry/internal/remoteid"
@@ -36,11 +37,18 @@ func (p *PyPIProvider) Name() string {
 }
 
 // pypiResponse represents the JSON response from pypi.org/pypi/<name>/json
-// Only the fields we care about are included.
 type pypiResponse struct {
 	Info struct {
 		Version string `json:"version"`
 	} `json:"info"`
+	// Releases maps version strings to arrays of file objects.
+	// Each file object has "packagetype" (sdist or bdist_wheel).
+	Releases map[string][]pypiFile `json:"releases"`
+}
+
+// pypiFile represents a single distribution file on PyPI.
+type pypiFile struct {
+	PackageType string `json:"packagetype"`
 }
 
 func (p *PyPIProvider) FetchLatestVersion(rid remoteid.RemoteId, allowPrereleases bool) (*version.Version, error) {
@@ -80,19 +88,71 @@ func (p *PyPIProvider) FetchLatestVersion(rid remoteid.RemoteId, allowPrerelease
 		return nil, fmt.Errorf("pypi: no version found in response")
 	}
 
-	pv := pypiResp.Info.Version
+	// Find the latest version that has an sdist (source distribution).
+	// Gentoo builds from source, so versions without sdists are unusable.
+	pv, err := p.latestVersionWithSdist(&pypiResp, allowPrereleases)
+	if err != nil {
+		return nil, err
+	}
+
 	normVer := version.Normalize(pv)
 	v, err := version.Parse(normVer)
 	if err != nil {
 		return nil, fmt.Errorf("pypi: failed to parse version %q: %w", pv, err)
 	}
 
-	// Filter prereleases if not allowed
-	if !allowPrereleases && v.IsPrerelease() {
-		return nil, fmt.Errorf("pypi: latest version %q is a prerelease", pv)
+	return v, nil
+}
+
+// latestVersionWithSdist returns the latest version that has at least one sdist.
+// Falls back to info.version if the releases data is unavailable.
+func (p *PyPIProvider) latestVersionWithSdist(resp *pypiResponse, allowPrereleases bool) (string, error) {
+	// If releases data is available, filter for versions with sdists
+	if len(resp.Releases) > 0 {
+		// Iterate versions in reverse-sorted order (last = highest)
+		versions := make([]string, 0, len(resp.Releases))
+		for v := range resp.Releases {
+			versions = append(versions, v)
+		}
+		// Sort descending (highest version first)
+		slices.SortFunc(versions, func(a, b string) int {
+			return version.Compare(b, a)
+		})
+
+		for _, v := range versions {
+			if !allowPrereleases {
+				nv, err := version.Parse(version.Normalize(v))
+				if err == nil && nv.IsPrerelease() {
+					continue
+				}
+			}
+			for _, f := range resp.Releases[v] {
+				if f.PackageType == "sdist" {
+					return v, nil
+				}
+			}
+		}
+		// No sdist found at all — return info.version so the user sees the issue
+		// when they try to bump (and gets a clear 404 from prepare).
+		fv := resp.Info.Version
+		if !allowPrereleases {
+			v, err := version.Parse(version.Normalize(fv))
+			if err == nil && v.IsPrerelease() {
+				return "", fmt.Errorf("pypi: latest version %q is a prerelease", fv)
+			}
+		}
+		return fv, nil
 	}
 
-	return v, nil
+	// No releases data — fall back to info.version (legacy behavior)
+	fv := resp.Info.Version
+	if !allowPrereleases {
+		v, err := version.Parse(version.Normalize(fv))
+		if err == nil && v.IsPrerelease() {
+			return "", fmt.Errorf("pypi: latest version %q is a prerelease", fv)
+		}
+	}
+	return fv, nil
 }
 
 // IsPrerelease reports whether v is a pre-release version.

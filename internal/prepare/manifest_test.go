@@ -33,7 +33,8 @@ func (r *callRecorder) called() bool {
 }
 
 func TestRunManifest_TargetsCategoryPackage(t *testing.T) {
-	// D1 — cat/pkg target, not ebuild path.
+	// D1 — ebuild path is passed to pkgdev manifest (not the full cat/pkg).
+	// This avoids fetching distfiles for sibling ebuilds.
 	overlay := t.TempDir()
 	dd := filepath.Join(t.TempDir(), "dd")
 	eb := filepath.Join(overlay, "dev-util", "foo", "foo-1.0.ebuild")
@@ -74,7 +75,7 @@ func TestRunManifest_TargetsCategoryPackage(t *testing.T) {
 	if got := len(c.args); got != 4 {
 		t.Fatalf("args length: got %d, want 4", got)
 	}
-	want := []string{"manifest", "-d", dd, "dev-util/foo"}
+	want := []string{"manifest", "-d", dd, eb}
 	for i, w := range want {
 		if c.args[i] != w {
 			t.Errorf("args[%d] = %q, want %q", i, c.args[i], w)
@@ -134,8 +135,8 @@ func TestRunManifest_SiblingVersionsSurvive(t *testing.T) {
 		t.Fatalf("runManifest: %v", err)
 	}
 
-	if rec.calls[0].args[3] != "dev-util/foo" {
-		t.Errorf("catPkg arg = %q, want %q", rec.calls[0].args[3], "dev-util/foo")
+	if rec.calls[0].args[3] != eb1 {
+		t.Errorf("target arg = %q, want %q", rec.calls[0].args[3], eb1)
 	}
 
 	data, _ := os.ReadFile(manifestPath)

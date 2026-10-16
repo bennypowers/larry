@@ -426,6 +426,93 @@ func TestAtom_ParseEbuildPath_HyphenatedName(t *testing.T) {
 	}
 }
 
+// ─── .larry/config.yaml config loading test ────────────────────────────────────────
+
+// mockResolverWithTags is a mock that implements ResolverWithTags for testing
+// the bump command's version_template expansion path.
+type mockResolverWithTags struct {
+	latestVersion func(remoteid.RemoteId, bool) (*version.Version, error)
+	resolution    *provider.Resolution
+}
+
+func (m *mockResolverWithTags) Name() string                        { return "mock-resolver" }
+func (m *mockResolverWithTags) Type() remoteid.RemoteIdType        { return remoteid.TypeGitHub }
+func (m *mockResolverWithTags) Metadata() provider.ProviderMetadata { return provider.ProviderMetadata{Name: "mock-resolver"} }
+func (m *mockResolverWithTags) FetchLatestVersion(rid remoteid.RemoteId, allowPrereleases bool) (*version.Version, error) {
+	if m.latestVersion != nil {
+		return m.latestVersion(rid, allowPrereleases)
+	}
+	return version.Parse("1.0.0")
+}
+func (m *mockResolverWithTags) IsPrerelease(v *version.Version) bool { return v.IsPrerelease() }
+func (m *mockResolverWithTags) FetchResolution(rid remoteid.RemoteId, allowPrereleases bool) (*provider.Resolution, error) {
+	return m.resolution, nil
+}
+
+func TestBump_AutoVersionWithLarryConfig(t *testing.T) {
+	// Test that the bump command loads .larry/config.yaml config and applies
+	// version_template for date-based GitHub tags (regression test for
+	// sys-kernel/raspberrypi-kernel bump producing wrong version).
+	pkgDir := t.TempDir()
+	pkgName := "my-pkg"
+	pkgPath := filepath.Join(pkgDir, pkgName)
+	if err := os.MkdirAll(pkgPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	larryDir := filepath.Join(pkgPath, ".larry")
+	if err := os.MkdirAll(larryDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create .larry/config.yaml with tag_match and version_template in the package dir
+	yamlContent := `upstream:
+  pv_match: '^(?P<BASE>\d+\.\d+\.\d+)(?:_p\d+)?$'
+  tag_match: '^stable_(?P<DATE>\d{8})$'
+  version_template: '${BASE}_p${DATE}'
+`
+	if err := os.WriteFile(filepath.Join(pkgPath, ".larry/config.yaml"), []byte(yamlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	content := `EAPI=8
+PV=6.18.46_p20260824
+SRC_URI="https://github.com/example/linux/archive/COMMIT.tar.gz"
+`
+	if err := os.WriteFile(filepath.Join(pkgPath, "my-pkg-6.18.46_p20260824.ebuild"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mock provider that returns ByDate resolution (like GitHubProvider does
+	// for raspberrypi/linux which has stable_YYYYMMDD tags)
+	mockP := &mockResolverWithTags{
+		resolution: &provider.Resolution{
+			Tag:     "stable_20260911",
+			TagDate: "20260911",
+			ByDate:  true,
+		},
+	}
+
+	registry := provider.NewProviderRegistry()
+	registry.Register(mockP)
+
+	result, err := Bump(BumpConfig{
+		Dir:             pkgPath,
+		Mode:            BumpModeAuto,
+		ProviderReg:     registry,
+		AllowPrerelease: false,
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	// With .larry/config.yaml config, the version_template should expand to:
+	// BASE=6.18.46, DATE=20260911 → 6.18.46_p20260911
+	if result.NewVersion != "6.18.46_p20260911" {
+		t.Errorf("expected new version 6.18.46_p20260911, got %q", result.NewVersion)
+	}
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 type mockUpstreamProvider struct {

@@ -277,6 +277,8 @@ func detectProviderFromSRCURI(srcURI string, homepage string) string {
 		switch {
 		case strings.Contains(text, "mirror://pypi/"):
 			return "pypi"
+		case strings.Contains(text, "files.pythonhosted.org/"):
+			return "pypi"
 		case strings.Contains(text, "mirror://npm/"):
 			return "npm"
 		case strings.Contains(text, "mirror://github/") || strings.Contains(text, "mirror://github.com/"):
@@ -351,13 +353,17 @@ func detectProviderFromMetadata(inherit []string, content string) string {
 // remote-id is found the function falls back to URL scanning and eclass
 // heuristics.
 func ResolveProviderType(ebuildPath, srcURI, homepage string, inherit []string, content string) string {
-	// 1. metadata.xml <remote-id> wins.
+	// 1. metadata.xml <remote-id> wins, UNLESS inherit says pypi or npm
+	// (the remote-id may point to a GitHub mirror or issue tracker while
+	// the actual source tarball comes from PyPI/npm).
+	var metaType string
 	if ebuildPath != "" {
 		if rids, err := remoteid.ResolveRemoteId(ebuildPath); err == nil && len(rids) > 0 {
 			for _, rid := range rids {
 				t := string(rid.Type)
 				if t == "github" || t == "gitlab" || t == "pypi" || t == "npm" || t == "codeberg" || t == "sourcehut" {
-					return t
+					metaType = t
+					break
 				}
 			}
 		}
@@ -365,10 +371,18 @@ func ResolveProviderType(ebuildPath, srcURI, homepage string, inherit []string, 
 	// 2. URL detection.
 	provider := detectProviderFromSRCURI(srcURI, homepage)
 	if provider == "" {
-		return detectProviderFromMetadata(inherit, content)
+		// No URL match — fall back to metadata detection.
+		if metaType == "" {
+			metaType = detectProviderFromMetadata(inherit, content)
+		}
+		return metaType
 	}
-	// 3. If URL detection says GitHub/npm but eclass says PyPI,
-	// prefer PyPI (the package is likely a PyPI package with a GitHub mirror)
+	// 3. pypi/npm inherit always wins over github/gitlab/codeberg metadata
+	// or URL (the source tarball comes from PyPI/npm, not from the forge).
+	if metaType == "pypi" || metaType == "npm" {
+		return metaType
+	}
+	// 4. If URL says GitHub/npm but metadata says PyPI, prefer PyPI.
 	if provider == "github" || provider == "gitlab" || provider == "codeberg" {
 		meta := detectProviderFromMetadata(inherit, content)
 		if meta == "pypi" || meta == "npm" {
@@ -635,7 +649,7 @@ func resolveOne(
 		}
 	}
 
-	// Load per-package .larry.yaml upstream rules. Unconditionally set
+	// Load per-package .larry/config.yaml upstream rules. Unconditionally set
 	// ResolveOptions on any GitHubProvider so that state does not leak
 	// between packages during a multi-package walk.
 	var resOpts *larryconfig.ResolveOptions

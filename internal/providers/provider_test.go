@@ -98,6 +98,55 @@ func TestPyPIProvider_FetchLatest_Prerelease(t *testing.T) {
 	}
 }
 
+func TestPyPIProvider_FetchLatest_SdistFilter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/pypi/sdistpkg/json" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		resp := map[string]interface{}{
+			"info": map[string]string{
+				"version": "2.0.0", // latest overall
+			},
+			"releases": map[string]interface{}{
+				// 2.0.0 only has wheels — no sdist
+				"2.0.0": []interface{}{
+					map[string]string{"packagetype": "bdist_wheel"},
+				},
+				// 1.5.0 has sdist
+				"1.5.0": []interface{}{
+					map[string]string{"packagetype": "bdist_wheel"},
+					map[string]string{"packagetype": "sdist"},
+				},
+				// 1.0.0 also has sdist but is older
+				"1.0.0": []interface{}{
+					map[string]string{"packagetype": "sdist"},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	transport := &pypiReplacingTransport{srv: srv}
+	client := httpclient.NewClientWithTransport(transport)
+
+	rl := ratelimit.NewRateLimiter()
+	prov := NewPyPIProviderWithClient(rl, client)
+
+	// Should return latest version WITH sdist (1.5.0), not latest overall (2.0.0)
+	v, err := prov.FetchLatestVersion(remoteid.RemoteId{Name: "sdistpkg"}, false)
+	if err != nil {
+		t.Fatalf("FetchLatestVersion(): %v", err)
+	}
+	if v.String() != "1.5.0" {
+		t.Errorf("version = %q, want 1.5.0 (latest with sdist)", v.String())
+	}
+}
+
 // ---- NpmProvider (httptest) ----
 
 func TestNpmProvider_FetchLatest(t *testing.T) {
