@@ -745,3 +745,125 @@ func (r *recRunner) Run(name string, args ...string) error {
 func (r *recRunner) RunWithEnv(env []string, name string, args ...string) error {
 	return r.Run(name, args...)
 }
+
+// ---------------------------------------------------------------------------
+// --use: USE flags reach the container as -e USE=... (commas normalized)
+// ---------------------------------------------------------------------------
+
+func TestContainerArgs_UseFlags(t *testing.T) {
+	tmpDir := t.TempDir()
+	ebuildPath := filepath.Join(tmpDir, "dev-util", "javy", "javy-9.1.0.ebuild")
+	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+
+	overlay := tmpDir
+	cacheDir := filepath.Join(tmpDir, "cache")
+	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte("bennypowers"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+
+	stub := newRecRunner()
+	stub.fail["podman image exists larry-test"] = os.ErrNotExist
+
+	cf := filepath.Join(tmpDir, "Containerfile.larry-test")
+	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+
+	cfg := &ContainerConfig{
+		Overlay:   overlay,
+		CacheDir:  cacheDir,
+		ImageName: "larry-test",
+		UseFlags:  "cuda,rocm",
+	}
+
+	if err := TestContainer(ebuildPath, cfg, stub, false, false); err != nil {
+		t.Fatalf("TestContainer failed: %v", err)
+	}
+
+	var runArgs []string
+	for _, c := range stub.calls {
+		if c[0] == "podman" && len(c) > 1 && c[1] == "run" {
+			runArgs = c
+			break
+		}
+	}
+	if len(runArgs) == 0 {
+		t.Fatalf("no podman run call recorded; calls = %v", stub.calls)
+	}
+
+	// -e USE=cuda rocm must appear before the image name.
+	envIdx := indexOf(runArgs, "-e")
+	if envIdx == -1 {
+		t.Fatalf("no -e in podman args; runArgs = %v", runArgs)
+	}
+	if envIdx+1 >= len(runArgs) || runArgs[envIdx+1] != "USE=cuda rocm" {
+		t.Errorf("-e value = %v, want USE=cuda rocm", runArgs[envIdx+1:])
+	}
+	imageIdx := indexOf(runArgs, "larry-test")
+	if imageIdx == -1 || envIdx > imageIdx {
+		t.Errorf("-e USE must precede image name; runArgs = %v", runArgs)
+	}
+}
+
+func TestContainerArgs_NoUseFlagsNoEnv(t *testing.T) {
+	tmpDir := t.TempDir()
+	ebuildPath := filepath.Join(tmpDir, "dev-util", "javy", "javy-9.1.0.ebuild")
+	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+
+	overlay := tmpDir
+	cacheDir := filepath.Join(tmpDir, "cache")
+	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte("bennypowers"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+
+	stub := newRecRunner()
+	stub.fail["podman image exists larry-test"] = os.ErrNotExist
+
+	cf := filepath.Join(tmpDir, "Containerfile.larry-test")
+	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+
+	cfg := &ContainerConfig{
+		Overlay:   overlay,
+		CacheDir:  cacheDir,
+		ImageName: "larry-test",
+	}
+
+	if err := TestContainer(ebuildPath, cfg, stub, false, false); err != nil {
+		t.Fatalf("TestContainer failed: %v", err)
+	}
+
+	for _, c := range stub.calls {
+		if c[0] == "podman" && len(c) > 1 && c[1] == "run" {
+			if indexOf(c, "-e") != -1 {
+				t.Errorf("unexpected -e in podman args when UseFlags unset; args = %v", c)
+			}
+			return
+		}
+	}
+	t.Fatalf("no podman run call recorded")
+}
+
+func indexOf(slice []string, want string) int {
+	for i, s := range slice {
+		if s == want {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestGetUseEnvArgs_SpaceForm(t *testing.T) {
+	got := getUseEnvArgs(&ContainerConfig{UseFlags: "cuda rocm"})
+	want := []string{"-e", "USE=cuda rocm"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("getUseEnvArgs space form = %v, want %v", got, want)
+	}
+	got = getUseEnvArgs(&ContainerConfig{UseFlags: "  cuda   rocm  "})
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("getUseEnvArgs whitespace collapse = %v, want %v", got, want)
+	}
+	if got := getUseEnvArgs(&ContainerConfig{}); got != nil {
+		t.Errorf("getUseEnvArgs empty = %v, want nil", got)
+	}
+	if got := getUseEnvArgs(nil); got != nil {
+		t.Errorf("getUseEnvArgs nil cfg = %v, want nil", got)
+	}
+}

@@ -20,6 +20,7 @@ var (
 	testPortageTmpdir string
 	testEmerge        bool
 	testImageName     string
+	testUse           string
 )
 
 func init() {
@@ -39,6 +40,8 @@ func init() {
 		"override PORTAGE_TMPDIR for test runs")
 	testCmd.Flags().StringVar(&testImageName, "image", "",
 		"container image name (default: larry-test)")
+	testCmd.Flags().StringVar(&testUse, "use", "",
+		`USE flags for the build, space separated (e.g. --use="cuda rocm"); sets USE in the emerge container`)
 
 	// Allow unknown flags (e.g. bare --<phase>) so splitPhaseFlags can detect them.
 	testCmd.FParseErrWhitelist = cobra.FParseErrWhitelist{
@@ -68,6 +71,7 @@ Examples:
   larry test -p fetch -p unpack dev-lisp/foo
   larry test --pretend dev-lisp/foo               # Preview only
   larry test --emerge dev-lisp/foo             # Run in podman container
+  larry test --emerge --use="cuda rocm" dev-lisp/foo  # Container build with USE flags
   larry test /var/db/repos/gentoo/foo/foo-1.0.0.ebuild  # Direct ebuild path
 `,
 	Args: cobra.MaximumNArgs(1),
@@ -118,6 +122,7 @@ Examples:
 				CacheDir:  cacheDir,
 				ImageName: testImageName,
 				UseTUI:    false,
+				UseFlags:  testUse,
 			}
 			err := test.TestContainer(ebuildPath, cfg, nil, testPretend, true)
 			if err != nil {
@@ -161,6 +166,7 @@ func splitPhaseFlags() (extraPhases []string, unknownFlag string) {
 		"phase": true, "p": true,
 		"portage-tmpdir": true,
 		"image": true,
+		"use": true,
 		// Root persistent flags.
 		"verbose": true, "quiet": true, "color": true, "dry-run": true,
 		"cache-dir": true, "distdir": true, "jobs": true,

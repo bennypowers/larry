@@ -377,3 +377,34 @@ func TestTestCmd_EmergePretendBuildsNothing(t *testing.T) {
 		t.Errorf("captured stdout = %q, want '--pretend'", stdout)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// --use reaches the container as -e USE=...
+// ---------------------------------------------------------------------------
+
+func TestTestCmd_UseFlagReachesContainer(t *testing.T) {
+	tmpOverlay := fixtureOverlay(t, nil, map[string]string{
+		"dev-util/javy/javy-9.1.0.ebuild": "EAPI=8\n",
+	})
+
+	// Capture os.Stdout for fmt.Printf in TestContainer's pretend path.
+	origStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	_, _, err := execCmd(t, "test", "--emerge", "--pretend", "--use", "cuda,rocm", "--overlay", tmpOverlay, "dev-util/javy")
+
+	_ = w.Close()
+	os.Stdout = origStdout
+
+	if err != nil {
+		t.Fatalf("execCmd failed: %v", err)
+	}
+
+	combined, _ := io.ReadAll(r)
+	stdout := string(combined)
+
+	if !strings.Contains(stdout, "-e USE=cuda rocm") {
+		t.Errorf("captured stdout = %q, want '-e USE=cuda rocm'", stdout)
+	}
+}

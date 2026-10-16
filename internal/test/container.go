@@ -17,6 +17,7 @@ type ContainerConfig struct {
 	CacheDir  string // --cache-dir flag
 	ImageName string // --image flag (empty = default "larry-test")
 	UseTUI    bool   // when true, pipe subprocess output instead of inheriting
+	UseFlags  string // --use flag (comma or space separated; passed to the container as USE)
 }
 
 // getImageName returns the container image name.
@@ -65,6 +66,19 @@ func getGPUFlags() []string {
 	return []string{"--device", "/dev/kfd", "--device", "/dev/dri", "--group-add", "video"}
 }
 
+// getUseEnvArgs returns the podman -e args that set USE inside the container,
+// or nil when no flags were requested. Commas are normalized to spaces.
+func getUseEnvArgs(cfg *ContainerConfig) []string {
+	if cfg == nil {
+		return nil
+	}
+	normalized := strings.Join(strings.Fields(strings.ReplaceAll(cfg.UseFlags, ",", " ")), " ")
+	if normalized == "" {
+		return nil
+	}
+	return []string{"-e", "USE=" + normalized}
+}
+
 // ---------------------------------------------------------------------------
 // D5 — imageExists checks via podman image exists, not a sentinel file.
 // ---------------------------------------------------------------------------
@@ -101,6 +115,9 @@ func runContainerEmerge(ebuildPath string, cfg *ContainerConfig, runner CmdRunne
 
 	// Add GPU passthrough (D10).
 	args = append(args, getGPUFlags()...)
+
+	// Add USE flags for the build (--use).
+	args = append(args, getUseEnvArgs(cfg)...)
 
 	// TUI stream isolation
 	if cfg != nil && cfg.UseTUI {
@@ -288,6 +305,9 @@ func TestContainer(ebuildPath string, cfg *ContainerConfig, runner CmdRunner, pr
 		fmt.Printf("  -v %s:/var/db/repos/%s:ro \\\n", cfg.Overlay, resolveRepoName(cfg.Overlay))
 		fmt.Printf("  -v %s/distfiles:/var/cache/distfiles \\\n", cacheDir)
 		fmt.Printf("  -v %s/binpkgs:/var/cache/binpkgs \\\n", cacheDir)
+		if useEnv := getUseEnvArgs(cfg); useEnv != nil {
+			fmt.Printf("  %s %s \\\n", useEnv[0], useEnv[1])
+		}
 		fmt.Printf("  %s emerge -1 --verbose --autounmask=y --autounmask-write=y --pretend %s\n", imageName, atomTarget)
 		return nil
 	}
