@@ -51,14 +51,19 @@ func PrepareCargo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	if err != nil {
 		return fmt.Errorf("cargo: read ebuild: %w", err)
 	}
-	vars := ebuild.BuildVariableMap(string(raw), nil)
+	pe, err := atom.ParseEbuildPath(ei.Path)
+	if err != nil {
+		pe = nil
+	}
+	vars := ebuild.BuildVariableMap(string(raw), pe)
 	forge, owner, repo, err := findCargoRepo(string(raw), vars)
 	if err != nil {
 		return fmt.Errorf("cargo: find repo: %w", err)
 	}
 
 	// 2. Derive the version tag
-	tag := cargoTag(forge, ei.PN(), ei.PV(), string(raw))
+	expandedText := ebuild.ExpandVariables(string(raw), vars)
+	tag := cargoTag(forge, ei.PN(), ei.PV(), expandedText)
 
 	// 3. Download Cargo.lock
 	lockPath, err := fetchCargoLock(nil, forge, owner, repo, tag)
