@@ -532,6 +532,182 @@ func TestPrepareGo_TagStripsRevision(t *testing.T) {
 	}
 }
 
+// makeGoEbuildInfoWithReleaseURL creates an EbuildInfo whose SRC_URI also
+// references a deps tarball hosted on a GitHub release, like go-module
+// ebuilds that vendor deps (e.g. app-misc/hebcal).
+func makeGoEbuildInfoWithReleaseURL(t *testing.T, tmpDir, owner, repo, releaseRepo string) *ebuild.EbuildInfo {
+	t.Helper()
+	pkgDir := filepath.Join(tmpDir, "overlay", "dev-util", "proj")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ebuildPath := filepath.Join(pkgDir, "proj-1.0.0.ebuild")
+
+	content := `EAPI=8
+inherit go-module
+
+DESCRIPTION="Test"
+HOMEPAGE="https://github.com/` + owner + `/` + repo + `"
+SRC_URI="https://github.com/` + owner + `/` + repo + `/archive/refs/tags/v${PV}.tar.gz -> ${P}.tar.gz
+	https://github.com/` + releaseRepo + `/releases/download/${PN}/${P}-deps.tar.xz"
+
+LICENSE="MIT"
+SLOT="0"
+KEYWORDS="~amd64"
+`
+	if err := os.WriteFile(ebuildPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	return &ebuild.EbuildInfo{
+		Path:     ebuildPath,
+		Category: "dev-util",
+		Pkg:      "proj",
+		PVVal:    "1.0.0",
+		PVal:     "proj-1.0.0",
+		SRC_URI: "https://github.com/" + owner + "/" + repo + "/archive/refs/tags/v${PV}.tar.gz\n" +
+			"\thttps://github.com/" + releaseRepo + "/releases/download/${PN}/${P}-deps.tar.xz",
+		HOMEPAGE: "https://github.com/" + owner + "/" + repo,
+		Inherit:  []string{"go-module"},
+		Raw:      content,
+	}
+}
+
+// ghCalls returns the recorded calls whose first argument is "gh".
+func ghCalls(runner *recRunner) [][]string {
+	var calls [][]string
+	for _, call := range runner.calls {
+		if len(call) > 0 && call[0] == "gh" {
+			calls = append(calls, call)
+		}
+	}
+	return calls
+}
+
+// assertNoVersionTagGhCalls fails the test if any gh call targets a v${PV}
+// release tag, which is how assets used to land on the wrong release.
+func assertNoVersionTagGhCalls(t *testing.T, runner *recRunner) {
+	t.Helper()
+	for _, call := range ghCalls(runner) {
+		for _, arg := range call {
+			if arg == "v1.0.0" {
+				t.Errorf("gh call targets version tag v1.0.0: %v", call)
+			}
+		}
+	}
+}
+
+func TestPrepareGo_UploadUsesSrcUriReleaseTag(t *testing.T) {
+	tmpDir := t.TempDir()
+	srv := goFixture(t, "acme", "proj", "v1.0.0")
+
+	ei := makeGoEbuildInfoWithReleaseURL(t, tmpDir, "acme", "proj", "bennypowers/gentoo-overlay")
+	runner := &recRunner{}
+	overlay := filepath.Join(tmpDir, "overlay")
+	distDir := t.TempDir()
+
+	stubManifestRunner(t)
+
+	cfg := &PrepareConfig{
+		Overlay:       overlay,
+		Distdir:       distDir,
+		GitHubBaseURL: srv.URL,
+		GitHubRepo:    "bennypowers/gentoo-overlay",
+		Runner:        runner,
+		HTTPClient:    srv.Client(),
+	}
+
+	if err := PrepareGo(ei, cfg); err != nil {
+		t.Fatalf("PrepareGo returned error: %v", err)
+	}
+
+	// The asset must be uploaded to the tag the ebuild's SRC_URI names
+	// (${PN} -> "proj"), not a version tag.
+	var sawCreate, sawUpload bool
+	for _, call := range ghCalls(runner) {
+		if len(call) >= 3 && call[1] == "release" && call[2] == "create" {
+			sawCreate = true
+			if call[3] != "proj" {
+				t.Errorf("release create tag = %q, want %q (call: %v)", call[3], "proj", call)
+			}
+		}
+		if len(call) >= 3 && call[1] == "release" && call[2] == "upload" {
+			sawUpload = true
+			if call[3] != "proj" {
+				t.Errorf("release upload tag = %q, want %q (call: %v)", call[3], "proj", call)
+			}
+		}
+	}
+	if !sawCreate {
+		t.Error("expected a gh release create call")
+	}
+	if !sawUpload {
+		t.Error("expected a gh release upload call")
+	}
+	assertNoVersionTagGhCalls(t, runner)
+}
+
+func TestPrepareGo_NoUploadForForeignReleaseURL(t *testing.T) {
+	tmpDir := t.TempDir()
+	srv := goFixture(t, "acme", "proj", "v1.0.0")
+
+	// SRC_URI references a release on a third-party repo, not ours.
+	ei := makeGoEbuildInfoWithReleaseURL(t, tmpDir, "acme", "proj", "gentoo-zh-drafts/netbird")
+	runner := &recRunner{}
+	overlay := filepath.Join(tmpDir, "overlay")
+	distDir := t.TempDir()
+
+	stubManifestRunner(t)
+
+	cfg := &PrepareConfig{
+		Overlay:       overlay,
+		Distdir:       distDir,
+		GitHubBaseURL: srv.URL,
+		GitHubRepo:    "bennypowers/gentoo-overlay",
+		Runner:        runner,
+		HTTPClient:    srv.Client(),
+	}
+
+	if err := PrepareGo(ei, cfg); err != nil {
+		t.Fatalf("PrepareGo returned error: %v", err)
+	}
+
+	if calls := ghCalls(runner); len(calls) != 0 {
+		t.Errorf("expected no gh calls for foreign release URL, got: %v", calls)
+	}
+}
+
+func TestPrepareGo_NoUploadWithoutReleaseURL(t *testing.T) {
+	tmpDir := t.TempDir()
+	srv := goFixture(t, "acme", "proj", "v1.0.0")
+
+	// No release URL in SRC_URI at all: nothing fetches a release asset,
+	// so nothing should be uploaded.
+	ei := makeGoEbuildInfo(t, tmpDir, "acme", "proj")
+	runner := &recRunner{}
+	overlay := filepath.Join(tmpDir, "overlay")
+	distDir := t.TempDir()
+
+	stubManifestRunner(t)
+
+	cfg := &PrepareConfig{
+		Overlay:       overlay,
+		Distdir:       distDir,
+		GitHubBaseURL: srv.URL,
+		GitHubRepo:    "bennypowers/gentoo-overlay",
+		Runner:        runner,
+		HTTPClient:    srv.Client(),
+	}
+
+	if err := PrepareGo(ei, cfg); err != nil {
+		t.Fatalf("PrepareGo returned error: %v", err)
+	}
+
+	if calls := ghCalls(runner); len(calls) != 0 {
+		t.Errorf("expected no gh calls without a release URL, got: %v", calls)
+	}
+}
+
 func TestPrepareGo_MissingTagIsError(t *testing.T) {
 	tmpDir := t.TempDir()
 

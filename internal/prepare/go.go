@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/ulikunitz/xz"
 
@@ -106,20 +107,24 @@ func PrepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 		return fmt.Errorf("go: copy to distdir: %w", err)
 	}
 
-	// 9. Upload to GitHub release (if repo configured)
-	if cfg.GitHubRepo != "" {
-		gh := github.NewClient()
-		tag := "v" + atom.StripRevision(ei.PVVal)
-		if err := npmUploadAsset(tag, filepath.Base(outPath), distDir, cfg.GitHubRepo, ei.PN(), gh.Runner()); err != nil {
-			fmt.Fprintf(os.Stderr, "[larry] go: upload deps asset: %v (manifest may fail if distfiles are unavailable)\n", err)
-		}
-	}
-
-	// 10. Run pkgdev manifest with catPkg (plan 21)
+	// 9. Upload to GitHub release when the ebuild's SRC_URI fetches its deps
+	// tarball from a release on the configured repo. The tag comes from the
+	// ebuild's own URL (like the npm pipeline), so the asset lands exactly
+	// where the ebuild will fetch it — never a guessed v${PV} tag.
 	pe, err := atom.ParseEbuildPath(ei.Path)
 	if err != nil {
 		return fmt.Errorf("go: parse ebuild path: %w", err)
 	}
+	if cfg.GitHubRepo != "" {
+		if tag, ok := goReleaseTag(ei, pe, cfg.GitHubRepo); ok {
+			gh := github.NewClientWithRunner(runner)
+			if err := npmUploadAsset(tag, filepath.Base(outPath), distDir, cfg.GitHubRepo, ei.PN(), gh.Runner()); err != nil {
+				fmt.Fprintf(os.Stderr, "[larry] go: upload deps asset: %v (manifest may fail if distfiles are unavailable)\n", err)
+			}
+		}
+	}
+
+	// 10. Run pkgdev manifest with catPkg (plan 21)
 	catPkg := pe.Category + "/" + pe.PN
 	if err := runManifest(manifestRequest{
 		Overlay:    cfg.Overlay,
@@ -132,6 +137,30 @@ func PrepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	}
 
 	return nil
+}
+
+// goReleaseTag returns the release tag the ebuild's SRC_URI fetches its deps
+// tarball from, but only when that release lives on the configured repo.
+// This mirrors the npm pipeline: the ebuild's own URL is authoritative, so
+// uploads land where the ebuild fetches from instead of a guessed tag.
+func goReleaseTag(ei *ebuild.EbuildInfo, pe *atom.ParsedEbuild, repo string) (string, bool) {
+	releasesURL := extractReleaseURL(ei.SRC_URI)
+	if releasesURL == "" {
+		return "", false
+	}
+	m := releaseURLPattern.FindStringSubmatch(releasesURL)
+	if len(m) < 5 {
+		return "", false
+	}
+	if !strings.EqualFold(m[1]+"/"+m[2], repo) {
+		return "", false
+	}
+	vars := ebuild.BuildVariableMap(ei.Raw, pe)
+	tag := ebuild.ExpandVariables(m[3], vars)
+	if tag == "" {
+		return "", false
+	}
+	return tag, true
 }
 
 // findGoRepo extracts the GitHub owner/repo from SRC_URI or HOMEPAGE.
