@@ -1,6 +1,8 @@
 package prepare
 
 import (
+	"crypto/sha512"
+	"fmt"
 	"errors"
 	"os"
 	"path/filepath"
@@ -336,5 +338,177 @@ func TestCustomPrepare_RelativePaths(t *testing.T) {
 	}
 	if !rec.called() {
 		t.Fatal("ManifestRunner was not called")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Stale Manifest detection after custom hooks
+// ---------------------------------------------------------------------------
+
+// TestManifestEntriesStale covers staleness detection of DIST entries
+// against the files actually present in distdir.
+func TestManifestEntriesStale(t *testing.T) {
+	distDir := t.TempDir()
+	data := []byte("distfile-bytes")
+	distfile := filepath.Join(distDir, "foo-1.0.0.tar.gz")
+	if err := os.WriteFile(distfile, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	goodSum := sha512.Sum512(data)
+	goodLine := fmt.Sprintf("DIST foo-1.0.0.tar.gz %d BLAKE2B aa SHA512 %x\n",
+		len(data), goodSum)
+
+	manifestPath := filepath.Join(t.TempDir(), "Manifest")
+	writeManifest := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(manifestPath, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		name    string
+		manifest string
+		want    bool
+	}{
+		{"matching entry", goodLine, false},
+		{"size mismatch", "DIST foo-1.0.0.tar.gz 10 BLAKE2B aa SHA512 " + fmt.Sprintf("%x", goodSum) + "\n", true},
+		{"hash mismatch", fmt.Sprintf("DIST foo-1.0.0.tar.gz %d BLAKE2B aa SHA512 bb\n", len(data)), true},
+		{"file missing from distdir", "DIST other-1.0.0.tar.gz 10 BLAKE2B aa SHA512 bb\n", false},
+		{"non-DIST lines ignored", "AUX files.patch 10 BLAKE2B aa SHA512 bb\n" + goodLine, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			writeManifest(tt.manifest)
+			if got := manifestEntriesStale(manifestPath, distDir); got != tt.want {
+				t.Errorf("manifestEntriesStale = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("missing manifest", func(t *testing.T) {
+		if got := manifestEntriesStale(filepath.Join(t.TempDir(), "Manifest"), distDir); got {
+			t.Error("manifestEntriesStale = true for missing Manifest, want false")
+		}
+	})
+}
+
+// fixtureCustomPrepareOverlay builds a real overlay tree:
+// <root>/dev-util/foo/{foo-1.0.0.ebuild, .larry/prepare.sh} so that the
+// manifest step's overlay-relative package dir matches the fixture dir.
+func fixtureCustomPrepareOverlay(t *testing.T, scriptBody string) (root, ebuildPath, pkgDir string) {
+	t.Helper()
+	root = t.TempDir()
+	pkgDir = filepath.Join(root, "dev-util", "foo")
+	if err := os.MkdirAll(filepath.Join(pkgDir, ".larry"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ebuildPath = filepath.Join(pkgDir, "foo-1.0.0.ebuild")
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\nCOMMIT=\"aaaa\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, ".larry", "prepare.sh"), []byte(scriptBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return root, ebuildPath, pkgDir
+}
+
+// TestCustomPrepare_StaleManifestForcesFullRegen verifies that when a
+// distfile no longer matches its Manifest entry — e.g. the hook
+// regenerated it — the manifest step targets the whole cat/pkg so the
+// Manifest is dropped and regenerated, instead of merging stale entries.
+func TestCustomPrepare_StaleManifestForcesFullRegen(t *testing.T) {
+	root, ebuildPath, pkgDir := fixtureCustomPrepareOverlay(t, "#!/bin/sh\nexit 0\n")
+
+	distDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(distDir, "foo-1.0.0.tar.gz"),
+		[]byte("regenerated-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stale entry: records a size and hash that do not match the file.
+	if err := os.WriteFile(filepath.Join(pkgDir, "Manifest"),
+		[]byte("DIST foo-1.0.0.tar.gz 10 BLAKE2B aa SHA512 bb\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotTarget string
+	var manifestPresentAtCall bool
+	orig := ManifestRunner
+	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
+		gotTarget = args[3]
+		_, err := os.Stat(filepath.Join(pkgDir, "Manifest"))
+		manifestPresentAtCall = !os.IsNotExist(err)
+		_ = os.WriteFile(filepath.Join(pkgDir, "Manifest"),
+			[]byte("DIST foo-1.0.0.tar.gz 18 BLAKE2B aa SHA512 bb\n"), 0o644)
+		return nil
+	}
+	t.Cleanup(func() { ManifestRunner = orig })
+
+	ei := &ebuild.EbuildInfo{
+		Path:     ebuildPath,
+		Category: "dev-util",
+		Pkg:      "foo",
+		PVVal:    "1.0.0",
+		PVal:     "foo-1.0.0",
+	}
+	cfg := &PrepareConfig{Distdir: distDir, Overlay: root}
+
+	if err := runCustomPrepare(ei, filepath.Join(pkgDir, ".larry", "prepare.sh"), cfg); err != nil {
+		t.Fatalf("runCustomPrepare: %v", err)
+	}
+	if gotTarget != "dev-util/foo" {
+		t.Errorf("manifest target = %q, want cat/pkg %q (full regeneration)", gotTarget, "dev-util/foo")
+	}
+	if manifestPresentAtCall {
+		t.Error("Manifest still present when pkgdev ran; want it removed for full regeneration")
+	}
+}
+
+// TestCustomPrepare_MatchingManifestKeepsEbuildTarget verifies the merge
+// path is kept when recorded entries match the distdir files, so sibling
+// ebuilds' distfiles are not fetched unnecessarily.
+func TestCustomPrepare_MatchingManifestKeepsEbuildTarget(t *testing.T) {
+	root, ebuildPath, pkgDir := fixtureCustomPrepareOverlay(t, "#!/bin/sh\nexit 0\n")
+
+	distDir := t.TempDir()
+	data := []byte("distfile-bytes")
+	if err := os.WriteFile(filepath.Join(distDir, "foo-1.0.0.tar.gz"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha512.Sum512(data)
+	manifestLine := fmt.Sprintf("DIST foo-1.0.0.tar.gz %d BLAKE2B aa SHA512 %x\n", len(data), sum)
+	if err := os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte(manifestLine), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotTarget string
+	var manifestPresentAtCall bool
+	orig := ManifestRunner
+	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
+		gotTarget = args[3]
+		_, err := os.Stat(filepath.Join(pkgDir, "Manifest"))
+		manifestPresentAtCall = !os.IsNotExist(err)
+		return nil
+	}
+	t.Cleanup(func() { ManifestRunner = orig })
+
+	ei := &ebuild.EbuildInfo{
+		Path:     ebuildPath,
+		Category: "dev-util",
+		Pkg:      "foo",
+		PVVal:    "1.0.0",
+		PVal:     "foo-1.0.0",
+	}
+	cfg := &PrepareConfig{Distdir: distDir, Overlay: root}
+
+	if err := runCustomPrepare(ei, filepath.Join(pkgDir, ".larry", "prepare.sh"), cfg); err != nil {
+		t.Fatalf("runCustomPrepare: %v", err)
+	}
+	if gotTarget != ebuildPath {
+		t.Errorf("manifest target = %q, want ebuild path %q (merge mode)", gotTarget, ebuildPath)
+	}
+	if !manifestPresentAtCall {
+		t.Error("Manifest removed before pkgdev ran; want merge mode to preserve it")
 	}
 }

@@ -2,11 +2,15 @@ package prepare
 
 import (
 	"bufio"
+	"crypto/sha512"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"bennypowers.dev/larry/internal/logger"
@@ -81,6 +85,75 @@ func manifestArgs(style manifestStyle, distdir, catPkg, ebuildPath string) []str
 	default:
 		return nil
 	}
+}
+
+// manifestEntriesStale reports whether any DIST entry in the Manifest no
+// longer matches the corresponding file in distdir. Entries whose file is
+// missing from distdir are ignored: pkgdev manifest fetches those itself.
+func manifestEntriesStale(manifestPath, distdir string) bool {
+	f, err := os.Open(manifestPath)
+	if err != nil {
+		return false // no Manifest yet — nothing can be stale
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 4 || fields[0] != "DIST" {
+			continue
+		}
+		name, size := fields[1], fields[2]
+		path := filepath.Join(distdir, name)
+
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		if strconv.Itoa(int(info.Size())) != size {
+			return true
+		}
+
+		want := manifestFieldAfter(fields, "SHA512")
+		if want == "" {
+			continue
+		}
+		got, err := fileSHA512Hex(path)
+		if err != nil {
+			continue
+		}
+		if got != want {
+			return true
+		}
+	}
+	return false
+}
+
+// manifestFieldAfter returns the value following the given key in the
+// whitespace-separated fields of a DIST line, lowercased.
+func manifestFieldAfter(fields []string, key string) string {
+	for i := 0; i < len(fields)-1; i++ {
+		if fields[i] == key {
+			return strings.ToLower(fields[i+1])
+		}
+	}
+	return ""
+}
+
+// fileSHA512Hex returns the hex-encoded SHA512 digest of the file at path.
+func fileSHA512Hex(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+
+	h := sha512.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // runManifest executes pkgdev manifest (or ebuild digest) for a category/package target.
