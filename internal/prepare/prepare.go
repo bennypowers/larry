@@ -393,6 +393,15 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 	// Build sandboxed environment
 	env := sandboxEnv(ei, cfg)
 
+	// The child chdirs into the package dir before exec, so a relative
+	// script path would resolve against the package dir instead of larry's
+	// working directory. Absolutize against the current dir first.
+	if !filepath.IsAbs(scriptPath) {
+		if abs, err := filepath.Abs(scriptPath); err == nil {
+			scriptPath = abs
+		}
+	}
+
 	cmd := exec.Command(scriptPath)
 	cmd.Env = env
 	cmd.Dir = filepath.Dir(ei.Path)

@@ -283,3 +283,58 @@ func TestCustomPrepare_QuietSuppressesWarning(t *testing.T) {
 		})
 	}
 }
+
+// TestCustomPrepare_RelativePaths verifies that a custom prepare script
+// resolves when the ebuild path (and thus the script path and cmd.Dir) are
+// relative to larry's working directory. The child process chdirs into the
+// package dir before exec, so a relative script path must be absolutized
+// first or fork/exec fails with ENOENT.
+func TestCustomPrepare_RelativePaths(t *testing.T) {
+	root := t.TempDir()
+	pkgDir := filepath.Join(root, "foo")
+	if err := os.MkdirAll(filepath.Join(pkgDir, ".larry"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	ebuildPath := filepath.Join(pkgDir, "foo-1.0.0.ebuild")
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, ".larry", "prepare.sh"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := newRecorder()
+	orig := ManifestRunner
+	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
+		rec.record(bin, args, dir, env)
+		_ = os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte(
+			"DIST foo-1.0.0.tar.gz 10 BLAKE2B aa SHA512 bb\n",
+		), 0644)
+		return nil
+	}
+	t.Cleanup(func() { ManifestRunner = orig })
+
+	// Run larry from the fixture root with relative paths, the way
+	// `larry prepare foo` behaves when the CLI keeps the argument relative.
+	t.Chdir(root)
+
+	ei := &ebuild.EbuildInfo{
+		Path:     filepath.Join("foo", "foo-1.0.0.ebuild"),
+		Category: "dev-util",
+		Pkg:      "foo",
+		PVVal:    "1.0.0",
+		PVal:     "foo-1.0.0",
+	}
+	cfg := &PrepareConfig{
+		Distdir: filepath.Join(root, "dist"),
+		Overlay: root,
+	}
+
+	err := runCustomPrepare(ei, filepath.Join("foo", ".larry", "prepare.sh"), cfg)
+	if err != nil {
+		t.Fatalf("runCustomPrepare with relative paths: %v", err)
+	}
+	if !rec.called() {
+		t.Fatal("ManifestRunner was not called")
+	}
+}
