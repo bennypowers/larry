@@ -536,7 +536,7 @@ func cargoPrefetchPackage(pkgDir, distdir string) error {
 				continue
 			}
 			// Close body immediately — we only care about the status code
-			resp.Body.Close()
+			_ = resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
 				fmt.Fprintf(os.Stderr, "[larry] cargo prefetch: %s: HTTP %d\n", filename, resp.StatusCode)
@@ -550,7 +550,7 @@ func cargoPrefetchPackage(pkgDir, distdir string) error {
 				continue
 			}
 			if resp.StatusCode != http.StatusOK {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				fmt.Fprintf(os.Stderr, "[larry] cargo prefetch: %s: HTTP %d\n", filename, resp.StatusCode)
 				continue
 			}
@@ -558,14 +558,14 @@ func cargoPrefetchPackage(pkgDir, distdir string) error {
 			out, err := os.Create(destPath)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[larry] cargo prefetch: %s: %v\n", filename, err)
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				continue
 			}
 			if _, err := io.Copy(out, resp.Body); err != nil {
 				fmt.Fprintf(os.Stderr, "[larry] cargo prefetch: %s: %v\n", filename, err)
 			}
-			out.Close()
-			resp.Body.Close()
+			_ = out.Close()
+			_ = resp.Body.Close()
 		}
 	}
 

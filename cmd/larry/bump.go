@@ -238,5 +238,8 @@ func printBumpResult(out io.Writer, result *bump.BumpResult) error {
 	if result.Revision > 0 {
 		_, _ = fmt.Fprintf(out, "  Revision:    -r%d\n", result.Revision)
 	}
+	for _, w := range result.Warnings {
+		_, _ = fmt.Fprintf(out, "  WARNING: %s\n", w)
+	}
 	return nil
 }

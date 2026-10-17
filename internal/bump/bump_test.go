@@ -529,3 +529,86 @@ func (m *mockUpstreamProvider) FetchLatestVersion(rid remoteid.RemoteId, allowPr
 	return version.Parse("1.0.0")
 }
 func (m *mockUpstreamProvider) IsPrerelease(v *version.Version) bool { return v.IsPrerelease() }
+
+func TestBump_VersionBump_WarnsMissingFilesdirPin(t *testing.T) {
+	pkgDir := filepath.Join(t.TempDir(), "my-pkg")
+	filesDir := filepath.Join(pkgDir, "files")
+	if err := os.MkdirAll(filesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `EAPI=8
+PV=1.0.0
+PATCHES=( "${FILESDIR}/${P}-fix.patch" )
+`
+	if err := os.WriteFile(filepath.Join(pkgDir, "my-pkg-1.0.0.ebuild"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The old-version patch exists; the bumped reference will not.
+	if err := os.WriteFile(filepath.Join(filesDir, "my-pkg-1.0.0-fix.patch"), []byte("p"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Bump(BumpConfig{Dir: pkgDir, Mode: BumpModeVersion, Version: "2.0.0"})
+	if err != nil {
+		t.Fatalf("Bump: %v", err)
+	}
+	if len(result.Warnings) != 1 {
+		t.Fatalf("warnings = %v, want exactly one", result.Warnings)
+	}
+	w := result.Warnings[0]
+	if !strings.Contains(w, "my-pkg-2.0.0-fix.patch") || !strings.Contains(w, "does not exist") {
+		t.Errorf("warning = %q, want it to report my-pkg-2.0.0-fix.patch missing", w)
+	}
+}
+
+func TestBump_VersionBump_NoFilesdirWarningUnversioned(t *testing.T) {
+	pkgDir := filepath.Join(t.TempDir(), "my-pkg")
+	filesDir := filepath.Join(pkgDir, "files")
+	if err := os.MkdirAll(filesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `EAPI=8
+PV=1.0.0
+PATCHES=( "${FILESDIR}/fix.patch" )
+`
+	if err := os.WriteFile(filepath.Join(pkgDir, "my-pkg-1.0.0.ebuild"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filesDir, "fix.patch"), []byte("p"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Bump(BumpConfig{Dir: pkgDir, Mode: BumpModeVersion, Version: "2.0.0"})
+	if err != nil {
+		t.Fatalf("Bump: %v", err)
+	}
+	if len(result.Warnings) != 0 {
+		t.Errorf("warnings = %v, want none for unversioned ref", result.Warnings)
+	}
+}
+
+func TestBump_RevisionBump_NoFilesdirWarnings(t *testing.T) {
+	pkgDir := filepath.Join(t.TempDir(), "my-pkg")
+	filesDir := filepath.Join(pkgDir, "files")
+	if err := os.MkdirAll(filesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `EAPI=8
+PV=1.0.0
+PATCHES=( "${FILESDIR}/${P}-fix.patch" )
+`
+	if err := os.WriteFile(filepath.Join(pkgDir, "my-pkg-1.0.0.ebuild"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filesDir, "my-pkg-1.0.0-fix.patch"), []byte("p"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Bump(BumpConfig{Dir: pkgDir, Mode: BumpModeRevision})
+	if err != nil {
+		t.Fatalf("Bump: %v", err)
+	}
+	if len(result.Warnings) != 0 {
+		t.Errorf("warnings = %v, want none on revision bump (refs unchanged)", result.Warnings)
+	}
+}

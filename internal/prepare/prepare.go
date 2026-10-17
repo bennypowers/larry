@@ -49,6 +49,22 @@ func Prepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 		cfg = &PrepareConfig{}
 	}
 
+	// Version-pinned ${FILESDIR} references that do not resolve break
+	// src_install — warn about them before any work happens. Resolving
+	// pins stay silent: the pattern is fragile but not broken, and
+	// warning on every prepare would be noise.
+	raw := ei.Raw
+	if raw == "" {
+		if data, err := os.ReadFile(ei.Path); err == nil {
+			raw = string(data)
+		}
+	}
+	for _, w := range ebuild.CheckFilesdirPins(ei.Path, raw) {
+		if w.Missing {
+			warnToLogger(cfg, w.Message)
+		}
+	}
+
 	// Load per-package config (reads .larry/config.yaml).
 	pkgDir := filepath.Dir(ei.Path)
 	pkgConfig, err := larryconfig.LoadConfig(pkgDir)

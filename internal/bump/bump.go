@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"bennypowers.dev/larry/internal/atom"
+	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/larryconfig"
 	"bennypowers.dev/larry/internal/provider"
 	"bennypowers.dev/larry/internal/providers"
@@ -40,6 +41,7 @@ type BumpResult struct {
 	NewVersion    string   // new version (PV)
 	Revision      int      // revision number (0 if not a revision bump)
 	Mode          BumpMode // the mode used
+	Warnings      []string // advisory warnings, e.g. version-pinned FILESDIR refs
 }
 
 // Bump performs a version or revision bump on ebuilds in the given directory.
@@ -119,6 +121,13 @@ func Bump(cfg BumpConfig) (*BumpResult, error) {
 		return nil, fmt.Errorf("bump: writing new ebuild: %w", err)
 	}
 	result.NewFile = newFileName
+
+	// Version-pinned ${FILESDIR} references re-evaluate to the new version,
+	// but files/ entries are not carried over by bumps — surface those that
+	// no longer resolve (plus the fragile pattern itself).
+	for _, w := range ebuild.CheckFilesdirPins(newFileName, newContent) {
+		result.Warnings = append(result.Warnings, w.Message)
+	}
 
 	return result, nil
 }
@@ -253,9 +262,8 @@ func getUpstreamVersion(cfg BumpConfig, pn string, ebuildPath string) (string, e
 				return res.Version, nil
 			}
 		}
-		if rerr != nil {
-			// FetchResolution failed — fall through to plain FetchLatestVersion.
-		}
+		// When FetchResolution fails or yields nothing, fall through to
+		// plain FetchLatestVersion.
 	}
 
 	latest, err := p.FetchLatestVersion(*rid, cfg.AllowPrerelease)
