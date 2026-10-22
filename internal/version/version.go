@@ -11,21 +11,24 @@ import (
 type SuffixType int
 
 const (
-	_ SuffixType = iota
-	Alpha          // _alpha1, _a1
-	Beta           // _beta1, _b1
-	Pre            // _pre1 (pre-release, before RC)
-	Rc             // _rc1
-	Release        // no suffix — the final release
-	Patch          // _p1 (patch-level post-release)
+	_       SuffixType = iota
+	Alpha              // _alpha1, _a1
+	Beta               // _beta1, _b1
+	Pre                // _pre1 (pre-release, before RC)
+	Rc                 // _rc1
+	Release            // no suffix — the final release
+	Patch              // _p1 (patch-level post-release)
+	Dev                // _dev1 (PEP 440 development release, sorts below alpha)
 
-	// Numeric ordering (suffixKey): alpha=1 < beta=2 < pre=3 < rc=4 < release=5 < p=6
-	// This mirrors Gentoo/PkgVersionCompare semantics.
+	// Numeric ordering (suffixKey): dev=0 < alpha=1 < beta=2 < pre=3 < rc=4 < release=5 < p=6
+	// This mirrors Gentoo/PkgVersionCompare semantics plus the PEP 440 dev rank.
 	// NOTE: suffix rank is compared BEFORE the revision, so 1.0_p1 > 1.0-r1.
 )
 
 func (s SuffixType) String() string {
 	switch s {
+	case Dev:
+		return "dev"
 	case Alpha:
 		return "alpha"
 	case Beta:
@@ -50,7 +53,7 @@ type Version struct {
 	base       string   // base version string for Format reconstruction
 	Suffix     *Suffix
 	Revision   uint64
-	Live       bool // true for 9999 (or any component that is 9999)
+	Live       bool      // true for 9999 (or any component that is 9999)
 	segments   []segment // authoritative for comparison
 }
 
@@ -82,6 +85,12 @@ var (
 	// to underscore form so Parse can recognize them as prereleases.
 	// Matches digit + single letter (a/b/c) + digits at end of string.
 	bareSuffixRe = regexp.MustCompile(`([0-9])([abc])([0-9]+)$`)
+	// pep440SuffixRe is applied only by ParsePEP440 (PyPI packages). It rewrites
+	// PEP 440 pre-release suffixes in bare, dashed, or dotted form — e.g.
+	// "2.5.0rc1", "1.0.0-beta.1", "1.59.0.dev1", "1.0.a1" — to underscore form.
+	// It is deliberately NOT part of Parse: GitHub tags must not be interpreted
+	// with PEP 440 semantics.
+	pep440SuffixRe = regexp.MustCompile(`([0-9])(?:[-.])?(alpha|beta|pre|rc|dev|[abc])\.?([0-9]+)$`)
 )
 
 // Normalize strips known prefix noise from a version string.
@@ -107,8 +116,16 @@ func Normalize(s string) string {
 
 // Parse parses a version string into a Version struct.
 // Handles: 1.2.3, 1.2.3-r1, 1.2.3_p1, 1.0_alpha1, 1.0_beta2, 1.0_rc3, 9999,
-//          1.2.3a, 2.0.0-rc1, 1.0.0-beta.1, 1.2.3.4.5.6, 20250410, 1.0_pre
+//
+//	1.2.3a, 2.0.0-rc1, 1.0.0-beta.1, 1.2.3.4.5.6, 20250410, 1.0_pre
+//
+// Parse never applies PEP 440 rules (notably the dev suffix); use ParsePEP440
+// for PyPI versions.
 func Parse(s string) (*Version, error) {
+	return parse(s, false)
+}
+
+func parse(s string, allowDev bool) (*Version, error) {
 	// Step 1: Normalize
 	s = Normalize(s)
 	if s == "" {
@@ -144,7 +161,7 @@ func Parse(s string) (*Version, error) {
 		suffixPart := s[idx+1:]
 		base := s[:idx]
 
-		suffixType, suffixNum, ok := parseSuffix(suffixPart)
+		suffixType, suffixNum, ok := parseSuffix(suffixPart, allowDev)
 		if ok {
 			suffix = &Suffix{Type: suffixType, Number: suffixNum}
 			s = base
@@ -178,6 +195,16 @@ func Parse(s string) (*Version, error) {
 	return v, nil
 }
 
+// ParsePEP440 parses a PEP 440 version string (as published on PyPI).
+// It applies PEP 440 pre-release suffix normalization (dev/a/b/rc, bare or
+// separated by '-' or '.') before delegating to Parse. Generic upstream tag
+// parsing must use Parse instead so GitHub tags are never interpreted with
+// PEP 440 semantics.
+func ParsePEP440(s string) (*Version, error) {
+	s = pep440SuffixRe.ReplaceAllString(Normalize(s), "${1}_${2}${3}")
+	return parse(s, true)
+}
+
 func isDigits(s string) bool {
 	if s == "" {
 		return false
@@ -190,11 +217,12 @@ func isDigits(s string) bool {
 	return true
 }
 
-// parseSuffix parses a suffix string like "alpha1", "a2", "beta3", "rc1", "p1", "pre4"
+// parseSuffix parses a suffix string like "alpha1", "a2", "beta3", "rc1", "dev1", "p1", "pre4"
 // Returns (SuffixType, Number, success).
-// Tries markers in order: alpha, beta, pre, rc, a, b, p.
+// Tries markers in order: alpha, beta, pre, rc, dev, a, b, p.
+// The dev marker is accepted only when allowDev is set (ParsePEP440).
 // If the numeric tail is non-empty, it must be all digits; if empty, number defaults to 0.
-func parseSuffix(s string) (SuffixType, uint32, bool) {
+func parseSuffix(s string, allowDev bool) (SuffixType, uint32, bool) {
 	switch {
 	case strings.HasPrefix(s, "alpha"):
 		if len(s) >= 5 {
@@ -235,6 +263,12 @@ func parseSuffix(s string) (SuffixType, uint32, bool) {
 		if tail == "" || isDigits(tail) {
 			n, _ := strconv.ParseUint(tail, 10, 32)
 			return Rc, uint32(n), true
+		}
+	case allowDev && strings.HasPrefix(s, "dev") && len(s) >= 3:
+		tail := s[3:]
+		if tail == "" || isDigits(tail) {
+			n, _ := strconv.ParseUint(tail, 10, 32)
+			return Dev, uint32(n), true
 		}
 	case strings.HasPrefix(s, "p") && len(s) >= 1:
 		tail := s[1:]
@@ -308,6 +342,8 @@ func (v *Version) Format() string {
 	if v.Suffix != nil {
 		sb.WriteString("_")
 		switch v.Suffix.Type {
+		case Dev:
+			sb.WriteString("dev")
 		case Alpha:
 			sb.WriteString("alpha")
 		case Beta:
@@ -451,6 +487,8 @@ func suffixKey(s *Suffix) int {
 		return 5 // release (no suffix) beats pre-releases
 	}
 	switch s.Type {
+	case Dev:
+		return 0
 	case Alpha:
 		return 1
 	case Beta:
@@ -474,13 +512,13 @@ func (v *Version) String() string {
 }
 
 // IsPrerelease reports whether v is a pre-release version.
-// True for alpha, beta, pre, and rc suffixes.
+// True for dev, alpha, beta, pre, and rc suffixes (PEP 440 pre-releases).
 // Patch (_p), revisions (-rN), and live versions (9999) are NOT pre-releases.
 func (v *Version) IsPrerelease() bool {
 	if v == nil || v.Suffix == nil {
 		return false
 	}
-	return v.Suffix.Type == Alpha || v.Suffix.Type == Beta || v.Suffix.Type == Pre || v.Suffix.Type == Rc
+	return v.Suffix.Type == Dev || v.Suffix.Type == Alpha || v.Suffix.Type == Beta || v.Suffix.Type == Pre || v.Suffix.Type == Rc
 }
 
 // ExtractDate finds a YYYYMMDD date (exactly 8 digits starting with "20") in s.

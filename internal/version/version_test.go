@@ -95,7 +95,7 @@ func TestVersion_Compare(t *testing.T) {
 		{"1.0_beta1", "1.0_pre1", -1},
 		{"1.0_pre1", "1.0_rc1", -1},
 		{"1.0_rc1", "1.0_p1", -1},
-		{"1.0_p1", "1.0", 1}, // _p is a post-release, > release
+		{"1.0_p1", "1.0", 1},  // _p is a post-release, > release
 		{"1.0", "1.0-r1", -1}, // release < revision
 
 		// Same suffix type, different number
@@ -117,7 +117,7 @@ func TestVersion_Compare(t *testing.T) {
 
 		// Four-component versions
 		{"1.2.3.4", "1.2.3.5", -1},
-		{"1.2.3.4", "1.2.3", 1}, // more components = greater (when extras > 0)
+		{"1.2.3.4", "1.2.3", 1},     // more components = greater (when extras > 0)
 		{"1.2.3.4", "1.2.3.4.0", 0}, // trailing zero doesn't change value
 		{"1.2.3.4", "1.2.3.4.1", -1},
 
@@ -148,8 +148,8 @@ func TestVersion_Compare(t *testing.T) {
 
 func TestVersion_Normalize(t *testing.T) {
 	tests := []struct {
-		input  string
-		want   string
+		input string
+		want  string
 	}{
 		{"v1.2.3", "1.2.3"},
 		{"V1.2.3", "1.2.3"},
@@ -185,8 +185,8 @@ func TestVersion_Normalize(t *testing.T) {
 
 func TestNormalize_PeeledTag(t *testing.T) {
 	tests := []struct {
-		input  string
-		want   string
+		input string
+		want  string
 	}{
 		{"v1.0^{}", "1.0"},
 		{"1.0^{abc}", "1.0"},
@@ -207,8 +207,8 @@ func TestNormalize_PeeledTag(t *testing.T) {
 
 func TestNormalize_KnownPrefixes(t *testing.T) {
 	tests := []struct {
-		input  string
-		want   string
+		input string
+		want  string
 	}{
 		{"bun-1.2", "1.2"},
 		{"rocm-6.1", "6.1"},
@@ -229,8 +229,8 @@ func TestNormalize_KnownPrefixes(t *testing.T) {
 
 func TestNormalize_VPrefix(t *testing.T) {
 	tests := []struct {
-		input  string
-		want   string
+		input string
+		want  string
 	}{
 		{"v1.0", "1.0"},
 		{"V1.0", "1.0"},
@@ -292,12 +292,12 @@ func TestVersion_CompareSuffixes(t *testing.T) {
 	// alpha < beta < pre < rc < release < revision < patch
 	order := []string{
 		"1.0_alpha1", "1.0_alpha2",
-		"1.0_beta1",  "1.0_beta2",
+		"1.0_beta1", "1.0_beta2",
 		"1.0_pre1",
-		"1.0_rc1",    "1.0_rc2",
+		"1.0_rc1", "1.0_rc2",
 		"1.0",
-		"1.0-r1",     "1.0-r2",
-		"1.0_p1",     "1.0_p1-r1", "1.0_p2",
+		"1.0-r1", "1.0-r2",
+		"1.0_p1", "1.0_p1-r1", "1.0_p2",
 		"1.0.1",
 		"9999",
 	}
@@ -333,12 +333,12 @@ func TestVersion_Compare_PatchVsRc(t *testing.T) {
 func TestCompare_AuthoritativeChain(t *testing.T) {
 	order := []string{
 		"1.0_alpha1", "1.0_alpha2",
-		"1.0_beta1",  "1.0_beta2",
+		"1.0_beta1", "1.0_beta2",
 		"1.0_pre1",
-		"1.0_rc1",    "1.0_rc2",
+		"1.0_rc1", "1.0_rc2",
 		"1.0",
-		"1.0-r1",     "1.0-r2",
-		"1.0_p1",     "1.0_p1-r1", "1.0_p2",
+		"1.0-r1", "1.0-r2",
+		"1.0_p1", "1.0_p1-r1", "1.0_p2",
 		"1.0.1",
 		"9999",
 	}
@@ -376,8 +376,8 @@ func TestCompare_PreBelowRc(t *testing.T) {
 // TestIsPrerelease — table-driven (D3)
 func TestIsPrerelease(t *testing.T) {
 	tests := []struct {
-		input  string
-		isPre  bool
+		input string
+		isPre bool
 	}{
 		{"1.0_alpha1", true},
 		{"1.0_beta1", true},
@@ -398,6 +398,103 @@ func TestIsPrerelease(t *testing.T) {
 			}
 			if got := v.IsPrerelease(); got != tt.isPre {
 				t.Errorf("IsPrerelease(%q) = %v, want %v", tt.input, got, tt.isPre)
+			}
+		})
+	}
+}
+
+// TestIsPrerelease_PEP440 — PEP 440 prerelease forms used by PyPI.
+func TestIsPrerelease_PEP440(t *testing.T) {
+	tests := []struct {
+		input string
+		isPre bool
+	}{
+		{"1.59.0.dev1", true},
+		{"1.59.0dev1", true},
+		{"0.9.0.dev0", true},
+		{"1.0.a1", true},
+		{"1.0.b1", true},
+		{"2.5.0rc1", true},
+		{"1.0alpha1", true},
+		{"1.0_p1", false},
+		{"1.0-r1", false},
+		{"9999", false},
+		{"1.0-alpha", false}, // no numeric tail: not a recognized suffix
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			v, err := ParsePEP440(tt.input)
+			if err != nil {
+				t.Fatalf("ParsePEP440(%q) error: %v", tt.input, err)
+			}
+			if got := v.IsPrerelease(); got != tt.isPre {
+				t.Errorf("IsPrerelease(%q) = %v, want %v", tt.input, got, tt.isPre)
+			}
+		})
+	}
+}
+
+// TestParse_PEP440ScopedToPyPI — generic Parse must not apply PEP 440 rules.
+func TestParse_PEP440ScopedToPyPI(t *testing.T) {
+	v, err := Parse("1.59.0.dev1")
+	if err != nil {
+		t.Fatalf("Parse(): %v", err)
+	}
+	if v.IsPrerelease() {
+		t.Error("Parse must not treat a dotted .dev suffix as PEP 440")
+	}
+	if got := v.Format(); got != "1.59.0.dev1" {
+		t.Errorf("Parse Format = %q, want unchanged 1.59.0.dev1", got)
+	}
+	if v, err := Parse("1.0_dev1"); err == nil && v.IsPrerelease() {
+		t.Error("Parse must not recognize the dev suffix outside ParsePEP440")
+	}
+}
+
+// TestCompare_DevOrdering — PEP 440: dev < a < b < rc < final < post.
+func TestCompare_DevOrdering(t *testing.T) {
+	pairs := [][2]string{
+		{"1.0.dev1", "1.0_alpha1"},
+		{"1.0_alpha1", "1.0_beta1"},
+		{"1.0_beta1", "1.0_rc1"},
+		{"1.0_rc1", "1.0"},
+		{"1.59.0.dev1", "1.59.0"},
+		{"1.57.1", "1.59.0.dev1"},
+		{"1.59.0.dev1", "1.59.0.dev2"},
+	}
+	for _, p := range pairs {
+		va, errA := ParsePEP440(p[0])
+		vb, errB := ParsePEP440(p[1])
+		if errA != nil || errB != nil {
+			t.Fatalf("ParsePEP440(%q, %q): %v / %v", p[0], p[1], errA, errB)
+		}
+		if got := va.Compare(vb); got != -1 {
+			t.Errorf("Compare(%q, %q) = %d, want -1", p[0], p[1], got)
+		}
+	}
+}
+
+// TestParse_PEP440Format — canonical PEP 440 forms normalize to Gentoo suffixes.
+func TestParse_PEP440Format(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"1.59.0.dev1", "1.59.0_dev1"},
+		{"1.59.0dev1", "1.59.0_dev1"},
+		{"2.5.0rc1", "2.5.0_rc1"},
+		{"1.0.a1", "1.0_alpha1"},
+		{"1.0.b1", "1.0_beta1"},
+		{"3.3.1b3", "3.3.1_beta3"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			v, err := ParsePEP440(tt.input)
+			if err != nil {
+				t.Fatalf("ParsePEP440(%q) error: %v", tt.input, err)
+			}
+			if got := v.Format(); got != tt.want {
+				t.Errorf("Format(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}
@@ -439,13 +536,13 @@ func TestParse_Lenient(t *testing.T) {
 // TestParse_ComponentsAndSegments — the worked table (D4)
 func TestParse_ComponentsAndSegments(t *testing.T) {
 	tests := []struct {
-		input      string
-		wantRev    uint64
-		wantSType  SuffixType
-		wantSNum   uint32
-		wantComps  []uint64
-		wantLive   bool
-		wantFmt    string
+		input     string
+		wantRev   uint64
+		wantSType SuffixType
+		wantSNum  uint32
+		wantComps []uint64
+		wantLive  bool
+		wantFmt   string
 	}{
 		{"1.2.3", 0, 0, 0, []uint64{1, 2, 3}, false, "1.2.3"},
 		{"1.2.3a", 0, 0, 0, []uint64{1, 2}, false, "1.2.3a"},

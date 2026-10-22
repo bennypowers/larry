@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"bennypowers.dev/larry/internal/httpclient"
-	"bennypowers.dev/larry/internal/remoteid"
 	"bennypowers.dev/larry/internal/ratelimit"
+	"bennypowers.dev/larry/internal/remoteid"
 )
 
 // ---- PyPIProvider (httptest) ----
@@ -417,7 +417,7 @@ func TestSourceHutProvider_FetchLatest(t *testing.T) {
 
 func TestResolveProviderFromURL_Providers(t *testing.T) {
 	tests := []struct {
-		url    string
+		url      string
 		wantType remoteid.RemoteIdType
 	}{
 		{"https://github.com/owner/repo", remoteid.TypeGitHub},
@@ -566,5 +566,57 @@ func TestSourceHutHTMLFallback(t *testing.T) {
 	}
 	if v.String() != "0.10.0" {
 		t.Errorf("version = %q, want \"0.10.0\"", v.String())
+	}
+}
+
+// TestPyPIProvider_DevReleases verifies PEP 440 dev releases are filtered by
+// default (real shapes from einops, onnxscript, comfyui-frontend-package).
+func TestPyPIProvider_DevReleases(t *testing.T) {
+	tests := []struct {
+		name       string
+		stable     string
+		dev        string
+		wantStable string
+		wantDev    string
+	}{
+		{"comfyui", "1.57.1", "1.59.0.dev1", "1.57.1", "1.59.0_dev1"},
+		{"einops", "0.8.2", "0.9.0.dev0", "0.8.2", "0.9.0_dev0"},
+		{"onnxscript", "0.7.2", "0.7.3.dev20261007", "0.7.2", "0.7.3_dev20261007"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				resp := map[string]interface{}{
+					"info": map[string]string{"version": tt.stable},
+					"releases": map[string]interface{}{
+						tt.stable: []interface{}{map[string]string{"packagetype": "sdist"}},
+						tt.dev:    []interface{}{map[string]string{"packagetype": "sdist"}},
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(resp)
+			}))
+			defer srv.Close()
+
+			client := httpclient.NewClientWithTransport(&pypiReplacingTransport{srv: srv})
+			prov := NewPyPIProviderWithClient(ratelimit.NewRateLimiter(), client)
+
+			v, err := prov.FetchLatestVersion(remoteid.RemoteId{Name: "testpkg"}, false)
+			if err != nil {
+				t.Fatalf("FetchLatestVersion(false): %v", err)
+			}
+			if v.String() != tt.wantStable {
+				t.Errorf("without prereleases: version = %q, want %q", v.String(), tt.wantStable)
+			}
+
+			v, err = prov.FetchLatestVersion(remoteid.RemoteId{Name: "testpkg"}, true)
+			if err != nil {
+				t.Fatalf("FetchLatestVersion(true): %v", err)
+			}
+			if v.String() != tt.wantDev {
+				t.Errorf("with prereleases: version = %q, want %q", v.String(), tt.wantDev)
+			}
+		})
 	}
 }
