@@ -49,7 +49,7 @@ Custom prepare scripts (escape hatch):
 
 Type detection (auto):
   Detects package type from ebuild content:
-  - npm:       mirror://npm/ in SRC_URI
+  - npm:       mirror://npm/ or registry.npmjs.org/ in SRC_URI
   - cargo:     CRATES= variable present
   - go:        inherits go-module
   - vendored:  releases/download/${PN}/ in SRC_URI
@@ -144,10 +144,12 @@ Flags:
 			for _, raw := range args {
 				resolved, _, err := resolvePrepareTarget(raw, overlay)
 				if err != nil {
+					log.Error("prepare %s: %v\n", raw, err)
 					failures++
 					continue
 				}
 				if err := prepare.PrepareFile(resolved, pcfg); err != nil {
+					log.Error("prepare %s: %v\n", resolved, err)
 					failures++
 				}
 			}

@@ -143,6 +143,57 @@ func TestPrepareMultipleTargets_AggregatesFailures(t *testing.T) {
 	}
 }
 
+func TestPrepareMultipleTargets_PrintsPrepareFailure(t *testing.T) {
+	// A failing target in a multi-target run must be named on stderr
+	// (path + error), mirroring PrepareDir — counting failures alone hides
+	// which package failed and why.
+	overlay := fixtureOverlay(t, nil, map[string]string{
+		"dev-util/foo/foo-1.0.ebuild": "EAPI=8\n",
+		"dev-util/foo/foo-2.0.ebuild": "EAPI=8\n",
+	})
+	dd := t.TempDir()
+
+	failing := filepath.Join(overlay, "dev-util", "foo", "foo-2.0.ebuild")
+	pfOrig := prepare.PrepareFile
+	prepare.PrepareFile = func(path string, cfg *prepare.PrepareConfig) error {
+		if path == failing {
+			return errors.New("prepare boom")
+		}
+		return nil
+	}
+	t.Cleanup(func() { prepare.PrepareFile = pfOrig })
+
+	_, stderr, _ := execCmd(t, "prepare",
+		filepath.Join(overlay, "dev-util", "foo", "foo-1.0.ebuild"),
+		failing,
+		"--overlay", overlay, "--distdir", dd)
+
+	if !strings.Contains(stderr, failing) {
+		t.Errorf("stderr = %q, want it to name the failing target %q", stderr, failing)
+	}
+	if !strings.Contains(stderr, "prepare boom") {
+		t.Errorf("stderr = %q, want it to contain the failure reason", stderr)
+	}
+}
+
+func TestPrepareMultipleTargets_PrintsResolveFailure(t *testing.T) {
+	// Same contract for targets that fail path resolution before PrepareFile
+	// even runs.
+	overlay := fixtureOverlay(t, nil, map[string]string{
+		"dev-util/foo/foo-1.0.ebuild": "EAPI=8\n",
+	})
+	dd := t.TempDir()
+
+	_, stderr, _ := execCmd(t, "prepare",
+		filepath.Join(overlay, "dev-util", "foo", "foo-1.0.ebuild"),
+		"dev-util/missing/bar",
+		"--overlay", overlay, "--distdir", dd)
+
+	if !strings.Contains(stderr, "dev-util/missing/bar") {
+		t.Errorf("stderr = %q, want it to name the unresolvable target", stderr)
+	}
+}
+
 func TestResolvePrepareTarget_CategoryPackage(t *testing.T) {
 	// D10, D11 — "sys-apps/foo" resolves to overlay/sys-apps/foo.
 	overlay := fixtureOverlay(t, nil, map[string]string{
