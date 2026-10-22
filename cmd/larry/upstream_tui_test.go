@@ -1,11 +1,112 @@
 package main
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"bennypowers.dev/larry/internal/upstream"
 )
+
+func stubExecutable(t *testing.T, script string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script")
+	}
+	path := filepath.Join(t.TempDir(), "larry-stub")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	orig := larryExecutable
+	larryExecutable = func() (string, error) { return path, nil }
+	t.Cleanup(func() { larryExecutable = orig })
+}
+
+func TestRunLarryChildStreamsOutput(t *testing.T) {
+	stubExecutable(t, "#!/bin/sh\necho first\necho second\n")
+	var lines []string
+	if err := runLarryChild(context.Background(), []string{"x"}, func(line string) {
+		lines = append(lines, line)
+	}); err != nil {
+		t.Fatalf("runLarryChild: %v", err)
+	}
+	if len(lines) != 2 || lines[0] != "first" || lines[1] != "second" {
+		t.Errorf("lines = %v, want [first second]", lines)
+	}
+}
+
+func TestRunLarryChildPropagatesError(t *testing.T) {
+	stubExecutable(t, "#!/bin/sh\necho nope >&2\nexit 3\n")
+	var lines []string
+	err := runLarryChild(context.Background(), []string{"x"}, func(line string) {
+		lines = append(lines, line)
+	})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if len(lines) == 0 || !strings.Contains(strings.Join(lines, "\n"), "nope") {
+		t.Errorf("stderr was not streamed: %v", lines)
+	}
+}
+
+func TestBuildUpstreamActionsArgs(t *testing.T) {
+	stubExecutable(t, "#!/bin/sh\necho \"$@\"\n")
+
+	var lines []string
+	actions := buildUpstreamActions("/tmp/overlay")
+	if err := actions.Bump(context.Background(), "dev-util/foo", func(line string) {
+		lines = append(lines, line)
+	}); err != nil {
+		t.Fatalf("Bump: %v", err)
+	}
+	got := strings.Join(lines, " ")
+	for _, want := range []string{"bump", "dev-util/foo", "--overlay /tmp/overlay", "--color never"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("child args = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestBuildUpstreamActionsTestUsesCompile(t *testing.T) {
+	stubExecutable(t, "#!/bin/sh\necho \"$@\"\n")
+	var lines []string
+	if err := buildUpstreamActions("/tmp/overlay").Test(context.Background(), "dev-util/foo", func(line string) {
+		lines = append(lines, line)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(lines, " "), "--compile") {
+		t.Errorf("test action args = %v, want --compile", lines)
+	}
+}
+
+func TestShouldUseTUI(t *testing.T) {
+	tests := []struct {
+		name                string
+		noTUI               bool
+		output              string
+		quiet               bool
+		stdoutTTY, stdinTTY bool
+		want                bool
+	}{
+		{"auto both ttys", false, "text", false, true, true, true},
+		{"auto stdout not tty", false, "text", false, false, true, false},
+		{"auto stdin not tty", false, "text", false, true, false, false},
+		{"json is plain", false, "json", false, true, true, false},
+		{"quiet is plain", false, "text", true, true, true, false},
+		{"no-tui wins", true, "text", false, true, true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldUseTUI(tt.noTUI, tt.output, tt.quiet, tt.stdoutTTY, tt.stdinTTY); got != tt.want {
+				t.Errorf("shouldUseTUI = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestUpstreamTUI_NonTTYFallsBack(t *testing.T) {
 	ov := verbosityOverlay(t)

@@ -39,8 +39,17 @@ its upstream source.
   and depth.
 
 **--tui**
-: Interactive table with details (requires a TTY; incompatible with
-  `--output json`).
+: Force the interactive table. It is already the default when stdin and
+  stdout are terminals. Incompatible with `--output json`.
+
+**--no-tui**
+: Force the plain table even on a terminal.
+
+## INTERACTIVE ACTIONS
+
+On the selected row: `b` bumps, `p` prepares, `t` runs `test --compile`,
+`R` re-runs the check, and `enter` shows details. Mutating actions ask for
+confirmation and stream their output into the view.
 
 **-h, --help**
 : Help for upstream

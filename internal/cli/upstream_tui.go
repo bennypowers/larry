@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 
 	"bennypowers.dev/larry/internal/upstream"
 
@@ -16,6 +15,39 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// ActionKind identifies an in-session action.
+type ActionKind string
+
+const (
+	ActionBump    ActionKind = "bump"
+	ActionPrepare ActionKind = "prepare"
+	ActionTest    ActionKind = "test"
+)
+
+// ActionFunc runs one action for a package, streaming its output line by line.
+type ActionFunc func(ctx context.Context, pkg string, onLine func(string)) error
+
+// UpstreamActions are the in-session actions available for the selected row.
+// Nil callbacks disable the corresponding key.
+type UpstreamActions struct {
+	Bump    ActionFunc
+	Prepare ActionFunc
+	Test    ActionFunc
+}
+
+func (a UpstreamActions) forKind(kind ActionKind) ActionFunc {
+	switch kind {
+	case ActionBump:
+		return a.Bump
+	case ActionPrepare:
+		return a.Prepare
+	case ActionTest:
+		return a.Test
+	default:
+		return nil
+	}
+}
+
 // UpstreamModelOptions configures the interactive upstream table.
 type UpstreamModelOptions struct {
 	Context context.Context
@@ -24,6 +56,7 @@ type UpstreamModelOptions struct {
 	Theme   *Theme
 	Overlay string
 	Cancel  context.CancelFunc
+	Actions UpstreamActions
 }
 
 type upstreamUIState int
@@ -46,6 +79,23 @@ type upstreamDoneMsg struct {
 	Err     error
 }
 
+type actionEvent struct {
+	line string
+	done bool
+	err  error
+}
+
+type actionEventMsg actionEvent
+type actionClosedMsg struct{}
+
+type upstreamMode int
+
+const (
+	modeBrowse upstreamMode = iota
+	modeConfirm
+	modeRunning
+)
+
 // UpstreamModel is the Bubble Tea model for `larry upstream --tui`.
 type UpstreamModel struct {
 	ctx    context.Context
@@ -67,9 +117,20 @@ type UpstreamModel struct {
 	err     error
 
 	progressCh chan upstream.Progress
-	closeOnce  sync.Once
-	done       bool
-	quit       bool
+
+	// In-session actions.
+	actions      UpstreamActions
+	mode         upstreamMode
+	pending      ActionKind
+	actionCh     chan actionEvent
+	actionCancel context.CancelFunc
+	actionLines  []string
+	actionErr    error
+	actionPkg    string
+	actionView   viewport.Model
+
+	done bool
+	quit bool
 
 	width, height int
 	showDetail    bool
@@ -107,6 +168,7 @@ func NewUpstreamModel(opts UpstreamModelOptions) *UpstreamModel {
 	tbl := table.New(table.WithFocused(true), table.WithHeight(10))
 	tbl.SetStyles(theme.TableStyles())
 	vp := viewport.New(80, 6)
+	av := viewport.New(80, 10)
 
 	return &UpstreamModel{
 		ctx:        ctx,
@@ -120,7 +182,10 @@ func NewUpstreamModel(opts UpstreamModelOptions) *UpstreamModel {
 		progress:   pr,
 		table:      tbl,
 		viewport:   vp,
+		actionView: av,
 		progressCh: make(chan upstream.Progress, 128),
+		actions:    opts.Actions,
+		mode:       modeBrowse,
 		width:      80,
 		height:     24,
 	}
@@ -128,12 +193,25 @@ func NewUpstreamModel(opts UpstreamModelOptions) *UpstreamModel {
 
 // Init implements tea.Model.
 func (m *UpstreamModel) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, m.waitForProgress(), m.fetchCmd())
+	return m.startFetch()
 }
 
-func (m *UpstreamModel) waitForProgress() tea.Cmd {
+func (m *UpstreamModel) startFetch() tea.Cmd {
+	m.state = upstreamFetching
+	m.done = false
+	m.err = nil
+	m.results = nil
+	m.visible = nil
+	m.checked = 0
+	m.total = 0
+	m.progressCh = make(chan upstream.Progress, 128)
+	m.mode = modeBrowse
+	return tea.Batch(m.spinner.Tick, m.waitForProgress(m.progressCh), m.fetchCmd())
+}
+
+func (m *UpstreamModel) waitForProgress(ch chan upstream.Progress) tea.Cmd {
 	return func() tea.Msg {
-		p, ok := <-m.progressCh
+		p, ok := <-ch
 		if !ok {
 			return upstreamProgressClosedMsg{}
 		}
@@ -142,14 +220,15 @@ func (m *UpstreamModel) waitForProgress() tea.Cmd {
 }
 
 func (m *UpstreamModel) fetchCmd() tea.Cmd {
+	ch := m.progressCh
 	return func() tea.Msg {
 		results, err := m.fetch(m.ctx, func(p upstream.Progress) {
 			select {
-			case m.progressCh <- p:
+			case ch <- p:
 			case <-m.ctx.Done():
 			}
 		})
-		m.closeOnce.Do(func() { close(m.progressCh) })
+		close(ch)
 		return upstreamDoneMsg{Results: results, Err: err}
 	}
 }
@@ -177,9 +256,27 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.width > 8 {
 			m.progress.Width = m.width - 4
 		}
-		return m, m.waitForProgress()
+		return m, m.waitForProgress(m.progressCh)
 
 	case upstreamProgressClosedMsg:
+		return m, nil
+
+	case actionEventMsg:
+		ev := actionEvent(msg)
+		if ev.line != "" {
+			m.appendActionLine(ev.line)
+			return m, m.waitAction(m.actionCh)
+		}
+		if ev.done {
+			m.actionErr = ev.err
+			m.mode = modeBrowse
+			if ev.err == nil {
+				return m, m.startFetch()
+			}
+		}
+		return m, nil
+
+	case actionClosedMsg:
 		return m, nil
 
 	case upstreamDoneMsg:
@@ -197,13 +294,32 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
+		case tea.KeyCtrlC:
+			m.quitWithCancel()
+			return m, tea.Quit
+		case tea.KeyEsc:
+			switch m.mode {
+			case modeConfirm:
+				m.mode = modeBrowse
+				return m, nil
+			case modeRunning:
+				if m.actionCancel != nil {
+					m.actionCancel()
+				}
+				m.mode = modeBrowse
+				return m, nil
+			}
 			m.quitWithCancel()
 			return m, tea.Quit
 		case tea.KeyEnter:
-			if m.state == upstreamResults && len(m.visible) > 0 {
-				m.showDetail = !m.showDetail
-				m.updateDetail()
+			switch m.mode {
+			case modeConfirm:
+				return m, m.startAction()
+			case modeBrowse:
+				if m.state == upstreamResults && len(m.visible) > 0 {
+					m.showDetail = !m.showDetail
+					m.updateDetail()
+				}
 			}
 			return m, nil
 		}
@@ -213,11 +329,43 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.quitWithCancel()
 				return m, tea.Quit
 			case '?':
-				m.showHelp = !m.showHelp
+				if m.mode == modeBrowse {
+					m.showHelp = !m.showHelp
+				}
 				return m, nil
+			case 'y':
+				if m.mode == modeConfirm {
+					return m, m.startAction()
+				}
+			case 'n':
+				if m.mode == modeConfirm {
+					m.mode = modeBrowse
+					return m, nil
+				}
+			case 'b', 'p', 't':
+				if m.mode == modeBrowse && m.state == upstreamResults && len(m.visible) > 0 {
+					var kind ActionKind
+					switch msg.Runes[0] {
+					case 'b':
+						kind = ActionBump
+					case 'p':
+						kind = ActionPrepare
+					case 't':
+						kind = ActionTest
+					}
+					if m.actions.forKind(kind) != nil {
+						m.pending = kind
+						m.mode = modeConfirm
+					}
+					return m, nil
+				}
+			case 'R':
+				if m.mode == modeBrowse && m.state == upstreamResults {
+					return m, m.startFetch()
+				}
 			}
 		}
-		if m.state == upstreamResults {
+		if m.state == upstreamResults && m.mode == modeBrowse {
 			var cmd tea.Cmd
 			m.table, cmd = m.table.Update(msg)
 			return m, cmd
@@ -230,10 +378,69 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *UpstreamModel) quitWithCancel() {
 	m.quit = true
+	if m.actionCancel != nil {
+		m.actionCancel()
+	}
 	if m.cancel != nil {
 		m.cancel()
 	}
 }
+
+func (m *UpstreamModel) startAction() tea.Cmd {
+	fn := m.actions.forKind(m.pending)
+	if fn == nil || len(m.visible) == 0 {
+		m.mode = modeBrowse
+		return nil
+	}
+	pkg := m.visible[m.Selected()].Package
+	m.actionPkg = pkg
+	m.mode = modeRunning
+	m.actionLines = nil
+	m.actionErr = nil
+	m.actionView.SetContent("")
+
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.actionCancel = cancel
+	ch := make(chan actionEvent, 128)
+	m.actionCh = ch
+
+	go func() {
+		defer close(ch)
+		err := fn(ctx, pkg, func(line string) {
+			select {
+			case ch <- actionEvent{line: line}:
+			case <-ctx.Done():
+			}
+		})
+		select {
+		case ch <- actionEvent{done: true, err: err}:
+		case <-ctx.Done():
+		}
+	}()
+	return m.waitAction(ch)
+}
+
+func (m *UpstreamModel) waitAction(ch chan actionEvent) tea.Cmd {
+	return func() tea.Msg {
+		ev, ok := <-ch
+		if !ok {
+			return actionClosedMsg{}
+		}
+		return actionEventMsg(ev)
+	}
+}
+
+func (m *UpstreamModel) appendActionLine(line string) {
+	m.actionLines = append(m.actionLines, line)
+	m.actionView.SetContent(strings.Join(m.actionLines, "\n"))
+	m.actionView.GotoBottom()
+}
+
+// ActionLines returns output captured from the last action.
+func (m *UpstreamModel) ActionLines() []string { return m.actionLines }
+
+// ActionErr returns the last action's error, if any.
+func (m *UpstreamModel) ActionErr() error { return m.actionErr }
 
 func (m *UpstreamModel) applyFilter() {
 	m.visible = m.visible[:0]
@@ -287,6 +494,8 @@ func (m *UpstreamModel) resize() {
 	m.table.SetHeight(height)
 	m.viewport.Width = m.width
 	m.viewport.Height = 6
+	m.actionView.Width = m.width
+	m.actionView.Height = 10
 	m.progress.Width = m.width - 4
 }
 
@@ -317,6 +526,9 @@ func (m *UpstreamModel) updateDetail() {
 
 // View implements tea.Model.
 func (m *UpstreamModel) View() string {
+	if m.mode == modeRunning {
+		return m.actionRunningView()
+	}
 	switch m.state {
 	case upstreamFetching:
 		var b strings.Builder
@@ -340,6 +552,22 @@ func (m *UpstreamModel) View() string {
 	default:
 		return m.resultsView()
 	}
+}
+
+func (m *UpstreamModel) actionRunningView() string {
+	var b strings.Builder
+	b.WriteString(m.theme.HeaderStyle().Render(
+		fmt.Sprintf("%s %s", m.pending, m.actionPkg)))
+	b.WriteString("\n\n")
+	if len(m.actionLines) == 0 {
+		b.WriteString(m.spinner.View())
+		b.WriteString(" running")
+	} else {
+		b.WriteString(m.theme.LogStyle().Render(m.actionView.View()))
+	}
+	b.WriteString("\n")
+	b.WriteString(m.theme.FooterStyle().Render("esc: cancel action  q: quit"))
+	return b.String()
 }
 
 func errText(err error) string {
@@ -389,14 +617,40 @@ func (m *UpstreamModel) resultsView() string {
 			b.WriteString("\n")
 		}
 	}
+	if m.actionErr != nil {
+		b.WriteString(m.theme.ErrorStyle().Render("last action failed: " + m.actionErr.Error()))
+		b.WriteString("\n")
+	}
+	if len(m.actionLines) > 0 {
+		b.WriteString(m.theme.FooterStyle().Render("last action output:"))
+		b.WriteString("\n")
+		b.WriteString(m.theme.LogStyle().Render(m.actionView.View()))
+		b.WriteString("\n")
+	}
+	if m.mode == modeConfirm {
+		b.WriteString(m.theme.ErrorStyle().Render(
+			fmt.Sprintf("Run %s for %s? (y/N)", m.pending, m.selectedPackage())))
+		b.WriteString("\n")
+	}
 	b.WriteString(m.footer())
 	return b.String()
 }
 
+func (m *UpstreamModel) selectedPackage() string {
+	if len(m.visible) == 0 {
+		return ""
+	}
+	return m.visible[m.Selected()].Package
+}
+
 func (m *UpstreamModel) footer() string {
-	short := "↑/↓: move  enter: details  q: quit"
+	short := "↑/↓: move  enter: details  b: bump  p: prepare  t: test  R: refresh  q: quit"
 	if m.showHelp {
-		short = "↑/↓ or j/k: move  pgup/pgdn or b/f: page  g/G: first/last  enter: details  ?: help  q: quit"
+		short = "↑/↓ or j/k: move  pgup/pgdn or b/f: page  g/G: first/last  enter: details  " +
+			"b: bump  p: prepare  t: test  R: refresh  ?: help  q: quit"
+	}
+	if m.mode == modeConfirm {
+		short = "y: confirm  n/esc: cancel"
 	}
 	return m.theme.FooterStyle().Render(short)
 }

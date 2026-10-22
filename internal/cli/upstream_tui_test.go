@@ -185,3 +185,97 @@ func TestUpstreamModel_ColorDisabledNoANSI(t *testing.T) {
 		t.Errorf("colour-disabled model emitted ANSI:\n%q", view)
 	}
 }
+
+func actionModel(t *testing.T, actions UpstreamActions) *UpstreamModel {
+	t.Helper()
+	theme, _ := themeForTest(false, false)
+	m := NewUpstreamModel(UpstreamModelOptions{
+		Context: context.Background(),
+		Fetch: func(context.Context, func(upstream.Progress)) ([]upstream.UpstreamResult, error) {
+			return nil, nil
+		},
+		ShowAll: true,
+		Theme:   theme,
+		Overlay: "/tmp/overlay",
+		Actions: actions,
+	})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m.Update(upstreamDoneMsg{Results: sampleResults()})
+	return m
+}
+
+func drainCmd(t *testing.T, m *UpstreamModel, cmd tea.Cmd) {
+	t.Helper()
+	for cmd != nil {
+		msg := cmd()
+		if msg == nil {
+			return
+		}
+		if _, batch := msg.(tea.BatchMsg); batch {
+			return // batch commands are not executed by direct model tests
+		}
+		_, next := m.Update(msg)
+		cmd = next
+	}
+}
+
+func TestUpstreamModel_ActionConfirmation(t *testing.T) {
+	called := false
+	m := actionModel(t, UpstreamActions{Bump: func(context.Context, string, func(string)) error {
+		called = true
+		return nil
+	}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	if view := m.View(); !strings.Contains(view, "Run bump") {
+		t.Errorf("view missing confirmation prompt:\n%s", view)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if called {
+		t.Error("action ran after declining confirmation")
+	}
+	if strings.Contains(m.View(), "Run bump") {
+		t.Error("confirmation prompt stayed after declining")
+	}
+}
+
+func TestUpstreamModel_RunsAction(t *testing.T) {
+	var calledPkg string
+	var lines []string
+	m := actionModel(t, UpstreamActions{Bump: func(_ context.Context, pkg string, onLine func(string)) error {
+		calledPkg = pkg
+		onLine("bumped " + pkg)
+		onLine("committed")
+		return nil
+	}})
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	drainCmd(t, m, cmd)
+
+	if calledPkg != "dev-util/alpha" {
+		t.Errorf("action ran for %q, want dev-util/alpha", calledPkg)
+	}
+	lines = m.ActionLines()
+	if len(lines) != 2 || !strings.Contains(lines[0], "bumped dev-util/alpha") {
+		t.Errorf("action lines = %v", lines)
+	}
+	// A successful action refreshes the table.
+	if !strings.Contains(m.View(), "Checking upstream") {
+		t.Errorf("view after successful action:\n%s", m.View())
+	}
+}
+
+func TestUpstreamModel_ActionError(t *testing.T) {
+	m := actionModel(t, UpstreamActions{Test: func(context.Context, string, func(string)) error {
+		return errors.New("test failed")
+	}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	drainCmd(t, m, cmd)
+	if m.ActionErr() == nil || !strings.Contains(m.ActionErr().Error(), "test failed") {
+		t.Errorf("ActionErr() = %v", m.ActionErr())
+	}
+	if !strings.Contains(m.View(), "test failed") {
+		t.Errorf("view does not show the action error:\n%s", m.View())
+	}
+}

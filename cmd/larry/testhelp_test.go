@@ -32,6 +32,7 @@ func execCmd(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	upstreamFresh = false
 	upstreamPrereleases = false
 	upstreamTUI = false
+	upstreamNoTUI = false
 	upstreamOutput = "text"
 	prepareTUI = false
 	prepareType = ""

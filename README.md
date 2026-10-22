@@ -46,8 +46,14 @@ larry upstream --prereleases -v
 # Machine-readable output
 larry upstream --output json | jq '.results[] | select(.status == "outdated")'
 
-# Use interactive TUI (requires TTY)
+# Use interactive TUI (default on a terminal)
 larry upstream --tui
+
+# In the TUI: b=bump, p=prepare, t=test, R=refresh, enter=details
+larry upstream
+
+# Force plain output in a terminal
+larry upstream --no-tui
 
 # Check a specific overlay
 larry upstream /path/to/my-overlay

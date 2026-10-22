@@ -37,7 +37,8 @@ Providers are auto-detected from `SRC_URI`:
 | `--remote` | `origin` | Git remote name for upstream resolution |
 | `--overlay` | `$LARRY_OVERLAY` | Overlay root path |
 | `--output` | `text` | `text` or `json` (JSON always includes every status) |
-| `--tui` | `false` | Interactive TUI with a colored table (requires a TTY) |
+| `--tui` | auto | Force the interactive table |
+| `--no-tui` | `false` | Force plain table output |
 | `-h, --help` | | Help for upstream |
 
 ### Examples
@@ -55,12 +56,32 @@ larry upstream --prereleases -v
 # Machine-readable output
 larry upstream --output json | jq '.results[] | select(.status == "outdated")'
 
-# Interactive TUI
+# Interactive TUI (also the default when stdin and stdout are terminals)
 larry upstream --tui
+
+# Force plain output in a terminal
+larry upstream --no-tui
 
 # Check a specific overlay
 larry upstream /var/db/repos/my-overlay
 ```
+
+### Interactive actions
+
+When the table is interactive, the selected row supports:
+
+| Key | Action |
+|-----|--------|
+| `b` | Bump the package (`larry bump <cat/pkg>`) |
+| `p` | Prepare the package (`larry prepare <cat/pkg>`) |
+| `t` | Run `larry test --compile <cat/pkg>` |
+| `R` | Re-run the upstream check |
+| `enter` | Show source URL, target, error, and depth |
+| `?` | Toggle full key help |
+| `q` / `Esc` / `Ctrl+C` | Quit |
+
+Mutating actions ask for confirmation. Output streams into the view; a
+successful action refreshes the table automatically.
 
 ### Output
 

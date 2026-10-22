@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/cli"
@@ -22,6 +26,7 @@ var (
 	upstreamFresh       bool
 	upstreamPrereleases bool
 	upstreamTUI         bool
+	upstreamNoTUI       bool
 	upstreamOutput      string
 )
 
@@ -36,9 +41,74 @@ func init() {
 	upstreamCmd.Flags().BoolVarP(&upstreamPrereleases, "prereleases", "p", false,
 		"include pre-release versions in checks")
 	upstreamCmd.Flags().BoolVar(&upstreamTUI, "tui", false,
-		"render results as an interactive TUI (requires TTY)")
+		"force the interactive UI (default: on when stdin and stdout are terminals)")
+	upstreamCmd.Flags().BoolVar(&upstreamNoTUI, "no-tui", false,
+		"disable the interactive UI and print the plain table")
 	upstreamCmd.Flags().StringVar(&upstreamOutput, "output", "text",
 		"output format: text or json")
+}
+
+// larryExecutable is replaced in tests.
+var larryExecutable = os.Executable
+
+// buildUpstreamActions exposes the CLI commands as in-session actions. Each
+// runs the larry binary as a child so flag parsing, logging, and exit codes
+// stay identical to the standalone command, with output streamed line by line.
+func buildUpstreamActions(overlay string) cli.UpstreamActions {
+	run := func(command string, extra ...string) cli.ActionFunc {
+		return func(ctx context.Context, pkg string, onLine func(string)) error {
+			args := []string{command}
+			args = append(args, extra...)
+			args = append(args, "--overlay", overlay, "--color", "never", pkg)
+			return runLarryChild(ctx, args, onLine)
+		}
+	}
+	return cli.UpstreamActions{
+		Bump:    run("bump"),
+		Prepare: run("prepare"),
+		Test:    run("test", "--compile"),
+	}
+}
+
+// runLarryChild executes larry with args, forwarding stdout and stderr lines.
+func runLarryChild(ctx context.Context, args []string, onLine func(string)) error {
+	exe, err := larryExecutable()
+	if err != nil {
+		return fmt.Errorf("resolve larry executable: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, exe, args...)
+	cmd.Env = os.Environ()
+
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(pr)
+		for scanner.Scan() {
+			onLine(scanner.Text())
+		}
+	}()
+
+	runErr := cmd.Run()
+	_ = pw.Close()
+	wg.Wait()
+	return runErr
+}
+
+// shouldUseTUI decides between the interactive table and plain output.
+// JSON and --quiet are always plain. --no-tui always wins; otherwise the UI
+// is the default whenever stdin and stdout are terminals.
+func shouldUseTUI(noTUI bool, output string, quiet, stdoutTTY, stdinTTY bool) bool {
+	if noTUI || output != "text" || quiet {
+		return false
+	}
+	if !stdoutTTY || !stdinTTY {
+		return false
+	}
+	return true
 }
 
 var upstreamCmd = cobra.Command{
@@ -71,10 +141,15 @@ Positional arguments:
   profiles/. At most one is allowed; every other argument is an atom.
 
 Output:
-  default        significant statuses only (outdated, ahead, newer-tag, ...)
-  -v             every status, including up-to-date, live, and manual
+  default        interactive table when stdin and stdout are terminals
+  --tui          force the interactive table
+  --no-tui       force the plain table
   --output json  complete machine-readable document (ignores the filter)
-  --tui          interactive filtered table with details (requires a TTY)
+  -v             every status, including up-to-date, live, and manual
+
+In-session actions (interactive mode), on the selected row:
+  b  bump the package        p  run prepare        t  run the test pipeline
+  R  refresh the check       enter  show details    q  quit
 
 Use --fresh to bypass the 6-hour version cache.`,
 	Example: `  larry upstream
@@ -93,6 +168,9 @@ Use --fresh to bypass the 6-hour version cache.`,
 		}
 		if upstreamTUI && upstreamOutput == "json" {
 			return fmt.Errorf("--tui cannot be combined with --output json")
+		}
+		if upstreamTUI && upstreamNoTUI {
+			return fmt.Errorf("--tui and --no-tui are mutually exclusive")
 		}
 		// Resolve overlay directory.
 		overlayDir, err := cfg.ResolveOverlay(rootFlags.Overlay)
@@ -161,11 +239,12 @@ Use --fresh to bypass the 6-hour version cache.`,
 			return upstream.RenderJSON(cmd.OutOrStdout(), results)
 		}
 
-		// --tui needs a terminal; fall back rather than corrupt captured output.
-		useTUI := upstreamTUI
-		if useTUI && !cli.IsTTY(cmd.OutOrStdout()) {
+		// Interactive by default when both ends are terminals; explicit
+		// flags win, and JSON/quiet always stay plain.
+		useTUI := shouldUseTUI(upstreamNoTUI, upstreamOutput, cfg.Quiet,
+			cli.IsTTY(cmd.OutOrStdout()), cli.IsTTY(os.Stdin))
+		if upstreamTUI && !useTUI && cmd.Flags().Changed("tui") {
 			log.Warn("--tui requires a terminal; falling back to plain output")
-			useTUI = false
 		}
 
 		// Non-TTY mode: run check with spinner.
@@ -242,6 +321,7 @@ Use --fresh to bypass the 6-hour version cache.`,
 			}),
 			Overlay: overlayDir,
 			Cancel:  cancel,
+			Actions: buildUpstreamActions(overlayDir),
 		})
 		_, runErr := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(cmd.OutOrStdout())).Run()
 		cancel()
