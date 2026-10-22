@@ -1,5 +1,68 @@
 # Commands Reference
 
+## `larry manage`
+
+Open an interactive upstream session for the overlay and act on the selected
+package without leaving the view.
+
+### Synopsis
+
+```bash
+larry manage [cat/pkg...] [overlay-path] [flags]
+```
+
+### Description
+
+`larry manage` shows the same upstream table as `larry upstream`, then runs the
+selected action as a child `larry` process. Because the child is the real
+binary, flags, logging, and exit codes match the standalone commands.
+
+Requires a terminal. Running bare `larry` opens this session when stdin and
+stdout are terminals; otherwise it prints help. For piped or scripted checks
+use `larry upstream`.
+
+### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-f, --fresh` | `false` | Bypass cache and fetch fresh versions |
+| `-p, --prereleases` | `false` | Include pre-release versions |
+| `-v, --verbose` | 0 | Count: `-v` shows all statuses, `-vv` debug, `-vvv` trace |
+| `-h, --help` | | Help for manage |
+
+Overlay, cache, jobs, colour, and remote flags are the global flags below.
+
+### Keys
+
+| Key | Action |
+|-----|--------|
+| `b` | Bump the package (`larry bump <cat/pkg>`) |
+| `p` | Prepare the package (`larry prepare <cat/pkg>`) |
+| `t` | Run `larry test --compile <cat/pkg>` |
+| `R` | Re-run the upstream check |
+| `enter` | Show source URL, target, error, and depth |
+| `?` | Toggle full key help |
+| `up`/`k`, `down`/`j` | Move the selection |
+| `pgup`/`b`, `pgdown`/`f` | Page the table |
+| `home`/`g`, `end`/`G` | Jump to the first or last row |
+| `q` / `Esc` / `Ctrl+C` | Quit; Esc cancels a running action |
+
+Mutating actions ask for confirmation. Their stdout and stderr stream into the
+view; a successful action refreshes the table automatically.
+
+### Examples
+
+```bash
+# Open the session for the overlay resolved from git
+larry manage
+
+# Start with a single package selected
+larry manage dev-util/cem
+
+# Fresh check including prereleases
+larry manage --fresh --prereleases
+```
+
 ## `larry upstream`
 
 Check packages in a Gentoo overlay for upstream version updates.
@@ -37,8 +100,7 @@ Providers are auto-detected from `SRC_URI`:
 | `--remote` | `origin` | Git remote name for upstream resolution |
 | `--overlay` | `$LARRY_OVERLAY` | Overlay root path |
 | `--output` | `text` | `text` or `json` (JSON always includes every status) |
-| `--tui` | auto | Force the interactive table |
-| `--no-tui` | `false` | Force plain table output |
+| `--jobs` | 0 | Concurrent provider workers (0 = auto-detect) |
 | `-h, --help` | | Help for upstream |
 
 ### Examples
@@ -56,32 +118,28 @@ larry upstream --prereleases -v
 # Machine-readable output
 larry upstream --output json | jq '.results[] | select(.status == "outdated")'
 
-# Interactive TUI (also the default when stdin and stdout are terminals)
-larry upstream --tui
-
-# Force plain output in a terminal
-larry upstream --no-tui
+# Interactive session (check, bump, prepare, test)
+larry manage
 
 # Check a specific overlay
 larry upstream /var/db/repos/my-overlay
 ```
 
+### Batching and concurrency
+
+Packages are resolved concurrently, up to `--jobs` workers (0 auto-detects from
+the CPU count). GitHub repositories are additionally resolved in one GraphQL
+query per chunk of 40, and SourceHut repositories in one GraphQL request per
+user, so a large overlay costs far fewer API calls. Providers without a batch
+endpoint (PyPI, npm, GitLab, Codeberg) use the worker pool alone.
+
+Results keep discovery order regardless of worker count, and a failed batch
+falls back to the per-repository path.
+
 ### Interactive actions
 
-When the table is interactive, the selected row supports:
-
-| Key | Action |
-|-----|--------|
-| `b` | Bump the package (`larry bump <cat/pkg>`) |
-| `p` | Prepare the package (`larry prepare <cat/pkg>`) |
-| `t` | Run `larry test --compile <cat/pkg>` |
-| `R` | Re-run the upstream check |
-| `enter` | Show source URL, target, error, and depth |
-| `?` | Toggle full key help |
-| `q` / `Esc` / `Ctrl+C` | Quit |
-
-Mutating actions ask for confirmation. Output streams into the view; a
-successful action refreshes the table automatically.
+For the interactive table and in-session actions, run `larry manage` (see
+above). `larry upstream` never starts a TUI, so it is safe in scripts and CI.
 
 ### Output
 
@@ -328,10 +386,16 @@ These flags apply to all subcommands:
 | `--cache-dir` | | Cache directory |
 | `--distdir` | | Distfile directory |
 | `--overlay` | | Overlay root path |
-| `--jobs` | 0 | Parallel worker count (currently single-threaded) |
+| `--jobs` | 0 | Upstream check worker count (0 = auto-detect) |
 | `--github-token` | | GitHub PAT (also exported as `GITHUB_TOKEN`) |
 | `--remote` | origin | Git remote name |
 | `--config` | | Config file path |
+
+`larry upstream` and `larry manage` resolve packages concurrently. GitHub and
+SourceHut packages are also batch-resolved in as few API calls as possible
+(one GraphQL query per chunk of GitHub repositories, one per SourceHut user);
+providers without a batch API (PyPI, npm, GitLab, Codeberg) rely on the worker
+pool.
 
 ## Shell Completion
 

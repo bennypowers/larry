@@ -7,8 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"bennypowers.dev/larry/internal/atom"
@@ -623,6 +625,59 @@ func buildResult(ei *ebuild.EbuildInfo, latestV, currentV *version.Version, ridT
 	}
 }
 
+// ebuildIdentity is the local classification shared by resolution and batch
+// prefetching: parsed ebuild info, per-package options, provider type, and the
+// resolved remote id. Computing it twice (once for prefetch, once for resolve)
+// is cheap local work; the logic itself exists once.
+type ebuildIdentity struct {
+	einfo        *ebuild.EbuildInfo
+	resOpts      *larryconfig.ResolveOptions
+	providerType string
+	rid          *remoteid.RemoteId
+}
+
+func identifyEbuild(eb *atom.ParsedEbuild) (*ebuildIdentity, error) {
+	einfo, err := ParseEbuildInfo(eb.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	var resOpts *larryconfig.ResolveOptions
+	if eb.Path != "" {
+		cfg, err := larryconfig.LoadConfig(filepath.Dir(eb.Path))
+		if err != nil {
+			return nil, err
+		}
+		if cfg.Upstream != nil {
+			opts, err := cfg.Upstream.Compile(einfo.PVVal)
+			if err != nil {
+				return nil, fmt.Errorf("invalid %s: %w", larryconfig.ConfigFile, err)
+			}
+			resOpts = opts
+		}
+	}
+
+	providerType := ResolveProviderType(einfo.Path, einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
+	if providerType == "" {
+		providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
+	}
+
+	var rid *remoteid.RemoteId
+	if providerType != "" && providerType != "unknown" {
+		resolved, err := ResolveRemoteId(einfo, providerType)
+		if err == nil {
+			rid = resolved
+		}
+	}
+
+	return &ebuildIdentity{
+		einfo:        einfo,
+		resOpts:      resOpts,
+		providerType: providerType,
+		rid:          rid,
+	}, nil
+}
+
 // resolveOne turns one package's ebuild into exactly one UpstreamResult row.
 // It is the single source of truth for provider lookup, caching, error rows and
 // status derivation, used by both the top-level walk (depth 0) and the dependency scanner.
@@ -638,8 +693,9 @@ func resolveOne(
 	allowPrereleases bool,
 	cache *VersionCache,
 	depth int,
+	hints map[string]*provider.Resolution,
 ) UpstreamResult {
-	einfo, err := ParseEbuildInfo(eb.Path)
+	id, err := identifyEbuild(eb)
 	if err != nil {
 		return UpstreamResult{
 			Package: eb.Category + "/" + eb.PN,
@@ -650,35 +706,9 @@ func resolveOne(
 			Depth:   depth,
 		}
 	}
-
-	// Load per-package .larry/config.yaml upstream rules. Unconditionally set
-	// ResolveOptions on any GitHubProvider so that state does not leak
-	// between packages during a multi-package walk.
-	var resOpts *larryconfig.ResolveOptions
-	var cfgErr error
-	if eb.Path != "" {
-		cfg, err := larryconfig.LoadConfig(filepath.Dir(eb.Path))
-		if err != nil {
-			cfgErr = err
-		} else if cfg.Upstream != nil {
-			opts, err := cfg.Upstream.Compile(einfo.PVVal)
-			if err != nil {
-				cfgErr = fmt.Errorf("invalid %s: %w", larryconfig.ConfigFile, err)
-			} else {
-				resOpts = opts
-			}
-		}
-	}
-	if cfgErr != nil {
-		return UpstreamResult{
-			Package: eb.Category + "/" + eb.PN,
-			Current: eb.PVR,
-			Latest:  "",
-			Status:  StatusUnknown,
-			Error:   cfgErr.Error(),
-			Depth:   depth,
-		}
-	}
+	einfo := id.einfo
+	resOpts := id.resOpts
+	providerType := id.providerType
 
 	// Vendor-only packages opt out of upstream checks. Report MANUAL rather
 	// than UNKNOWN, and link to HOMEPAGE as the manual source.
@@ -695,44 +725,44 @@ func resolveOne(
 
 	// Live-only handling
 	if eb.Live {
-		providerType := ResolveProviderType(einfo.Path, einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
-		if providerType == "" {
-			providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
-		}
 		logger.Tracef("upstream %s/%s (live): provider=%s", einfo.Category, einfo.Pkg, providerType)
-		if providerType != "" && providerType != "unknown" {
-			rid, err := ResolveRemoteId(einfo, providerType)
-			if err == nil && rid != nil {
-				logger.Tracef("upstream %s/%s: remote-id=%s", einfo.Category, einfo.Pkg, rid.String())
-				cacheKey := MakeKey(einfo.Category, einfo.Pkg, string(rid.Type), einfo.PVVal)
-				var latestV *version.Version
+		if id.rid != nil {
+			rid := id.rid
+			logger.Tracef("upstream %s/%s: remote-id=%s", einfo.Category, einfo.Pkg, rid.String())
+			cacheKey := MakeKey(einfo.Category, einfo.Pkg, string(rid.Type), einfo.PVVal)
+			var latestV *version.Version
 
-				if cachedVer, ok := cache.Get(cacheKey); ok {
-					latestV, _ = version.Parse(cachedVer)
-				} else if registry != nil {
-					ridType := mapTypeToRemoteIdType(providerType)
-					p, err := registry.Resolve(remoteid.RemoteId{Type: ridType, Name: rid.Name, Owner: rid.Owner, Repo: rid.Repo})
-					if err == nil {
-						// Wire per-package ResolveOptions onto any GitHubProvider.
-						if ghProv, ok := p.(*providers.GitHubProvider); ok {
-							ghProv.ResolveOptions = resOpts
-						}
-						latestV, err = p.FetchLatestVersion(*rid, allowPrereleases)
-						if err == nil && latestV != nil {
-							cache.Set(cacheKey, latestV.Format())
-						}
+			if cachedVer, ok := cache.Get(cacheKey); ok {
+				latestV, _ = version.Parse(cachedVer)
+			} else if hint, ok := hints[provider.BatchKey(*rid)]; ok && hint != nil && hint.Version != "" {
+				latestV, _ = version.Parse(hint.Version)
+				if latestV != nil {
+					cache.Set(cacheKey, latestV.Format())
+				}
+			} else if registry != nil {
+				ridType := mapTypeToRemoteIdType(providerType)
+				p, err := registry.Resolve(remoteid.RemoteId{Type: ridType, Name: rid.Name, Owner: rid.Owner, Repo: rid.Repo})
+				if err == nil {
+					// Clone so per-package options never race on the
+					// shared registered provider.
+					if ghProv, ok := p.(*providers.GitHubProvider); ok {
+						p = ghProv.CloneWithOptions(resOpts)
+					}
+					latestV, err = p.FetchLatestVersion(*rid, allowPrereleases)
+					if err == nil && latestV != nil {
+						cache.Set(cacheKey, latestV.Format())
 					}
 				}
+			}
 
-				if latestV != nil {
-					return UpstreamResult{
-						Package: einfo.Category + "/" + einfo.Pkg,
-						Current: "9999 (live)",
-						Latest:  latestV.Format(),
-						Status:  StatusHasRelease,
-						Source:  resolveSourceInfo(rid),
-						Depth:   depth,
-					}
+			if latestV != nil {
+				return UpstreamResult{
+					Package: einfo.Category + "/" + einfo.Pkg,
+					Current: "9999 (live)",
+					Latest:  latestV.Format(),
+					Status:  StatusHasRelease,
+					Source:  resolveSourceInfo(rid),
+					Depth:   depth,
 				}
 			}
 		}
@@ -747,10 +777,6 @@ func resolveOne(
 	}
 
 	// Normal (versioned) handling
-	providerType := ResolveProviderType(einfo.Path, einfo.SRC_URI, einfo.HOMEPAGE, einfo.Inherit, einfo.Raw)
-	if providerType == "" {
-		providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
-	}
 	logger.Tracef("upstream %s/%s: provider=%s", einfo.Category, einfo.Pkg, providerType)
 
 	if providerType == "" || providerType == "unknown" {
@@ -764,8 +790,8 @@ func resolveOne(
 		}
 	}
 
-	rid, err := ResolveRemoteId(einfo, providerType)
-	if err != nil || rid == nil {
+	rid := id.rid
+	if rid == nil {
 		return UpstreamResult{
 			Package: einfo.Category + "/" + einfo.Pkg,
 			Current: eb.PVR,
@@ -785,6 +811,13 @@ func resolveOne(
 		latestV, _ = version.Parse(cachedVer)
 		sourceURL = resolveSourceURL(rid)
 		sourceLabel = resolveSourceLabel(rid)
+	} else if hint, ok := hints[provider.BatchKey(*rid)]; ok && hint != nil && hint.Version != "" {
+		latestV, err = version.Parse(hint.Version)
+		if err == nil && latestV != nil {
+			cache.Set(cacheKey, latestV.Format())
+		}
+		sourceURL = resolveSourceURL(rid)
+		sourceLabel = resolveSourceLabel(rid)
 	} else if registry != nil {
 		ridType := mapTypeToRemoteIdType(providerType)
 		p, err := registry.Resolve(remoteid.RemoteId{Type: ridType, Name: rid.Name, Owner: rid.Owner, Repo: rid.Repo})
@@ -799,12 +832,10 @@ func resolveOne(
 			}
 		}
 
-		// Wire per-package ResolveOptions onto any GitHubProvider before
-		// resolution so that ignore_tags / strip_prefixes apply. UNCONDITIONAL
-		// set (even if resOpts is nil) to prevent state leaking from a
-		// previously resolved package.
+		// Clone so per-package options never race on the shared registered
+		// provider, and so state cannot leak between packages.
 		if ghProv, ok := p.(*providers.GitHubProvider); ok {
-			ghProv.ResolveOptions = resOpts
+			p = ghProv.CloneWithOptions(resOpts)
 		}
 
 		// Try ResolverWithTags first (e.g. GitHubProvider — plan 17b),
@@ -916,6 +947,7 @@ type RunOptions struct {
 	AllowPrereleases bool
 	Fresh            bool
 	CacheDir         string         // empty -> DefaultCachePath()
+	Jobs             int            // 0 -> runtime.NumCPU()
 	Progress         func(Progress) // nil-safe
 }
 
@@ -965,67 +997,195 @@ func walkAndCheckTargets(ctx context.Context, opts RunOptions, deprecated map[st
 		}
 	}
 
-	// Select roots first so progress totals describe the requested set, not
-	// every package in the overlay.
-	roots := make([]*PackageTarget, 0, len(targets))
+	// Phase 1: discover the whole graph sequentially. Local parsing only, so
+	// ordering and dedup are deterministic regardless of worker count.
+	var nodes []checkNode
+	visited := make(map[string]bool) // script's CHECKED_PACKAGES
+
 	for _, target := range targets {
-		key := target.Atom.Category + "/" + target.Atom.PN
-		if allowed != nil && !allowed[key] {
+		atomKey := target.Atom.Category + "/" + target.Atom.PN
+		if allowed != nil && !allowed[atomKey] {
 			continue
 		}
-		roots = append(roots, target)
-	}
 
-	total := len(roots)
-	emit := func(p Progress) {
-		if opts.Progress != nil {
-			opts.Progress(p)
-		}
-	}
-
-	var results []UpstreamResult
-	// Single visited map shared across the whole walk (script's CHECKED_PACKAGES).
-	// A package already emitted at any depth is never emitted again.
-	visited := make(map[string]bool)
-
-	for i, target := range roots {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-
-		atomKey := target.Atom.Category + "/" + target.Atom.PN
-		emit(Progress{Package: atomKey, Done: i, Total: total})
-
-		// Skip deprecated/renamed packages
+		// Deprecated/renamed roots are emitted even when already visited,
+		// matching the previous walk order.
 		if dep, ok := deprecated[atomKey]; ok {
-			results = append(results, UpstreamResult{
-				Package: atomKey,
-				Current: target.Ebuild.PVR,
-				Latest:  "",
-				Status:  StatusDeprecated,
-				Source:  SourceInfo{Label: dep.Source},
-				Target:  dep.Target,
+			depCopy := dep
+			nodes = append(nodes, checkNode{
+				Package:    atomKey,
+				Ebuild:     target.Ebuild,
+				Deprecated: &depCopy,
 			})
 			visited[atomKey] = true
-			emit(Progress{Package: atomKey, Done: i + 1, Total: total})
 			continue
 		}
 
-		// Skip if already emitted as a dependency of an earlier package.
 		if visited[atomKey] {
-			emit(Progress{Package: atomKey, Done: i + 1, Total: total})
 			continue
 		}
 
-		row := resolveOne(opts.OverlayDir, target.Ebuild, registry, allowPrereleases, cache, 0)
-		results = append(results, row)
+		nodes = append(nodes, checkNode{Package: atomKey, Ebuild: target.Ebuild, Depth: 0})
 		visited[atomKey] = true
-
-		// Scan in-overlay dependencies (pre-order, depth 0→3, single visited map).
-		results = append(results, ScanDependencies(opts.OverlayDir, target.Ebuild, registry, allowPrereleases, cache, 0, visited)...)
-		emit(Progress{Package: atomKey, Done: i + 1, Total: total})
+		appendDependencyNodes(opts.OverlayDir, target.Ebuild, 0, visited, &nodes)
 	}
 
+	// Phase 2: resolve concurrently, preserving node order in the results.
+	return resolveNodes(ctx, opts.OverlayDir, nodes, registry, allowPrereleases, cache, opts.Jobs, opts.Progress)
+}
+
+// prefetchBatches asks batch-capable providers to resolve many repositories in
+// as few requests as possible. Results are hints: misses fall back to the
+// per-package path inside resolveOne.
+func prefetchBatches(
+	ctx context.Context,
+	nodes []checkNode,
+	registry *provider.ProviderRegistry,
+	allowPrereleases bool,
+) map[string]*provider.Resolution {
+	hints := make(map[string]*provider.Resolution)
+	if registry == nil {
+		return hints
+	}
+
+	groups := make(map[remoteid.RemoteIdType][]provider.BatchRequest)
+	seen := make(map[string]bool)
+	for _, n := range nodes {
+		if n.Deprecated != nil {
+			continue
+		}
+		id, err := identifyEbuild(n.Ebuild)
+		if err != nil || id.rid == nil {
+			continue
+		}
+		// Manual packages never hit a provider, so do not spend batch quota.
+		if id.resOpts != nil && !id.resOpts.Check {
+			continue
+		}
+		key := provider.BatchKey(*id.rid)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		groups[id.rid.Type] = append(groups[id.rid.Type], provider.BatchRequest{
+			ID:      *id.rid,
+			Options: id.resOpts,
+		})
+	}
+
+	for typ, reqs := range groups {
+		// One repo is not worth a batch; the per-package path is equivalent.
+		if len(reqs) < 2 {
+			continue
+		}
+		p, err := registry.Resolve(remoteid.RemoteId{Type: typ})
+		if err != nil {
+			continue
+		}
+		br, ok := p.(provider.BatchResolver)
+		if !ok {
+			continue
+		}
+		resolved, err := br.BatchResolve(ctx, reqs, allowPrereleases)
+		if err != nil {
+			logger.Tracef("batch %s failed, falling back per-repo: %v", typ, err)
+			continue
+		}
+		for key, res := range resolved {
+			if res != nil {
+				hints[key] = res
+			}
+		}
+	}
+	return hints
+}
+
+// resolveNodes checks every node, using up to jobs workers, and returns rows
+// in node order. Provider work dominates, so this is where the parallelism
+// lives; discovery and ordering stay deterministic.
+func resolveNodes(
+	ctx context.Context,
+	overlayRoot string,
+	nodes []checkNode,
+	registry *provider.ProviderRegistry,
+	allowPrereleases bool,
+	cache *VersionCache,
+	jobs int,
+	progress func(Progress),
+) ([]UpstreamResult, error) {
+	results := make([]UpstreamResult, len(nodes))
+	if len(nodes) == 0 {
+		return results, nil
+	}
+
+	hints := prefetchBatches(ctx, nodes, registry, allowPrereleases)
+	if len(hints) > 0 {
+		logger.Tracef("batch prefetch resolved %d/%d packages", len(hints), len(nodes))
+	}
+
+	workers := jobs
+	if workers <= 0 {
+		workers = runtime.NumCPU()
+	}
+	if workers > len(nodes) {
+		workers = len(nodes)
+	}
+	if workers < 1 {
+		workers = 1
+	}
+
+	indexes := make(chan int)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	done := 0
+
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range indexes {
+				if err := ctx.Err(); err != nil {
+					return
+				}
+				n := nodes[i]
+				if n.Deprecated != nil {
+					results[i] = UpstreamResult{
+						Package: n.Package,
+						Current: n.Ebuild.PVR,
+						Status:  StatusDeprecated,
+						Source:  SourceInfo{Label: n.Deprecated.Source},
+						Target:  n.Deprecated.Target,
+						Depth:   n.Depth,
+					}
+				} else {
+					results[i] = resolveOne(overlayRoot, n.Ebuild, registry, allowPrereleases, cache, n.Depth, hints)
+				}
+
+				if progress != nil {
+					// Serialise callbacks so consumers see a monotonic Done.
+					mu.Lock()
+					done++
+					progress(Progress{Package: n.Package, Done: done, Total: len(nodes)})
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+
+enqueue:
+	for i := range nodes {
+		select {
+		case indexes <- i:
+		case <-ctx.Done():
+			break enqueue
+		}
+	}
+	close(indexes)
+	wg.Wait()
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return results, nil
 }
 

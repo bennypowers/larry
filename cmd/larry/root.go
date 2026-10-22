@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"bennypowers.dev/larry/internal/cli"
 	"bennypowers.dev/larry/internal/config"
 	"bennypowers.dev/larry/internal/logger"
 	"bennypowers.dev/larry/internal/output"
@@ -40,6 +41,7 @@ var (
 		Long: `Larry is a Gentoo overlay upstream management tool.
 
 Commands:
+  manage     Interactive session: check, bump, prepare, test
   upstream   Check ebuilds for newer upstream versions
   bump       Create a new ebuild version or revision
   prepare    Generate Manifest and distfiles for an ebuild
@@ -56,7 +58,8 @@ Machine output:
 
 Run 'larry <command> --help' for command-specific details.
 `,
-		Example: `  larry upstream
+		Example: `  larry manage
+  larry upstream
   larry upstream --fresh --prereleases
   larry upstream --output json | jq '.results[] | select(.status != "up_to_date")'
   larry bump dev-python/requests
@@ -68,7 +71,12 @@ Run 'larry <command> --help' for command-specific details.
 		SilenceErrors:     true,
 		PersistentPreRunE: persistentPreRunE,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return &ExitError{Code: 1, Err: fmt.Errorf("no subcommand")}
+			// Bare `larry` on a terminal opens the interactive session; piped
+			// or redirected invocations get help.
+			if cli.IsTTY(cmd.OutOrStdout()) && cli.IsTTY(os.Stdin) {
+				return runManage(cmd, args)
+			}
+			return cmd.Help()
 		},
 	}
 
@@ -93,7 +101,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&rootFlags.Distdir, "distdir", "",
 		"distdir path for source downloads")
 	rootCmd.PersistentFlags().IntVar(&rootFlags.Jobs, "jobs", 0,
-		"parallel worker count (0 = auto-detect; currently single-threaded)")
+		"upstream check worker count (0 = auto-detect)")
 	rootCmd.PersistentFlags().StringVar(&rootFlags.GitHubToken, "github-token", "",
 		"GitHub personal access token (also exported as GITHUB_TOKEN for gh)")
 	rootCmd.PersistentFlags().StringVar(&rootFlags.Remote, "remote", "origin",

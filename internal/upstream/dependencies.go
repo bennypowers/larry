@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"context"
 	"regexp"
 	"sort"
 	"strings"
@@ -86,11 +87,23 @@ func stripVersion(atom string) string {
 	return depVerRe.ReplaceAllString(atom, "")
 }
 
+// checkNode is one package in the resolved graph. Discovery is local and
+// sequential; resolution is concurrent. Deprecated nodes carry their rename
+// metadata and skip provider work.
+type checkNode struct {
+	Package    string
+	Ebuild     *atom.ParsedEbuild
+	Depth      int
+	Deprecated *DeprecatedInfo
+}
+
 // ScanDependencies returns a flat, pre-order slice of rows for every in-overlay
 // dependency of eb, recursively. The parent's own row is NOT included. Depth is set
 // on every row: the parent is parentDepth, its direct dependencies are parentDepth+1.
 // visited is shared across the whole walk and is mutated; a package already present
 // in it is skipped entirely (the script's CHECKED_PACKAGES).
+//
+// It uses the same discovery + resolution path as RunWithTargets, with one worker.
 func ScanDependencies(
 	overlayRoot string,
 	eb *atom.ParsedEbuild,
@@ -100,14 +113,29 @@ func ScanDependencies(
 	parentDepth int,
 	visited map[string]bool,
 ) []UpstreamResult {
+	nodes := discoverDependencyNodes(overlayRoot, eb, parentDepth, visited)
+	results, _ := resolveNodes(context.Background(), overlayRoot, nodes, registry, allowPrereleases, cache, 1, nil)
+	return results
+}
+
+// discoverDependencyNodes walks DEPEND/RDEPEND in pre-order, appending one
+// node per in-overlay package and mutating visited. No provider work happens
+// here, so the graph is deterministic regardless of worker count.
+func discoverDependencyNodes(overlayRoot string, eb *atom.ParsedEbuild, parentDepth int, visited map[string]bool) []checkNode {
+	var nodes []checkNode
+	appendDependencyNodes(overlayRoot, eb, parentDepth, visited, &nodes)
+	return nodes
+}
+
+func appendDependencyNodes(overlayRoot string, eb *atom.ParsedEbuild, parentDepth int, visited map[string]bool, out *[]checkNode) {
 	if parentDepth >= maxDepDepth {
-		return nil
+		return
 	}
 
 	// Parse ebuild info to get DEPEND/RDEPEND
 	ei, err := ParseEbuildInfo(eb.Path)
 	if err != nil {
-		return nil
+		return
 	}
 
 	// Collect atoms from both DEPEND and RDEPEND
@@ -123,8 +151,6 @@ func ScanDependencies(
 			unique = append(unique, a)
 		}
 	}
-
-	var results []UpstreamResult
 
 	for _, atomStr := range unique {
 		// Parse the dependency atom against the overlay.
@@ -169,15 +195,11 @@ func ScanDependencies(
 		// Mark as visited before recursing (prevents cycles)
 		visited[atomKey] = true
 
-		// Use resolveOne — the same function the top-level walk uses — so
-		// the dep's real current version and real SRC_URI-derived provider
-		// are used.
-		row := resolveOne(overlayRoot, pe, registry, allowPrereleases, cache, depth)
-		results = append(results, row)
+		// Same resolution function as the root walk, deferred to the
+		// concurrent phase.
+		*out = append(*out, checkNode{Package: atomKey, Ebuild: pe, Depth: depth})
 
 		// Recurse into this dependency's own deps (pre-order)
-		results = append(results, ScanDependencies(overlayRoot, pe, registry, allowPrereleases, cache, depth, visited)...)
+		appendDependencyNodes(overlayRoot, pe, depth, visited, out)
 	}
-
-	return results
 }

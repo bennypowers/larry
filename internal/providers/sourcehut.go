@@ -2,6 +2,7 @@ package providers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,9 +10,9 @@ import (
 	"strings"
 
 	"bennypowers.dev/larry/internal/httpclient"
-	"bennypowers.dev/larry/internal/remoteid"
 	"bennypowers.dev/larry/internal/provider"
 	"bennypowers.dev/larry/internal/ratelimit"
+	"bennypowers.dev/larry/internal/remoteid"
 	"bennypowers.dev/larry/internal/version"
 )
 
@@ -50,11 +51,11 @@ type sourceHutGraphQLResponse struct {
 		Repositories struct {
 			Edges []struct {
 				Node struct {
-					Name  string `json:"name"`
-					Refs  struct {
+					Name string `json:"name"`
+					Refs struct {
 						Edges []struct {
 							Node struct {
-								Name string `json:"name"`
+								Name   string `json:"name"`
 								Target struct {
 									Oid string `json:"oid"`
 								} `json:"target"`
@@ -109,15 +110,58 @@ func (p *SourceHutProvider) fetchViaGraphQL(rid remoteid.RemoteId, allowPrerelea
 	user := parts[0]
 	project := parts[1]
 
-	// Build GraphQL query
+	data, err := p.queryUserRepositories(user)
+	if err != nil {
+		return nil, err
+	}
+
+	// Find the matching repository
+	for _, edge := range data.User.Repositories.Edges {
+		if edge.Node.Name == project {
+			// Pick the highest parseable tag, matching BatchResolve. The
+			// GraphQL order is by creation date, which can disagree with
+			// version order (1.10.0 released before 1.9.0).
+			var best *version.Version
+			for _, refEdge := range edge.Node.Refs.Edges {
+				tagName := refEdge.Node.Name
+				// Strip refs/tags/ prefix
+				tagName = strings.TrimPrefix(tagName, "refs/tags/")
+				// Tags are often named <project>-<version>.
+				tagName = stripPkgNamePrefix(tagName, project)
+
+				normVer := version.Normalize(tagName)
+				v, err := version.Parse(normVer)
+				if err != nil {
+					continue
+				}
+
+				if !allowPrereleases && v.IsPrerelease() {
+					continue
+				}
+				if best == nil || v.Compare(best) > 0 {
+					best = v
+				}
+			}
+			if best != nil {
+				return best, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("sourcehut: no tags found for %s", rid.Path)
+}
+
+// queryUserRepositories performs one GraphQL request for all repositories of a
+// user. Both the single-repository and batch paths use it.
+func (p *SourceHutProvider) queryUserRepositories(user string) (*sourceHutGraphQLResponse, error) {
 	query := `
 		query GetUserRepos($user: String!) {
 			user(login: $user) {
-				repositories(first: 10) {
+				repositories(first: 100) {
 					edges {
 						node {
 							name
-							refs(refPrefix: "refs/tags/", first: 10, orderBy: {field: CREATED_AT, direction: DESC}) {
+							refs(refPrefix: "refs/tags/", first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {
 								edges {
 									node {
 										name
@@ -185,32 +229,74 @@ func (p *SourceHutProvider) fetchViaGraphQL(rid remoteid.RemoteId, allowPrerelea
 	if gqlResp.Data == nil {
 		return nil, fmt.Errorf("sourcehut: no data in response")
 	}
+	return gqlResp.Data, nil
+}
 
-	// Find the matching repository
-	for _, edge := range gqlResp.Data.User.Repositories.Edges {
-		if edge.Node.Name == project {
-			// Get the first tag (most recent by created_at)
-			for _, refEdge := range edge.Node.Refs.Edges {
-				tagName := refEdge.Node.Name
-				// Strip refs/tags/ prefix
-				tagName = strings.TrimPrefix(tagName, "refs/tags/")
+// BatchResolve groups SourceHut requests by user, so repositories owned by the
+// same user share one GraphQL request. Missing keys fall back per repository.
+func (p *SourceHutProvider) BatchResolve(ctx context.Context, reqs []provider.BatchRequest, allowPrereleases bool) (map[string]*provider.Resolution, error) {
+	out := make(map[string]*provider.Resolution)
+	if p.Client == nil {
+		p.Client = httpclient.NewClient()
+	}
 
-				normVer := version.Normalize(tagName)
-				v, err := version.Parse(normVer)
+	byUser := make(map[string][]provider.BatchRequest)
+	for _, req := range reqs {
+		path := strings.TrimPrefix(req.ID.Path, "~")
+		parts := strings.SplitN(path, "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		byUser[parts[0]] = append(byUser[parts[0]], req)
+	}
+
+	var firstErr error
+	for user, userReqs := range byUser {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
+		data, err := p.queryUserRepositories(user)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		byProject := make(map[string][]string)
+		for _, edge := range data.User.Repositories.Edges {
+			tags := make([]string, 0, len(edge.Node.Refs.Edges))
+			for _, ref := range edge.Node.Refs.Edges {
+				tags = append(tags, strings.TrimPrefix(ref.Node.Name, "refs/tags/"))
+			}
+			byProject[edge.Node.Name] = tags
+		}
+		for _, req := range userReqs {
+			path := strings.TrimPrefix(req.ID.Path, "~")
+			parts := strings.SplitN(path, "/", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			var best *version.Version
+			for _, tag := range byProject[parts[1]] {
+				// Tags are often named <project>-<version>.
+				tag = stripPkgNamePrefix(tag, parts[1])
+				v, err := version.Parse(version.Normalize(tag))
 				if err != nil {
 					continue
 				}
-
 				if !allowPrereleases && v.IsPrerelease() {
 					continue
 				}
-
-				return v, nil
+				if best == nil || v.Compare(best) > 0 {
+					best = v
+				}
+			}
+			if best != nil {
+				out[provider.BatchKey(req.ID)] = &provider.Resolution{Version: best.Format()}
 			}
 		}
 	}
-
-	return nil, fmt.Errorf("sourcehut: no tags found for %s", rid.Path)
+	return out, firstErr
 }
 
 // fetchViaHTML parses the refs page HTML to find the latest tag.

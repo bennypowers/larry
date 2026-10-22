@@ -38,18 +38,10 @@ its upstream source.
   the significance filter and `-v`, and includes source URL, target, error,
   and depth.
 
-**--tui**
-: Force the interactive table. It is already the default when stdin and
-  stdout are terminals. Incompatible with `--output json`.
+## INTERACTIVE SESSION
 
-**--no-tui**
-: Force the plain table even on a terminal.
-
-## INTERACTIVE ACTIONS
-
-On the selected row: `b` bumps, `p` prepares, `t` runs `test --compile`,
-`R` re-runs the check, and `enter` shows details. Mutating actions ask for
-confirmation and stream their output into the view.
+For the interactive table and in-session actions, use **larry-manage**(1).
+`upstream` stays non-interactive so it composes in pipes and scripts.
 
 **-h, --help**
 : Help for upstream

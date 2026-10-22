@@ -1,8 +1,11 @@
 package provider
 
 import (
-	"bennypowers.dev/larry/internal/remoteid"
+	"context"
+
+	"bennypowers.dev/larry/internal/larryconfig"
 	"bennypowers.dev/larry/internal/ratelimit"
+	"bennypowers.dev/larry/internal/remoteid"
 	"bennypowers.dev/larry/internal/version"
 )
 
@@ -45,4 +48,25 @@ type Resolution struct {
 type ResolverWithTags interface {
 	UpstreamProvider
 	FetchResolution(rid remoteid.RemoteId, allowPrereleases bool) (*Resolution, error)
+}
+
+// BatchRequest is one repository in a batch prefetch. Options carries the
+// per-package upstream rules for this repository.
+type BatchRequest struct {
+	ID      remoteid.RemoteId
+	Options *larryconfig.ResolveOptions
+}
+
+// BatchResolver is implemented by providers whose API can answer many
+// repositories in one request (for example GitHub GraphQL aliases). The
+// returned map is keyed by BatchKey. Missing keys mean "fall back to the
+// per-repository path"; callers must never require a full result.
+type BatchResolver interface {
+	UpstreamProvider
+	BatchResolve(ctx context.Context, reqs []BatchRequest, allowPrereleases bool) (map[string]*Resolution, error)
+}
+
+// BatchKey is the stable lookup key for a batched resolution.
+func BatchKey(rid remoteid.RemoteId) string {
+	return string(rid.Type) + "|" + rid.String()
 }

@@ -26,7 +26,7 @@ func TestEveryCommandHasLongAndExample(t *testing.T) {
 	if strings.TrimSpace(rootCmd.Example) == "" {
 		t.Error("root has no Example")
 	}
-	for _, name := range []string{"bump", "import", "prepare", "test", "upstream"} {
+	for _, name := range []string{"bump", "import", "prepare", "test", "upstream", "manage"} {
 		c := commandByName(t, name)
 		if strings.TrimSpace(c.Long) == "" {
 			t.Errorf("%s has no Long", name)
@@ -56,9 +56,14 @@ func TestHelpNoStaleTokens(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"--tui", "--output"} {
+	for _, want := range []string{"--output"} {
 		if !strings.Contains(commandByName(t, "upstream").Long, want) {
 			t.Errorf("upstream Long does not mention %s", want)
+		}
+	}
+	for _, want := range []string{"bump", "prepare", "test"} {
+		if !strings.Contains(commandByName(t, "manage").Long, want) {
+			t.Errorf("manage Long does not mention %s", want)
 		}
 	}
 }
@@ -72,7 +77,7 @@ var phaseFlagAllowlist = map[string]bool{
 
 func TestHelpMentionsOnlyRealFlags(t *testing.T) {
 	flagRe := regexp.MustCompile(`--([a-z][a-z0-9-]*)`)
-	for _, name := range []string{"bump", "import", "prepare", "test", "upstream"} {
+	for _, name := range []string{"bump", "import", "prepare", "test", "upstream", "manage"} {
 		c := commandByName(t, name)
 		text := c.Long + "\n" + c.Example
 		for _, match := range flagRe.FindAllStringSubmatch(text, -1) {

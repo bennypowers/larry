@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -48,6 +49,128 @@ type GitHubProvider struct {
 
 func (p *GitHubProvider) Type() remoteid.RemoteIdType {
 	return remoteid.TypeGitHub
+}
+
+// CloneWithOptions returns a shallow copy carrying per-package resolution
+// options. Concurrent upstream checks must not mutate the shared registered
+// provider, so callers clone before setting ResolveOptions.
+func (p *GitHubProvider) CloneWithOptions(opts *larryconfig.ResolveOptions) *GitHubProvider {
+	clone := *p
+	clone.ResolveOptions = opts
+	return &clone
+}
+
+// batchChunkSize keeps aliases per GraphQL request well under GitHub's
+// node/query cost limits.
+const batchChunkSize = 40
+
+type batchReleaseNode struct {
+	TagName      string `json:"tagName"`
+	IsPrerelease bool   `json:"isPrerelease"`
+	IsDraft      bool   `json:"isDraft"`
+}
+
+type batchRepoResult struct {
+	Releases struct {
+		Nodes []batchReleaseNode `json:"nodes"`
+	} `json:"releases"`
+}
+
+type batchGraphQLResponse struct {
+	Data   map[string]batchRepoResult `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+// BatchResolve resolves release-based GitHub repositories in one GraphQL
+// request per chunk, using aliases. It deliberately handles only the default
+// release-first strategy; tags-only packages stay on the per-repository path.
+// Missing keys are expected and mean "fall back".
+func (p *GitHubProvider) BatchResolve(ctx context.Context, reqs []provider.BatchRequest, allowPrereleases bool) (map[string]*provider.Resolution, error) {
+	out := make(map[string]*provider.Resolution)
+	if p.Client == nil {
+		return out, fmt.Errorf("github: no client")
+	}
+
+	filtered := make([]provider.BatchRequest, 0, len(reqs))
+	for _, req := range reqs {
+		if req.Options != nil && req.Options.Strategy == "tags" {
+			continue
+		}
+		filtered = append(filtered, req)
+	}
+
+	var firstErr error
+	for start := 0; start < len(filtered); start += batchChunkSize {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
+		end := start + batchChunkSize
+		if end > len(filtered) {
+			end = len(filtered)
+		}
+		chunk := filtered[start:end]
+
+		var q strings.Builder
+		q.WriteString("query {\n")
+		for i, req := range chunk {
+			fmt.Fprintf(&q,
+				`  r%d: repository(owner: %q, name: %q) { releases(first: 100, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { tagName isPrerelease isDraft } } }`+"\n",
+				i, req.ID.Owner, req.ID.Repo)
+		}
+		q.WriteString("}")
+
+		data, err := p.Client.Gh("api", "graphql", "-f", "query="+q.String())
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		var resp batchGraphQLResponse
+		if err := json.Unmarshal(data, &resp); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("parse batch response: %w", err)
+			}
+			continue
+		}
+		if len(resp.Errors) > 0 {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("graphql: %s", resp.Errors[0].Message)
+			}
+			continue
+		}
+
+		for i, req := range chunk {
+			repo, ok := resp.Data[fmt.Sprintf("r%d", i)]
+			if !ok {
+				continue
+			}
+			prov := p.CloneWithOptions(req.Options)
+			var best *version.Version
+			for _, node := range repo.Releases.Nodes {
+				if node.IsDraft {
+					continue
+				}
+				if node.IsPrerelease && !allowPrereleases {
+					continue
+				}
+				v, err := prov.tryParseVersion(node.TagName)
+				if err != nil || v == nil {
+					continue
+				}
+				if best == nil || v.Compare(best) > 0 {
+					best = v
+				}
+			}
+			if best != nil {
+				out[provider.BatchKey(req.ID)] = &provider.Resolution{Version: best.Format()}
+			}
+		}
+	}
+
+	return out, firstErr
 }
 
 func (p *GitHubProvider) Metadata() provider.ProviderMetadata {

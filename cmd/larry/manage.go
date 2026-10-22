@@ -1,0 +1,151 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"sync"
+
+	"bennypowers.dev/larry/internal/cli"
+	"bennypowers.dev/larry/internal/upstream"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/spf13/cobra"
+)
+
+var (
+	manageFresh       bool
+	managePrereleases bool
+)
+
+// larryExecutable is replaced in tests.
+var larryExecutable = os.Executable
+
+func init() {
+	rootCmd.AddCommand(&manageCmd)
+	manageCmd.Flags().BoolVarP(&manageFresh, "fresh", "f", false,
+		"bypass cache and fetch fresh versions")
+	manageCmd.Flags().BoolVarP(&managePrereleases, "prereleases", "p", false,
+		"include pre-release versions in checks")
+}
+
+var manageCmd = cobra.Command{
+	Use:   "manage [cat/pkg...] [overlay-path]",
+	Short: "Interactive session: check, bump, prepare, and test",
+	Long: `Open an interactive upstream session for the overlay.
+
+The selected row supports:
+  b  bump the package        p  run prepare        t  run the test pipeline
+  R  refresh the check       enter  show details    ?  full key help
+  q / Esc / Ctrl+C  quit
+
+Mutating actions ask for confirmation. Their output streams into the view,
+and a successful action refreshes the table. Actions run the larry binary as
+a child, so behaviour matches the standalone commands.
+
+Requires a terminal. For scripted or piped use, run 'larry upstream'.`,
+	Example: `  larry manage
+  larry manage dev-util/cem
+  larry manage --fresh --prereleases
+  larry manage dev-util/cem /path/to/overlay`,
+	Args: cobra.ArbitraryArgs,
+	RunE: runManage,
+}
+
+func runManage(cmd *cobra.Command, args []string) error {
+	if !cli.IsTTY(cmd.OutOrStdout()) || !cli.IsTTY(os.Stdin) {
+		return fmt.Errorf("manage requires a terminal; use 'larry upstream' for plain output")
+	}
+
+	overlayDir, targets, registry, err := resolveUpstreamArgs(args)
+	if err != nil {
+		return err
+	}
+
+	runOpts := upstream.RunOptions{
+		OverlayDir:       overlayDir,
+		Registry:         registry,
+		Targets:          targets,
+		AllowPrereleases: managePrereleases,
+		Fresh:            manageFresh,
+		CacheDir:         cfg.ResolveCacheDir(rootFlags.CacheDir),
+		Jobs:             cfg.Jobs,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m := cli.NewUpstreamModel(cli.UpstreamModelOptions{
+		Context: ctx,
+		Fetch: func(ctx context.Context, progress func(upstream.Progress)) ([]upstream.UpstreamResult, error) {
+			opts := runOpts
+			opts.Context = ctx
+			opts.Progress = progress
+			return runUpstreamWithTargets(opts)
+		},
+		ShowAll: cfg.Verbose >= 1,
+		Theme: cli.NewTheme(cli.ThemeOptions{
+			Color:      color.Enabled(),
+			Hyperlinks: color.Enabled(),
+			Renderer:   lipgloss.NewRenderer(cmd.OutOrStdout()),
+		}),
+		Overlay: overlayDir,
+		Cancel:  cancel,
+		Actions: buildUpstreamActions(overlayDir),
+	})
+	_, runErr := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(cmd.OutOrStdout())).Run()
+	cancel()
+	if runErr != nil {
+		return runErr
+	}
+	return m.Err()
+}
+
+// buildUpstreamActions exposes the CLI commands as in-session actions. Each
+// runs the larry binary as a child so flag parsing, logging, and exit codes
+// stay identical to the standalone command, with output streamed line by line.
+func buildUpstreamActions(overlay string) cli.UpstreamActions {
+	run := func(command string, extra ...string) cli.ActionFunc {
+		return func(ctx context.Context, pkg string, onLine func(string)) error {
+			args := []string{command}
+			args = append(args, extra...)
+			args = append(args, "--overlay", overlay, "--color", "never", pkg)
+			return runLarryChild(ctx, args, onLine)
+		}
+	}
+	return cli.UpstreamActions{
+		Bump:    run("bump"),
+		Prepare: run("prepare"),
+		Test:    run("test", "--compile"),
+	}
+}
+
+// runLarryChild executes larry with args, forwarding stdout and stderr lines.
+func runLarryChild(ctx context.Context, args []string, onLine func(string)) error {
+	exe, err := larryExecutable()
+	if err != nil {
+		return fmt.Errorf("resolve larry executable: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, exe, args...)
+	cmd.Env = os.Environ()
+
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(pr)
+		for scanner.Scan() {
+			onLine(scanner.Text())
+		}
+	}()
+
+	runErr := cmd.Run()
+	_ = pw.Close()
+	wg.Wait()
+	return runErr
+}

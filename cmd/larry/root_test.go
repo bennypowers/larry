@@ -230,15 +230,15 @@ func TestFlagBeatsEnvBeatsFile(t *testing.T) {
 	}
 }
 
-func TestRootNoArgsExitsNonZero(t *testing.T) {
-	// D4: bare `larry` exits non-zero.
-	_, stderr, err := execCmd(t)
-	if err == nil {
-		t.Fatal("expected error from bare larry, got nil")
+func TestRootNoArgsShowsHelpWhenPiped(t *testing.T) {
+	// Non-TTY invocation (as in execCmd) prints help instead of starting the
+	// interactive session.
+	stdout, stderr, err := execCmd(t)
+	if err != nil {
+		t.Fatalf("bare larry: %v (stderr %q)", err, stderr)
 	}
-	code := exitCodeFor(err)
-	if code != 1 {
-		t.Errorf("exitCodeFor(bare larry err) = %d, want 1 (stderr: %s)", code, stderr)
+	if !strings.Contains(stdout, "Usage:") {
+		t.Errorf("stdout = %q, want help output", stdout)
 	}
 }
 

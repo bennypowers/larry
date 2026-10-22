@@ -11,6 +11,7 @@ and manage the ebuild lifecycle with provider-specific pipelines.
 
 | Command | Description |
 |---------|-------------|
+| `larry manage` | Interactive session: check, bump, prepare, test |
 | `larry upstream` | Check packages for upstream version updates |
 | `larry bump` | Create a new versioned ebuild from the latest |
 | `larry prepare` | Download distfiles, generate deps tarballs, upload, manifest |
@@ -46,18 +47,25 @@ larry upstream --prereleases -v
 # Machine-readable output
 larry upstream --output json | jq '.results[] | select(.status == "outdated")'
 
-# Use interactive TUI (default on a terminal)
-larry upstream --tui
+# Interactive session: check, bump, prepare, and test in one view
+larry manage
 
-# In the TUI: b=bump, p=prepare, t=test, R=refresh, enter=details
-larry upstream
-
-# Force plain output in a terminal
-larry upstream --no-tui
+# In the session: b=bump, p=prepare, t=test, R=refresh, enter=details
+larry manage dev-util/cem
 
 # Check a specific overlay
 larry upstream /path/to/my-overlay
 ```
+
+### Manage packages interactively
+
+Bare `larry` opens `larry manage` when both stdin and stdout are terminals, and
+prints help otherwise. `larry upstream` never starts a TUI, so piped and CI
+runs stay plain.
+
+Checks run concurrently (`--jobs`, 0 = auto). GitHub and SourceHut repositories
+are batch-resolved in as few API calls as possible; other providers use the
+worker pool.
 
 ### Bump a package
 
@@ -139,7 +147,7 @@ dry_run: false     # default dry-run mode
 overlay:           # default overlay path
 verbose: 0         # 0=results, 1=info, 2=debug, 3=trace
 cache_dir:         # version query cache directory
-jobs: 0            # parallel jobs (0 = auto; currently single-threaded)
+jobs: 0            # upstream check workers (0 = auto-detect)
 github_token:      # GitHub PAT for API rate limits
 remote: origin     # git remote for upstream resolution
 ```

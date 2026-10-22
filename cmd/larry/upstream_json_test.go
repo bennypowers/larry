@@ -91,20 +91,6 @@ func TestUpstreamJSON_ColorAlwaysNoANSI(t *testing.T) {
 	decodeJSONOutput(t, stdout)
 }
 
-func TestUpstreamJSON_TUIConflict(t *testing.T) {
-	ov := verbosityOverlay(t)
-	stdout, _, err := execCmd(t, "upstream", "--overlay", ov, "--tui", "--output", "json")
-	if err == nil {
-		t.Fatal("expected an error combining --tui with --output json")
-	}
-	if !strings.Contains(err.Error(), "--tui") || !strings.Contains(err.Error(), "--output") {
-		t.Errorf("error = %v, want it to mention both flags", err)
-	}
-	if stdout != "" {
-		t.Errorf("stdout = %q, want empty", stdout)
-	}
-}
-
 func TestUpstreamJSON_InvalidOutput(t *testing.T) {
 	ov := verbosityOverlay(t)
 	_, _, err := execCmd(t, "upstream", "--overlay", ov, "--output", "yaml")

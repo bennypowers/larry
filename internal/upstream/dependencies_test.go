@@ -212,7 +212,7 @@ func TestStripVersion(t *testing.T) {
 	}{
 		{">=dev-libs/foo-1.2.3:0", "dev-libs/foo"}, // slot then version
 		{"dev-libs/foo-1.0", "dev-libs/foo"},
-		{"dev-libs/foo", "dev-libs/foo"},          // no version
+		{"dev-libs/foo", "dev-libs/foo"}, // no version
 		{"sys-libs/db-5.3", "sys-libs/db"},
 		{"dev-lang/python-exec-2.4.6", "dev-lang/python-exec"},
 	}
@@ -272,9 +272,11 @@ type recordingProvider struct {
 	got      []remoteid.RemoteId
 }
 
-func (p *recordingProvider) Type() remoteid.RemoteIdType         { return p.mockType }
-func (p *recordingProvider) Name() string                        { return "rec" }
-func (p *recordingProvider) Metadata() provider.ProviderMetadata { return provider.ProviderMetadata{Name: "rec"} }
+func (p *recordingProvider) Type() remoteid.RemoteIdType { return p.mockType }
+func (p *recordingProvider) Name() string                { return "rec" }
+func (p *recordingProvider) Metadata() provider.ProviderMetadata {
+	return provider.ProviderMetadata{Name: "rec"}
+}
 func (p *recordingProvider) FetchLatestVersion(rid remoteid.RemoteId, _ bool) (*version.Version, error) {
 	p.got = append(p.got, rid)
 	if p.err != nil {

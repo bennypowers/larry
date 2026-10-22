@@ -31,9 +31,9 @@ func execCmd(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	testPortageTmpdir = ""
 	upstreamFresh = false
 	upstreamPrereleases = false
-	upstreamTUI = false
-	upstreamNoTUI = false
 	upstreamOutput = "text"
+	manageFresh = false
+	managePrereleases = false
 	prepareTUI = false
 	prepareType = ""
 	prepareAll = false
