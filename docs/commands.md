@@ -62,6 +62,12 @@ prompt: `c` compile, `m` merge, `d` default phases, `p` custom phases, `u` USE
 flags, `tab` next field, `enter` run. The chosen options are remembered for the
 next test.
 
+The table appears as soon as the package list is known, not after every
+check finishes. CURRENT and SOURCE are resolved locally, so they render
+immediately; LATEST and STATUS show a spinner per row until that package
+resolves. Overall progress sits in the header and footer, and the layout and
+column widths stay fixed while results arrive.
+
 Running actions keep the table on screen and use a pane below it for the
 checklist, elapsed time, and the tail of the streamed output. `esc` cancels.
 

@@ -1352,8 +1352,15 @@ func TestRunWithOptions_Progress(t *testing.T) {
 		}
 		prev = ev.Done
 	}
-	if events[0].Package == "" {
-		t.Errorf("first progress event has no package: %+v", events[0])
+	firstPackage := ""
+	for _, ev := range events {
+		if ev.Package != "" {
+			firstPackage = ev.Package
+			break
+		}
+	}
+	if firstPackage == "" {
+		t.Errorf("no progress event has a package: %+v", events)
 	}
 }
 

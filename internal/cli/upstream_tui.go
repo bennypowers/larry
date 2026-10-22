@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -169,7 +170,12 @@ type UpstreamModel struct {
 
 	results []upstream.UpstreamResult
 	visible []upstream.UpstreamResult
-	err     error
+
+	// Early list: the ordered plan and its locally-known values.
+	plan        []upstream.PlanEntry
+	pendingRows map[string]bool
+	widthsCache *[5]int
+	err         error
 
 	progressCh chan upstream.Progress
 
@@ -272,6 +278,9 @@ func (m *UpstreamModel) startFetch() tea.Cmd {
 	m.visible = nil
 	m.checked = 0
 	m.total = 0
+	m.plan = nil
+	m.pendingRows = nil
+	m.widthsCache = nil
 	m.progressCh = make(chan upstream.Progress, 128)
 	m.mode = modeBrowse
 	return tea.Batch(m.spinner.Tick, m.waitForProgress(m.progressCh), m.fetchCmd())
@@ -321,6 +330,34 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		p := upstream.Progress(msg)
 		m.checked = p.Done
 		m.total = p.Total
+		if len(p.Plan) > 0 {
+			m.plan = p.Plan
+			m.pendingRows = make(map[string]bool, len(p.Plan))
+			m.visible = m.visible[:0]
+			for _, entry := range p.Plan {
+				m.visible = append(m.visible, upstream.UpstreamResult{
+					Package: entry.Package,
+					Current: entry.Current,
+					Depth:   entry.Depth,
+					Source:  entry.Source,
+					Target:  entry.Target,
+				})
+				m.pendingRows[entry.Package] = true
+			}
+			widths := m.reservedWidths(p.Plan)
+			m.widthsCache = &widths
+			m.cursor = 0
+			m.offset = 0
+		}
+		if p.Result != nil {
+			for i := range m.visible {
+				if m.visible[i].Package == p.Package {
+					m.visible[i] = *p.Result
+					delete(m.pendingRows, p.Package)
+					break
+				}
+			}
+		}
 		if m.width > 8 {
 			m.progress.Width = m.width - 4
 		}
@@ -454,7 +491,7 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		if m.state == upstreamResults && m.mode == modeBrowse {
+		if m.mode == modeBrowse && (m.state == upstreamResults || m.state == upstreamFetching) {
 			m.navigate(msg.String())
 		}
 		return m, nil
@@ -844,12 +881,43 @@ func (m *UpstreamModel) rowValues(r upstream.UpstreamResult) [5]string {
 // left. SOURCE is the first column to truncate; only when it hits its minimum
 // do PACKAGE, STATUS, CURRENT, and LATEST give up space.
 func (m *UpstreamModel) columnWidths() [5]int {
+	if m.widthsCache != nil {
+		return *m.widthsCache
+	}
+	rows := make([][5]string, 0, len(m.visible))
+	for _, r := range m.visible {
+		rows = append(rows, m.rowValues(r))
+	}
+	return m.columnWidthsFor(rows)
+}
+
+// reservedWidths sizes columns from the plan alone, reserving room for the
+// status labels and typical version strings so the layout does not jump when
+// results arrive.
+func (m *UpstreamModel) reservedWidths(plan []upstream.PlanEntry) [5]int {
+	const (
+		latestReserve = 12
+		statusReserve = 11 // "HAS-RELEASE"
+	)
+	rows := make([][5]string, 0, len(plan))
+	for _, entry := range plan {
+		rows = append(rows, [5]string{
+			m.theme.PackageCell(upstream.UpstreamResult{Package: entry.Package, Depth: entry.Depth}),
+			entry.Current,
+			strings.Repeat(" ", latestReserve),
+			strings.Repeat(" ", statusReserve),
+			upstream.SourceText(upstream.UpstreamResult{Source: entry.Source}),
+		})
+	}
+	return m.columnWidthsFor(rows)
+}
+
+func (m *UpstreamModel) columnWidthsFor(rows [][5]string) [5]int {
 	natural := [5]int{}
 	for i, title := range upstreamColumnTitles {
 		natural[i] = runewidth.StringWidth(title)
 	}
-	for _, r := range m.visible {
-		values := m.rowValues(r)
+	for _, values := range rows {
 		for i, v := range values {
 			natural[i] = max(natural[i], runewidth.StringWidth(v))
 		}
@@ -923,23 +991,34 @@ func (m *UpstreamModel) renderTable() string {
 }
 
 func (m *UpstreamModel) renderRow(r upstream.UpstreamResult, selected bool, widths [5]int) string {
+	pending := m.state == upstreamFetching && m.pendingRows[r.Package]
 	values := m.rowValues(r)
+	if pending {
+		values[2] = m.spinnerGlyph()
+		values[3] = m.spinnerGlyph()
+	}
 	var b strings.Builder
 	for i, value := range values {
 		style := m.theme.TableCell()
 		switch {
 		case selected:
 			style = m.theme.TableSelectedCell()
-		case i == 3:
+		case i == 3 && !pending:
 			style = m.theme.StatusStyle(r.Status)
 		}
 		url := ""
-		if i == 4 && r.Status != upstream.StatusDeprecated {
+		if i == 4 && !pending && r.Status != upstream.StatusDeprecated {
 			url = r.Source.URL
 		}
 		b.WriteString(renderPaddedCell(value, widths[i], style, url, m.theme))
 	}
 	return b.String()
+}
+
+// spinnerGlyph returns the current spinner frame without ANSI, so it can be
+// measured and padded like any other cell.
+func (m *UpstreamModel) spinnerGlyph() string {
+	return ansi.Strip(m.spinner.View())
 }
 
 // renderPaddedCell truncates on visible width, pads inside the style, then
@@ -1013,17 +1092,28 @@ func (m *UpstreamModel) View() string {
 	}
 	switch m.state {
 	case upstreamFetching:
+		if len(m.plan) == 0 {
+			var b strings.Builder
+			b.WriteString(m.theme.HeaderStyle().Render("Checking upstream packages"))
+			if m.total > 0 {
+				fmt.Fprintf(&b, "  %d/%d", m.checked, m.total)
+			}
+			b.WriteString("\n\n")
+			b.WriteString(m.spinner.View())
+			b.WriteString(" checking")
+			b.WriteString("\n\n")
+			b.WriteString(m.theme.FooterStyle().Render("q: quit"))
+			return b.String()
+		}
 		var b strings.Builder
 		b.WriteString(m.theme.HeaderStyle().Render("Checking upstream packages"))
-		b.WriteString("\n\n")
-		b.WriteString(m.spinner.View())
-		b.WriteString(" checking")
-		if m.total > 0 {
-			fmt.Fprintf(&b, " %d/%d", m.checked, m.total)
-		}
+		fmt.Fprintf(&b, "  %d/%d", m.checked, m.total)
 		b.WriteString("\n")
+		b.WriteString(m.renderTable())
+		b.WriteString("\n")
+		m.progress.Width = max(m.width-16, 10)
 		b.WriteString(m.progressView())
-		b.WriteString("\n\n")
+		b.WriteString("  ")
 		b.WriteString(m.theme.FooterStyle().Render("q: quit"))
 		return b.String()
 

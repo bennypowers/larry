@@ -212,28 +212,42 @@ func runLarryChildFunc(ctx context.Context, args []string, onLine func(string)) 
 	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Env = os.Environ()
 
-	pr, pw := io.Pipe()
-	cmd.Stdout = pw
-	cmd.Stderr = pw
+	// Keep stdout and stderr apart. Merging both into one pipe lets their
+	// copy goroutines interleave writes mid-line, which corrupts the prefixed
+	// progress channel carried on stderr.
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
+
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
+	wg.Add(2)
+	var mu sync.Mutex
+	read := func(r *io.PipeReader) {
 		defer wg.Done()
-		scanner := bufio.NewScanner(pr)
+		scanner := bufio.NewScanner(r)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
-			onLine(scanner.Text())
+			line := scanner.Text()
+			mu.Lock()
+			onLine(line)
+			mu.Unlock()
 		}
 		// A scanner error (for example an over-long line) stops reads; drain
 		// the pipe so the child's writer never blocks and cmd.Run can return.
 		if err := scanner.Err(); err != nil {
+			mu.Lock()
 			onLine("output scanner: " + err.Error())
+			mu.Unlock()
 		}
-		_, _ = io.Copy(io.Discard, pr)
-	}()
+		_, _ = io.Copy(io.Discard, r)
+	}
+	go read(stdoutR)
+	go read(stderrR)
 
 	runErr := cmd.Run()
-	_ = pw.Close()
+	_ = stdoutW.Close()
+	_ = stderrW.Close()
 	wg.Wait()
 	return runErr
 }

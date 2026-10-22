@@ -70,6 +70,10 @@ action appends pipeline steps as they start. The test action opens a prompt:
 **c** compile, **m** merge, **d** default, **p** custom phases, **u** USE
 flags, **tab** next field, **enter** run; the choice is remembered.
 
+The package list appears before all checks finish: CURRENT and SOURCE render
+immediately, while LATEST and STATUS spin until each row resolves. Overall
+progress lives in the header and footer.
+
 Running actions keep the table on screen and use a pane below it for the
 checklist, elapsed time, and output tail.
 

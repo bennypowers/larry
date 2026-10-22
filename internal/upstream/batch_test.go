@@ -95,6 +95,54 @@ func hintsForAll(ver string) func([]provider.BatchRequest) map[string]*provider.
 	}
 }
 
+func TestRunWithOptions_ProgressPlanAndLiveResults(t *testing.T) {
+	overlay := githubOverlay(t, "alpha", "beta")
+	p := &batchProvider{hintsFor: hintsForAll("2.0.0"), perRepoVer: "9.9.9"}
+	reg := provider.NewProviderRegistry()
+	reg.Register(p)
+
+	var events []Progress
+	if _, err := RunWithTargets(RunOptions{
+		OverlayDir: overlay,
+		Registry:   reg,
+		CacheDir:   t.TempDir(),
+		Jobs:       2,
+		Progress:   func(p Progress) { events = append(events, p) },
+	}); err != nil {
+		t.Fatalf("RunWithTargets: %v", err)
+	}
+
+	if len(events) == 0 {
+		t.Fatal("no progress events")
+	}
+	plan := events[0].Plan
+	if len(plan) != 2 {
+		t.Fatalf("plan = %+v, want two rows", plan)
+	}
+	if plan[0].Package != "app-shells/alpha" || plan[1].Package != "app-shells/beta" {
+		t.Errorf("plan order = %+v", plan)
+	}
+	if plan[0].Current != "1.0.0" {
+		t.Errorf("plan Current = %q, want 1.0.0", plan[0].Current)
+	}
+	if plan[0].Source.Label != "GitHub:acme/alpha" {
+		t.Errorf("plan Source = %+v, want GitHub:acme/alpha", plan[0].Source)
+	}
+
+	var results int
+	for _, ev := range events {
+		if ev.Result != nil {
+			results++
+			if ev.Result.Latest != "2.0.0" {
+				t.Errorf("live result for %s Latest = %q", ev.Package, ev.Result.Latest)
+			}
+		}
+	}
+	if results != 2 {
+		t.Errorf("live result events = %d, want 2", results)
+	}
+}
+
 func TestPrefetchBatches_SingleBatchCallForAllRepos(t *testing.T) {
 	overlay := githubOverlay(t, "alpha", "beta")
 	p := &batchProvider{

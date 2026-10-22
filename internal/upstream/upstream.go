@@ -932,10 +932,26 @@ func resolveVersionFromSRCURI(ei *ebuild.EbuildInfo, providerType string, rid *r
 
 // Progress reports root-package progress. Dependency rows are part of the
 // work for a root but do not increment Done or Total.
+// PlanEntry is one row in the ordered package list, known before any provider
+// call. Current and Source are resolved locally, so the table can render them
+// immediately; only Latest and Status change when the check finishes.
+type PlanEntry struct {
+	Package    string
+	Current    string
+	Depth      int
+	Source     SourceInfo
+	Deprecated bool
+	Target     string
+}
+
 type Progress struct {
 	Package string
 	Done    int
 	Total   int
+	// Plan is set on the first event: the complete ordered row list.
+	Plan []PlanEntry
+	// Result is set when a row finishes. Nil on plan events.
+	Result *UpstreamResult
 }
 
 // RunOptions configures an upstream walk.
@@ -1031,7 +1047,45 @@ func walkAndCheckTargets(ctx context.Context, opts RunOptions, deprecated map[st
 	}
 
 	// Phase 2: resolve concurrently, preserving node order in the results.
+	if opts.Progress != nil && len(nodes) > 0 {
+		plan := make([]PlanEntry, len(nodes))
+		for i, n := range nodes {
+			plan[i] = planEntry(n)
+		}
+		opts.Progress(Progress{Plan: plan, Total: len(nodes)})
+	}
 	return resolveNodes(ctx, opts.OverlayDir, nodes, registry, allowPrereleases, cache, opts.Jobs, opts.Progress)
+}
+
+// planEntry builds the locally-known part of a row: current version and
+// source. Provider-dependent fields stay empty until the check resolves.
+func planEntry(n checkNode) PlanEntry {
+	entry := PlanEntry{
+		Package: n.Package,
+		Current: n.Ebuild.PVR,
+		Depth:   n.Depth,
+	}
+	if n.Ebuild.Live {
+		entry.Current = "9999 (live)"
+	}
+	if n.Deprecated != nil {
+		entry.Deprecated = true
+		entry.Source = SourceInfo{Label: n.Deprecated.Source}
+		entry.Target = n.Deprecated.Target
+		return entry
+	}
+	id, err := identifyEbuild(n.Ebuild)
+	if err != nil {
+		return entry
+	}
+	if id.resOpts != nil && !id.resOpts.Check {
+		entry.Source = SourceInfo{Label: "vendor", URL: id.einfo.HOMEPAGE}
+		return entry
+	}
+	if id.rid != nil {
+		entry.Source = resolveSourceInfo(id.rid)
+	}
+	return entry
 }
 
 // prefetchBatches asks batch-capable providers to resolve many repositories in
@@ -1165,7 +1219,13 @@ func resolveNodes(
 					// Serialise callbacks so consumers see a monotonic Done.
 					mu.Lock()
 					done++
-					progress(Progress{Package: n.Package, Done: done, Total: len(nodes)})
+					res := results[i]
+					progress(Progress{
+						Package: n.Package,
+						Done:    done,
+						Total:   len(nodes),
+						Result:  &res,
+					})
 					mu.Unlock()
 				}
 			}

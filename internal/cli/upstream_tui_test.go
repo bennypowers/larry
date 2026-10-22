@@ -161,6 +161,43 @@ func TestUpstreamModel_DetailToggle(t *testing.T) {
 	}
 }
 
+func TestUpstreamModel_FetchingShowsPlanAndSpinners(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.Update(upstreamProgressMsg(upstream.Progress{
+		Total: 2,
+		Plan: []upstream.PlanEntry{
+			{
+				Package: "app-shells/alpha", Current: "1.0.0",
+				Source: upstream.SourceInfo{Label: "GitHub:acme/alpha", URL: "https://github.com/acme/alpha"},
+			},
+			{Package: "app-shells/dep", Current: "2.0.0", Depth: 1},
+		},
+	}))
+	view := m.View()
+	for _, want := range []string{"Checking upstream packages", "0/2", "PACKAGE", "app-shells/alpha", "1.0.0", "  app-shells/dep"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("fetching view missing %q:\n%s", want, view)
+		}
+	}
+	if lines := strings.Split(view, "\n"); len(lines) != 30 {
+		t.Errorf("fetching view has %d lines, want 30", len(lines))
+	}
+
+	m.Update(upstreamProgressMsg(upstream.Progress{
+		Package: "app-shells/alpha",
+		Done:    1,
+		Total:   2,
+		Result: &upstream.UpstreamResult{
+			Package: "app-shells/alpha", Current: "1.0.0", Latest: "2.0.0",
+			Status: upstream.StatusOutdated,
+		},
+	}))
+	view = m.View()
+	if !strings.Contains(view, "OUTDATED") || !strings.Contains(view, "1/2") {
+		t.Errorf("live row missing after result:\n%s", view)
+	}
+}
+
 func TestUpstreamModel_ProgressMessage(t *testing.T) {
 	m, _ := newModelForTest(t, false)
 	m.Update(upstreamProgressMsg(upstream.Progress{Package: "dev-util/alpha", Done: 1, Total: 3}))
