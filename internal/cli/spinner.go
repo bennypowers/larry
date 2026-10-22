@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -11,30 +12,28 @@ import (
 // spinnerFrames are the frames for the loading spinner animation.
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// AnimateSpinner runs fn() while printing a spinner animation.
-// Returns fn's string result and error. The result is NOT printed here:
-// callers decide whether to write it (honouring --quiet and output format).
-// Errors are never printed; they belong to the caller.
-// If quiet is true, the animation is suppressed.
-func AnimateSpinner(msg string, quiet bool, fn func() (string, error)) (string, error) {
-	if quiet {
+// IsTTY reports whether w is a terminal.
+func IsTTY(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
+}
+
+// AnimateSpinner runs fn() while drawing a spinner to out. The result and
+// error are returned to the caller and never printed here, so the caller can
+// honour --quiet and output formats. Animation is skipped unless enabled.
+func AnimateSpinner(out io.Writer, msg string, enabled bool, fn func() (string, error)) (string, error) {
+	if !enabled {
 		return fn()
 	}
 
-	// Check if stdout is a TTY
-	if !isTTYStdout() {
-		return fn()
-	}
-
-	// Run fn in a goroutine so spinner can run concurrently
 	type result struct {
 		out string
 		err error
 	}
 	ch := make(chan result, 1)
 	go func() {
-		out, err := fn()
-		ch <- result{out, err}
+		o, err := fn()
+		ch <- result{o, err}
 	}()
 
 	s := 0
@@ -46,16 +45,11 @@ func AnimateSpinner(msg string, quiet bool, fn func() (string, error)) (string, 
 		case <-ticker.C:
 			frame := spinnerFrames[s%len(spinnerFrames)]
 			s++
-			fmt.Printf("\r%s %s  ", frame, msg)
+			// Best-effort animation; a closed writer just stops drawing.
+			_, _ = fmt.Fprintf(out, "\r%s %s  ", frame, msg)
 		case res := <-ch:
-			// Move to a new line; the caller writes the result.
-			fmt.Println()
+			_, _ = fmt.Fprint(out, "\r\033[K")
 			return res.out, res.err
 		}
 	}
-}
-
-// isTTYStdout checks if stdout is a TTY using golang.org/x/term.
-func isTTYStdout() bool {
-	return term.IsTerminal(int(os.Stdout.Fd()))
 }

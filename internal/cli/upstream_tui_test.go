@@ -2,203 +2,186 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"strings"
 	"testing"
 
-	"bennypowers.dev/larry/internal/output"
 	"bennypowers.dev/larry/internal/upstream"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// ---------------------------------------------------------------------------
-// TestTUI_UpstreamTable — renders upstream results as colored table
-// ---------------------------------------------------------------------------
+func newModelForTest(t *testing.T, showAll bool) (*UpstreamModel, *bytes.Buffer) {
+	t.Helper()
+	theme, _ := themeForTest(false, false)
+	m := NewUpstreamModel(UpstreamModelOptions{
+		Context: context.Background(),
+		Fetch: func(context.Context, func(upstream.Progress)) ([]upstream.UpstreamResult, error) {
+			return nil, nil
+		},
+		ShowAll: showAll,
+		Theme:   theme,
+		Overlay: "/tmp/overlay",
+	})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	return m, nil
+}
 
-func TestTUI_UpstreamTable(t *testing.T) {
-	results := []*upstream.UpstreamResult{
-		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
-		{Package: "dev-python/bar", Current: "2.0.0", Latest: "2.0.0", Status: upstream.StatusUpToDate, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
-		{Package: "dev-ruby/baz", Current: "3.0.0", Latest: "", Status: upstream.StatusUnknown, Source: upstream.SourceInfo{}},
+func sampleResults() []upstream.UpstreamResult {
+	return []upstream.UpstreamResult{
+		{
+			Package: "dev-util/alpha", Current: "1.0.0", Latest: "1.1.0",
+			Status: upstream.StatusOutdated,
+			Source: upstream.SourceInfo{Label: "GitHub:acme/alpha", URL: "https://github.com/acme/alpha"},
+		},
+		{
+			Package: "dev-util/dep", Current: "2.0.0", Latest: "2.0.0",
+			Status: upstream.StatusUpToDate, Depth: 1,
+			Source: upstream.SourceInfo{Label: "GitHub:acme/dep", URL: "https://github.com/acme/dep"},
+		},
+		{
+			Package: "dev-util/broken", Current: "3.0.0",
+			Status: upstream.StatusUnknown,
+			Source: upstream.SourceInfo{},
+			Error:  "no provider match",
+		},
 	}
+}
 
-	m := newUpstreamModel(results)
+func TestUpstreamModel_InitialViewShowsSpinner(t *testing.T) {
+	m, _ := newModelForTest(t, false)
 	view := m.View()
-
-	// Should contain package names
-	if !bytes.Contains([]byte(view), []byte("dev-lisp/foo")) {
-		t.Error("table should contain 'dev-lisp/foo'")
-	}
-	if !bytes.Contains([]byte(view), []byte("dev-python/bar")) {
-		t.Error("table should contain 'dev-python/bar'")
-	}
-	if !bytes.Contains([]byte(view), []byte("dev-ruby/baz")) {
-		t.Error("table should contain 'dev-ruby/baz'")
-	}
-
-	// Should contain status markers
-	if !bytes.Contains([]byte(view), []byte("OUTDATED")) {
-		t.Error("table should contain 'OUTDATED'")
-	}
-	if !bytes.Contains([]byte(view), []byte("UP-TO-DATE")) {
-		t.Error("table should contain 'UP-TO-DATE'")
-	}
-	if !bytes.Contains([]byte(view), []byte("UNKNOWN")) {
-		t.Error("table should contain 'UNKNOWN'")
+	if !strings.Contains(view, "Checking upstream") {
+		t.Errorf("initial view = %q, want a checking message", view)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestTUI_UpstreamProgress — spinner while fetching
-// ---------------------------------------------------------------------------
+func TestUpstreamModel_InitReturnsCommand(t *testing.T) {
+	m, _ := newModelForTest(t, false)
+	if m.Init() == nil {
+		t.Error("Init() = nil, want a batch command")
+	}
+}
 
-func TestTUI_UpstreamProgress(t *testing.T) {
-	m := newUpstreamModel(nil)
-	m.state = fetchingState
-
+func TestUpstreamModel_DoneRendersTable(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.Update(upstreamDoneMsg{Results: sampleResults()})
 	view := m.View()
-
-	// Should contain spinner-like content (not empty)
-	if len(view) == 0 {
-		t.Error("progress view should not be empty")
-	}
-
-	// Should not contain a table
-	if bytes.Contains([]byte(view), []byte("OUTDATED")) {
-		t.Error("progress view should not contain table data")
+	for _, want := range []string{"dev-util/alpha", "dev-util/dep", "OUTDATED", "UP-TO-DATE", "  dev-util/dep"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view missing %q:\n%s", want, view)
+		}
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestTUI_ProvideSourceNames — displays provider names
-// ---------------------------------------------------------------------------
-
-func TestTUI_ProvideSourceNames(t *testing.T) {
-	results := []*upstream.UpstreamResult{
-		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
-		{Package: "dev-python/bar", Current: "2.0.0", Latest: "2.0.0", Status: upstream.StatusUpToDate, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
-	}
-
-	m := newUpstreamModel(results)
+func TestUpstreamModel_ShowAllFilter(t *testing.T) {
+	m, _ := newModelForTest(t, false)
+	m.Update(upstreamDoneMsg{Results: sampleResults()})
 	view := m.View()
+	if strings.Contains(view, "dev-util/dep") {
+		t.Errorf("default view showed an UP-TO-DATE row:\n%s", view)
+	}
+	if !strings.Contains(view, "dev-util/alpha") {
+		t.Errorf("default view hid the significant row:\n%s", view)
+	}
 
-	// Should contain source labels
-	if !bytes.Contains([]byte(view), []byte("GitHub:test/pkg")) {
-		t.Error("table should contain source label")
+	mAll, _ := newModelForTest(t, true)
+	mAll.Update(upstreamDoneMsg{Results: sampleResults()})
+	if !strings.Contains(mAll.View(), "dev-util/dep") {
+		t.Errorf("ShowAll view hid the UP-TO-DATE row:\n%s", mAll.View())
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestTUI_NonTTY_Fallback — stdout not TTY → falls back to table output
-// ---------------------------------------------------------------------------
-
-func TestTUI_NonTTY_Fallback(t *testing.T) {
-	results := []*upstream.UpstreamResult{
-		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
+func TestUpstreamModel_DoneError(t *testing.T) {
+	m, _ := newModelForTest(t, false)
+	m.Update(upstreamDoneMsg{Err: errors.New("walk exploded")})
+	if m.Err() == nil || !strings.Contains(m.Err().Error(), "walk exploded") {
+		t.Errorf("Err() = %v", m.Err())
 	}
-
-	// When output is not TTY, table output should be used instead of TUI
-	view := nonTTYTable(results)
-
-	// Should contain package name
-	if !bytes.Contains([]byte(view), []byte("dev-lisp/foo")) {
-		t.Error("fallback table should contain 'dev-lisp/foo'")
+	if !strings.Contains(m.View(), "walk exploded") {
+		t.Errorf("view does not show the error:\n%s", m.View())
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestTUI_ColorSupport — degrades in non-color terminals
-// ---------------------------------------------------------------------------
-
-func TestTUI_ColorSupport(t *testing.T) {
-	results := []*upstream.UpstreamResult{
-		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
+func TestUpstreamModel_Keybindings_Quit(t *testing.T) {
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'q'}},
+		{Type: tea.KeyEsc},
+		{Type: tea.KeyCtrlC},
+	} {
+		m, _ := newModelForTest(t, false)
+		m.Update(key)
+		if !m.Quitting() {
+			t.Errorf("%v did not quit", key)
+		}
 	}
+}
 
-	// Non-color model
-	ch, _ := output.NewColorHelper("never")
-	m := newUpstreamModelWithColors(results, ch)
+func TestUpstreamModel_Keybindings_Navigate(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.Update(upstreamDoneMsg{Results: sampleResults()})
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if got := m.Selected(); got != 1 {
+		t.Errorf("after down Selected() = %d, want 1", got)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if got := m.Selected(); got != 2 {
+		t.Errorf("after j Selected() = %d, want 2", got)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.Selected(); got != 1 {
+		t.Errorf("after up Selected() = %d, want 1", got)
+	}
+}
+
+func TestUpstreamModel_ScrollToBottom(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.Update(upstreamDoneMsg{Results: sampleResults()})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	if got, want := m.Selected(), len(sampleResults())-1; got != want {
+		t.Errorf("after end Selected() = %d, want %d", got, want)
+	}
+}
+
+func TestUpstreamModel_DetailToggle(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.Update(upstreamDoneMsg{Results: sampleResults()})
+	if strings.Contains(m.View(), "https://github.com/acme/alpha") {
+		t.Fatal("detail visible before toggling")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	view := m.View()
-
-	// Should still render without error
-	if len(view) == 0 {
-		t.Error("non-color view should not be empty")
+	if !strings.Contains(view, "https://github.com/acme/alpha") {
+		t.Errorf("detail toggle did not show the source URL:\n%s", view)
 	}
-
-	// Color model
-	ch2, _ := output.NewColorHelper("always")
-	m2 := newUpstreamModelWithColors(results, ch2)
-	view2 := m2.View()
-
-	if len(view2) == 0 {
-		t.Error("color view should not be empty")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if strings.Contains(m.View(), "https://github.com/acme/alpha") {
+		t.Errorf("detail did not hide on second toggle:\n%s", m.View())
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestTUI_Keybindings — q quit, j/k navigate
-// ---------------------------------------------------------------------------
-
-func TestTUI_Keybindings_Quit(t *testing.T) {
-	results := []*upstream.UpstreamResult{
-		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
-	}
-
-	m := newUpstreamModel(results)
-	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-
-	if !m.quitting() {
-		t.Error("Ctrl+C should quit")
-	}
-
-	_, msg := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	if msg == nil {
-		t.Error("should return message on quit")
+func TestUpstreamModel_ProgressMessage(t *testing.T) {
+	m, _ := newModelForTest(t, false)
+	m.Update(upstreamProgressMsg(upstream.Progress{Package: "dev-util/alpha", Done: 1, Total: 3}))
+	if !strings.Contains(m.View(), "1/3") {
+		t.Errorf("view = %q, want checked 1/3", m.View())
 	}
 }
 
-func TestTUI_Keybindings_Navigate(t *testing.T) {
-	results := []*upstream.UpstreamResult{
-		{Package: "dev-lisp/foo", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
-		{Package: "dev-python/bar", Current: "2.0.0", Latest: "2.0.0", Status: upstream.StatusUpToDate, Source: upstream.SourceInfo{Label: "GitHub:test/pkg", URL: "github.com/test/pkg"}},
-		{Package: "dev-ruby/baz", Current: "3.0.0", Latest: "", Status: upstream.StatusUnknown, Source: upstream.SourceInfo{}},
+func TestUpstreamModel_WindowResize(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.Update(upstreamDoneMsg{Results: sampleResults()})
+	for _, size := range []tea.WindowSizeMsg{{Width: 120, Height: 40}, {Width: 20, Height: 6}} {
+		m.Update(size)
+		_ = m.View()
 	}
+}
 
-	m := newUpstreamModel(results)
-	_ = m.View()
-
-	// Navigate down with j
-	_, msg := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	if msg != nil {
-		t.Errorf("down navigation returned unexpected msg: %v", msg)
-	}
-	if m.cursor != 1 {
-		t.Errorf("cursor = %d, want 1", m.cursor)
-	}
-
-	// Navigate down again
-	_, msg = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	if msg != nil {
-		t.Errorf("down navigation returned unexpected msg: %v", msg)
-	}
-	if m.cursor != 2 {
-		t.Errorf("cursor = %d, want 2", m.cursor)
-	}
-
-	// Navigate up with k
-	_, msg = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-	if msg != nil {
-		t.Errorf("up navigation returned unexpected msg: %v", msg)
-	}
-	if m.cursor != 1 {
-		t.Errorf("cursor = %d, want 1", m.cursor)
-	}
-
-	// Navigate up to boundary
-	_, msg = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-	if msg != nil {
-		t.Errorf("up navigation returned unexpected msg: %v", msg)
-	}
-	if m.cursor != 0 {
-		t.Errorf("cursor = %d, want 0 (boundary)", m.cursor)
+func TestUpstreamModel_ColorDisabledNoANSI(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.Update(upstreamDoneMsg{Results: sampleResults()})
+	if view := m.View(); strings.Contains(view, "\x1b[") {
+		t.Errorf("colour-disabled model emitted ANSI:\n%q", view)
 	}
 }

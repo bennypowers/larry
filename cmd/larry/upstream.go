@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"bennypowers.dev/larry/internal/upstream"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 )
 
@@ -154,48 +156,57 @@ Examples:
 			return upstream.RenderJSON(cmd.OutOrStdout(), results)
 		}
 
+		// --tui needs a terminal; fall back rather than corrupt captured output.
+		useTUI := upstreamTUI
+		if useTUI && !cli.IsTTY(cmd.OutOrStdout()) {
+			log.Warn("--tui requires a terminal; falling back to plain output")
+			useTUI = false
+		}
+
 		// Non-TTY mode: run check with spinner.
-		if !upstreamTUI {
+		if !useTUI {
 			spinnerMsg := fmt.Sprintf("Checking packages in overlay: %s", overlayDir)
-			out, runErr := cli.AnimateSpinner(spinnerMsg, cfg.Quiet, func() (string, error) {
-				results, err := runUpstreamWithTargets(runOpts)
-				if err != nil {
-					// Errors belong to the caller: return "" so the spinner
-					// never prints error text — RunE reports it to stderr
-					// with a non-zero exit.
-					return "", err
-				}
-
-				// Filter results based on verbosity (exclude LIVE unless --verbose).
-				if cfg.Verbose == 0 {
-					var filtered []upstream.UpstreamResult
-					for _, r := range results {
-						if r.Status.IsSignificant() {
-							filtered = append(filtered, r)
-						}
+			out, runErr := cli.AnimateSpinner(cmd.OutOrStdout(), spinnerMsg,
+				!cfg.Quiet && cli.IsTTY(cmd.OutOrStdout()),
+				func() (string, error) {
+					results, err := runUpstreamWithTargets(runOpts)
+					if err != nil {
+						// Errors belong to the caller: return "" so the spinner
+						// never prints error text — RunE reports it to stderr
+						// with a non-zero exit.
+						return "", err
 					}
-					results = filtered
-				}
 
-				// Render output.
-				if len(results) == 0 {
-					log.Msg("All packages are up-to-date.")
-					log.Msg("Check complete. Cache stored in: %s (expires after 6h)", upstream.DefaultCachePath())
-					log.Msg("Use --fresh to force a refresh.")
-					return "", nil
-				}
+					// Filter results based on verbosity (exclude LIVE unless --verbose).
+					if cfg.Verbose == 0 {
+						var filtered []upstream.UpstreamResult
+						for _, r := range results {
+							if r.Status.IsSignificant() {
+								filtered = append(filtered, r)
+							}
+						}
+						results = filtered
+					}
 
-				var buf strings.Builder
-				if err := upstream.RenderTable(&buf, results, upstream.RenderOptions{
-					Color:      color.Enabled(),
-					Hyperlinks: color.Enabled(),
-				}); err != nil {
-					return "", fmt.Errorf("render table: %w", err)
-				}
-				buf.WriteString("\nCheck complete. Cache stored in: " + upstream.DefaultCachePath() + " (expires after 6h)\n")
-				buf.WriteString("Use --fresh to force a refresh.\n")
-				return buf.String(), nil
-			})
+					// Render output.
+					if len(results) == 0 {
+						log.Msg("All packages are up-to-date.")
+						log.Msg("Check complete. Cache stored in: %s (expires after 6h)", upstream.DefaultCachePath())
+						log.Msg("Use --fresh to force a refresh.")
+						return "", nil
+					}
+
+					var buf strings.Builder
+					if err := upstream.RenderTable(&buf, results, upstream.RenderOptions{
+						Color:      color.Enabled(),
+						Hyperlinks: color.Enabled(),
+					}); err != nil {
+						return "", fmt.Errorf("render table: %w", err)
+					}
+					buf.WriteString("\nCheck complete. Cache stored in: " + upstream.DefaultCachePath() + " (expires after 6h)\n")
+					buf.WriteString("Use --fresh to force a refresh.\n")
+					return buf.String(), nil
+				})
 			if runErr != nil {
 				return fmt.Errorf("upstream check failed: %w", runErr)
 			}
@@ -207,34 +218,31 @@ Examples:
 			return nil
 		}
 
-		// TUI mode: run check then show interactive TUI.
-		results, err := runUpstreamWithTargets(runOpts)
-		if err != nil {
-			return fmt.Errorf("upstream check failed: %w", err)
+		// TUI mode: run the walk inside the model so progress and the spinner
+		// are live, and filter there according to -v.
+		ctx, cancel := context.WithCancel(context.Background())
+		m := cli.NewUpstreamModel(cli.UpstreamModelOptions{
+			Context: ctx,
+			Fetch: func(ctx context.Context, progress func(upstream.Progress)) ([]upstream.UpstreamResult, error) {
+				opts := runOpts
+				opts.Context = ctx
+				opts.Progress = progress
+				return runUpstreamWithTargets(opts)
+			},
+			ShowAll: cfg.Verbose >= 1,
+			Theme: cli.NewTheme(cli.ThemeOptions{
+				Color:      color.Enabled(),
+				Hyperlinks: color.Enabled(),
+				Renderer:   lipgloss.NewRenderer(cmd.OutOrStdout()),
+			}),
+			Overlay: overlayDir,
+			Cancel:  cancel,
+		})
+		_, runErr := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(cmd.OutOrStdout())).Run()
+		cancel()
+		if runErr != nil {
+			return runErr
 		}
-
-		// Filter results based on verbosity (exclude LIVE unless --verbose).
-		if cfg.Verbose == 0 {
-			var filtered []upstream.UpstreamResult
-			for _, r := range results {
-				if r.Status.IsSignificant() {
-					filtered = append(filtered, r)
-				}
-			}
-			results = filtered
-		}
-
-		if len(results) == 0 {
-			log.Msg("All packages are up-to-date.")
-			return nil
-		}
-
-		var ptrResults []*upstream.UpstreamResult
-		for i := range results {
-			ptrResults = append(ptrResults, &results[i])
-		}
-		m := cli.NewUpstreamModel(ptrResults)
-		_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
-		return err
+		return m.Err()
 	},
 }
