@@ -187,6 +187,20 @@ func TestPrepareProgressMapping(t *testing.T) {
 	}
 }
 
+func TestProgressDetailCarriesNoStep(t *testing.T) {
+	var buf bytes.Buffer
+	emitter := progressEmitter{enabled: true, w: &buf}
+	mapPrepareSubstep(emitter, prepare.ProgressEvent{Kind: prepare.ProgressStep, Step: "manifest"})
+
+	progress, ok := parseTestProgress(strings.TrimSpace(buf.String()))
+	if !ok {
+		t.Fatalf("detail line did not parse: %q", buf.String())
+	}
+	if progress.Step != "" || progress.Message != "manifest" {
+		t.Errorf("progress = %+v, want detail manifest with no step row", progress)
+	}
+}
+
 func TestParseTestProgress(t *testing.T) {
 	line := `larry-progress:{"kind":1,"step":"image","state":1}`
 	got, ok := parseTestProgress(line)

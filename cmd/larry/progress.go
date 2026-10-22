@@ -73,6 +73,12 @@ func (e progressEmitter) step(name string, state int) {
 	e.emit(actionProgressWire{Kind: progressStep, Step: name, State: state})
 }
 
+// detail reports the current sub-step without adding a checklist row, for
+// callers whose child pipeline names work dynamically.
+func (e progressEmitter) detail(name string) {
+	e.emit(actionProgressWire{Kind: progressStep, State: stepRunning, Message: name})
+}
+
 func (e progressEmitter) done() {
 	e.emit(actionProgressWire{Kind: progressDone})
 }
@@ -111,5 +117,13 @@ func mapPrepareProgress(emitter progressEmitter, ev prepare.ProgressEvent) {
 		emitter.fail(ev.Err)
 	case prepare.ProgressStart, prepare.ProgressLog:
 		// Start carries no step list; logs already stream to the pane.
+	}
+}
+
+// mapPrepareSubstep forwards prepare's named steps as detail text, for callers
+// (bump) that own the checklist and only need to show what prepare is doing.
+func mapPrepareSubstep(emitter progressEmitter, ev prepare.ProgressEvent) {
+	if ev.Kind == prepare.ProgressStep && ev.Step != "" {
+		emitter.detail(ev.Step)
 	}
 }

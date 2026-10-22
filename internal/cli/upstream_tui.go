@@ -184,6 +184,7 @@ type UpstreamModel struct {
 	actionPkg    string
 	actionView   viewport.Model
 	actionSteps  []actionStep
+	actionDetail string
 	actionStart  time.Time
 
 	// Test options are remembered between runs. testInput edits one field of
@@ -311,7 +312,7 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
-		if m.done {
+		if m.done && m.mode != modeRunning {
 			return m, nil
 		}
 		return m, cmd
@@ -567,6 +568,7 @@ func (m *UpstreamModel) startAction() tea.Cmd {
 	m.actionLines = nil
 	m.actionErr = nil
 	m.actionSteps = nil
+	m.actionDetail = ""
 	m.actionStart = time.Now()
 	m.actionView.SetContent("")
 
@@ -602,7 +604,7 @@ func (m *UpstreamModel) startAction() tea.Cmd {
 		}
 	}()
 	if m.animate {
-		return tea.Batch(m.waitAction(ch), m.actionTick())
+		return tea.Batch(m.waitAction(ch), m.spinner.Tick, m.actionTick())
 	}
 	return m.waitAction(ch)
 }
@@ -618,6 +620,9 @@ func (m *UpstreamModel) actionTick() tea.Cmd {
 // named by the child are appended on first sight, so commands that discover
 // their steps as they go do not need an up-front list.
 func (m *UpstreamModel) applyActionProgress(p ActionProgress) {
+	if p.Message != "" && p.Step == "" {
+		m.actionDetail = p.Message
+	}
 	if len(p.Steps) > 0 {
 		m.actionSteps = make([]actionStep, 0, len(p.Steps))
 		for _, name := range p.Steps {
@@ -1060,24 +1065,33 @@ func (m *UpstreamModel) actionRunningView() string {
 // checklist, and the tail of the child's output.
 func (m *UpstreamModel) actionPaneView() string {
 	paneHeight := m.actionPaneHeight()
-	logHeight := paneHeight - 2
+	logHeight := paneHeight - 3
 	if logHeight < 1 {
 		logHeight = 1
 	}
 
-	label := fmt.Sprintf("── %s %s", m.pending, m.actionPkg)
+	border := strings.Repeat("─", max(m.width, 1))
+	label := fmt.Sprintf("%s %s", m.pending, m.actionPkg)
 	if !m.actionStart.IsZero() {
 		label += " · " + time.Since(m.actionStart).Round(time.Second).String()
 	}
+	if m.actionDetail != "" {
+		label += " · " + m.actionDetail
+	}
 	lines := make([]string, 0, paneHeight)
-	lines = append(lines, m.theme.FooterStyle().Render(truncateToWidth(label, m.width-1)))
+	lines = append(lines, m.theme.FooterStyle().Render(border))
+	lines = append(lines, truncateToWidth(label, m.width-1))
 
 	var steps strings.Builder
 	for i, step := range m.actionSteps {
 		if i > 0 {
 			steps.WriteString("   ")
 		}
-		fmt.Fprintf(&steps, "%s %s", stepGlyph(step.state), step.name)
+		glyph := stepGlyph(step.state)
+		if step.state == ActionStepRunning && m.animate {
+			glyph = m.spinner.View()
+		}
+		fmt.Fprintf(&steps, "%s %s", glyph, step.name)
 	}
 	lines = append(lines, truncateToWidth(steps.String(), m.width-1))
 

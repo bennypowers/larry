@@ -433,9 +433,10 @@ func TestUpstreamModel_RunningActionKeepsTableVisible(t *testing.T) {
 
 	m.applyActionProgress(ActionProgress{Steps: []string{"bump", "prepare", "commit"}})
 	m.applyActionProgress(ActionProgress{Step: "bump", State: ActionStepDone})
+	m.applyActionProgress(ActionProgress{Message: "manifest"})
 
 	view := m.View()
-	for _, want := range []string{"PACKAGE", "dev-util/alpha", "✓ bump", "○ prepare", "esc: cancel action"} {
+	for _, want := range []string{"PACKAGE", "dev-util/alpha", "✓ bump", "○ prepare", "manifest", "────", "esc: cancel action"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("running view missing %q:\n%s", want, view)
 		}
