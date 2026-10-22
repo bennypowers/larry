@@ -645,6 +645,44 @@ func TestContainer_PodmanCheckUsesRunner(t *testing.T) {
 // Helper tests — still valid after changes
 // ---------------------------------------------------------------------------
 
+func TestContainer_RunEmergeNonTUIErrorIncludesCommand(t *testing.T) {
+	// The non-TUI podman failure must include the command line (the TUI
+	// branch does) so the user can see what was actually run.
+	tmpDir := t.TempDir()
+	ebuildPath := filepath.Join(tmpDir, "dev-util", "javy", "javy-9.1.0.ebuild")
+	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.MkdirAll(filepath.Join(tmpDir, "profiles"), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.WriteFile(filepath.Join(tmpDir, "profiles", "repo_name"), []byte("bennypowers"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+
+	// Stub podman on PATH that fails loudly.
+	binDir := filepath.Join(tmpDir, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	stubScript := "#!/bin/sh\necho stub podman failure >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "podman"), []byte(stubScript), 0755); err != nil { t.Fatalf("WriteFile: %v", err) }
+	t.Setenv("PATH", binDir)
+
+	cfg := &ContainerConfig{
+		Overlay:   tmpDir,
+		CacheDir:  filepath.Join(tmpDir, "cache"),
+		ImageName: "larry-test",
+	}
+
+	err := runContainerEmerge(ebuildPath, cfg, nil, false)
+	if err == nil {
+		t.Fatal("expected error from failing podman stub")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "podman run failed") {
+		t.Errorf("error = %q, want prefix \"podman run failed\"", msg)
+	}
+	if !strings.Contains(msg, "=dev-util/javy-9.1.0") {
+		t.Errorf("error = %q, want it to include the command line (emerge atom)", msg)
+	}
+}
+
 func TestContainer_GetEbuildDir(t *testing.T) {
 	ebuildPath := "/var/db/repos/gentoo/dev-lisp/foo/foo-1.0.0.ebuild"
 	ebuildDir := getEbuildDir(ebuildPath)

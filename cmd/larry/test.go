@@ -146,7 +146,11 @@ Examples:
 			}
 			err := test.TestLocalWithConfig(ebuildPath, nil, runner, testPretend, true, testCfg)
 			if err != nil {
-				return &test.ExitError{Code: 1, Err: err}
+				// Return as-is: TestLocalWithConfig already wraps the
+				// subprocess exit code in an ExitError — re-wrapping with a
+				// hardcoded code would destroy it (AGENTS.md: subprocess
+				// exit codes propagate to os.Exit).
+				return err
 			}
 		}
 		return nil

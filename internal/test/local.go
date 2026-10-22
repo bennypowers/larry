@@ -10,27 +10,14 @@ import (
 
 	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/config"
+	"bennypowers.dev/larry/internal/exit"
 	"bennypowers.dev/larry/internal/output"
 )
 
-// ExitError wraps an error with a specific exit code.
-type ExitError struct {
-	Code int
-	Err  error
-}
-
-// Error implements error for ExitError.
-func (e *ExitError) Error() string {
-	if e.Err != nil {
-		return e.Err.Error()
-	}
-	return fmt.Sprintf("exit code %d", e.Code)
-}
-
-// Unwrap returns the wrapped error for errors.As compatibility.
-func (e *ExitError) Unwrap() error {
-	return e.Err
-}
+// ExitError wraps an error with a specific exit code. It is an alias of the
+// single shared type in internal/exit so subprocess exit codes propagate
+// unchanged through cmd/larry to os.Exit.
+type ExitError = exit.ExitError
 
 // CmdRunner abstracts os/exec.Command for testability.
 type CmdRunner interface {

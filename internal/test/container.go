@@ -167,7 +167,7 @@ func runContainerEmerge(ebuildPath string, cfg *ContainerConfig, runner CmdRunne
 		cmd.Stderr = os.Stderr
 
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("podman run failed: %w", err)
+			return fmt.Errorf("podman run failed: %s\n%w", cmdStr, err)
 		}
 	}
 

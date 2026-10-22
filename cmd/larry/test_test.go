@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -192,6 +193,34 @@ func TestTestCmd_ShortFlags(t *testing.T) {
 			t.Errorf("missing fetch in %q", call)
 		}
 	})
+}
+
+func TestTestCmd_SubprocessExitCodePropagates(t *testing.T) {
+	// AGENTS.md invariant: "Subprocess exit codes propagate to os.Exit".
+	// A failing ebuild phase (exit 7) must surface as process exit code 7
+	// through the cmd path — not be re-wrapped to 1.
+	runner := &cmdStubRunner{}
+	// A real *exec.ExitError with code 7, exactly as the ebuild subprocess
+	// would produce it.
+	if err := exec.Command("sh", "-c", "exit 7").Run(); err == nil {
+		t.Fatal("test setup: expected sh to exit 7")
+	} else {
+		runner.Err = err
+	}
+	test.TestRunnerForTest = runner
+
+	tmpOverlay := fixtureOverlay(t, nil, map[string]string{
+		"dev-util/javy/javy-9.1.0.ebuild": "EAPI=8\n",
+	})
+	defer func() { test.TestRunnerForTest = nil }()
+
+	_, _, err := execCmd(t, "test", "--overlay", tmpOverlay, "dev-util/javy")
+	if err == nil {
+		t.Fatal("expected error from failing ebuild phase")
+	}
+	if got := exitCodeFor(err); got != 7 {
+		t.Errorf("exitCodeFor(err) = %d, want 7 (subprocess exit code must reach os.Exit)", got)
+	}
 }
 
 func TestTestCmd_BarePhaseFlag(t *testing.T) {
