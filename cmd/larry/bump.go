@@ -21,7 +21,6 @@ var (
 	bumpRevision    bool
 	bumpVersion     string
 	bumpPrereleases bool
-	bumpDryRun      bool
 	bumpForceType   string
 )
 
@@ -67,8 +66,6 @@ func init() {
 		"version to bump to (requires --auto or --version mode)")
 	bumpCmd.Flags().BoolVarP(&bumpPrereleases, "prereleases", "p", false,
 		"include pre-release versions in auto-version lookup")
-	bumpCmd.Flags().BoolVar(&bumpDryRun, "dry-run", false,
-		"show what would be done without making changes")
 	bumpCmd.Flags().StringVarP(&bumpForceType, "type", "t", "",
 		"force package type (npm, cargo, go, vendored, generic)")
 
@@ -104,9 +101,10 @@ func runBump(cmd *cobra.Command, args []string) error {
 	if bumpRevision && bumpVersion != "" {
 		return fmt.Errorf("--revision and --version are mutually exclusive")
 	}
+	log.Info("Bump mode: %s (package %s)", mode, pkgPath)
 
-	// For dry-run mode, just report what would happen
-	if bumpDryRun {
+	// For dry-run mode, just report what would happen.
+	if cfg.DryRun {
 		return runBumpDryRun(cmd.OutOrStdout(), pkgPath, mode, bumpVersion)
 	}
 
@@ -149,11 +147,11 @@ func runBump(cmd *cobra.Command, args []string) error {
 	}
 
 	pcfg := &prepare.PrepareConfig{
-		Distdir:                 distdir,
-		Overlay:                 overlayRoot,
-		ForceType:               forceType,
-		CleanupOrphanedAssets:   true,
-		RevisionBump:            mode == bump.BumpModeRevision,
+		Distdir:               distdir,
+		Overlay:               overlayRoot,
+		ForceType:             forceType,
+		CleanupOrphanedAssets: true,
+		RevisionBump:          mode == bump.BumpModeRevision,
 	}
 
 	// Resolve GitHub repo for release uploads (non-fatal for non-upload types).

@@ -151,20 +151,14 @@ func TestConfigLoadIsCalled(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	// The --config flag is not yet wired into config.Load (later wave), so
-	// provide the overlay through the documented env fallback instead of the
-	// leaked cobra flag state this test used to depend on.
-	t.Setenv("LARRY_OVERLAY", fixture)
-
-	stdout, stderr, err := execCmd(t, "upstream", "--config", configFile)
-	output := stdout + stderr
-
-	// If config was loaded, the resolved overlay should be the fixture path.
-	// If config was NOT loaded (the defect), the command would either fail
-	// with "no overlay" or scan a different path.
-	if err != nil && !strings.Contains(output, fixture) {
-		// Config may not have been loaded — the error won't mention fixture.
-		t.Errorf("command did not resolve the config overlay; output: %s, err: %v", output, err)
+	// No LARRY_OVERLAY fallback: --config must actually be wired into
+	// config.Load, and the config file overlay must reach the command.
+	stdout, stderr, err := execCmd(t, "bump", "--dry-run", "--config", configFile, "dev-lang/foo")
+	if err != nil {
+		t.Fatalf("bump with --config: %v (stdout %q stderr %q)", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, fixture) {
+		t.Errorf("stdout = %q, want it to mention the config overlay %q", stdout, fixture)
 	}
 }
 

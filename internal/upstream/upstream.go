@@ -13,6 +13,7 @@ import (
 	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/larryconfig"
+	"bennypowers.dev/larry/internal/logger"
 	"bennypowers.dev/larry/internal/provider"
 	"bennypowers.dev/larry/internal/providers"
 	"bennypowers.dev/larry/internal/remoteid"
@@ -697,9 +698,11 @@ func resolveOne(
 		if providerType == "" {
 			providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
 		}
+		logger.Tracef("upstream %s/%s (live): provider=%s", einfo.Category, einfo.Pkg, providerType)
 		if providerType != "" && providerType != "unknown" {
 			rid, err := ResolveRemoteId(einfo, providerType)
 			if err == nil && rid != nil {
+				logger.Tracef("upstream %s/%s: remote-id=%s", einfo.Category, einfo.Pkg, rid.String())
 				cacheKey := MakeKey(einfo.Category, einfo.Pkg, string(rid.Type), einfo.PVVal)
 				var latestV *version.Version
 
@@ -747,6 +750,7 @@ func resolveOne(
 	if providerType == "" {
 		providerType = string(providers.ResolveProviderFromURL(einfo.SRC_URI))
 	}
+	logger.Tracef("upstream %s/%s: provider=%s", einfo.Category, einfo.Pkg, providerType)
 
 	if providerType == "" || providerType == "unknown" {
 		return UpstreamResult{
@@ -770,6 +774,7 @@ func resolveOne(
 			Depth:   depth,
 		}
 	}
+	logger.Tracef("upstream %s/%s: remote-id=%s", einfo.Category, einfo.Pkg, rid.String())
 
 	cacheKey := MakeKey(einfo.Category, einfo.Pkg, string(rid.Type), einfo.PVVal)
 	var latestV *version.Version

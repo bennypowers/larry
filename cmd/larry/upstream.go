@@ -128,7 +128,7 @@ Examples:
 		// Non-TTY mode: run check with spinner.
 		if !upstreamTUI {
 			spinnerMsg := fmt.Sprintf("Checking packages in overlay: %s", overlayDir)
-			_, runErr := cli.AnimateSpinner(spinnerMsg, cfg.Quiet, func() (string, error) {
+			out, runErr := cli.AnimateSpinner(spinnerMsg, cfg.Quiet, func() (string, error) {
 				results, err := runUpstreamWithTargets(overlayDir, registry, targets, upstreamPrereleases, upstreamFresh)
 				if err != nil {
 					// Errors belong to the caller: return "" so the spinner
@@ -138,7 +138,7 @@ Examples:
 				}
 
 				// Filter results based on verbosity (exclude LIVE unless --verbose).
-				if rootFlags.Verbose == 0 {
+				if cfg.Verbose == 0 {
 					var filtered []upstream.UpstreamResult
 					for _, r := range results {
 						if r.Status.IsSignificant() {
@@ -167,6 +167,11 @@ Examples:
 			if runErr != nil {
 				return fmt.Errorf("upstream check failed: %w", runErr)
 			}
+			// Results are the caller's to write: --quiet suppresses them,
+			// while errors above still reach stderr.
+			if out != "" && !cfg.Quiet {
+				_, _ = fmt.Fprint(cmd.OutOrStdout(), out)
+			}
 			return nil
 		}
 
@@ -177,7 +182,7 @@ Examples:
 		}
 
 		// Filter results based on verbosity (exclude LIVE unless --verbose).
-		if rootFlags.Verbose == 0 {
+		if cfg.Verbose == 0 {
 			var filtered []upstream.UpstreamResult
 			for _, r := range results {
 				if r.Status.IsSignificant() {

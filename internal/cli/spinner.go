@@ -12,27 +12,18 @@ import (
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // AnimateSpinner runs fn() while printing a spinner animation.
-// Returns fn's string result and error. fn's result is printed only on
-// success — error text is never printed here; errors belong to the caller,
-// which reports them (stderr, non-zero exit).
-// If quiet is true, the spinner is suppressed (the result string is still
-// printed, matching the previous behaviour).
+// Returns fn's string result and error. The result is NOT printed here:
+// callers decide whether to write it (honouring --quiet and output format).
+// Errors are never printed; they belong to the caller.
+// If quiet is true, the animation is suppressed.
 func AnimateSpinner(msg string, quiet bool, fn func() (string, error)) (string, error) {
 	if quiet {
-		out, err := fn()
-		if err == nil {
-			fmt.Print(out)
-		}
-		return out, err
+		return fn()
 	}
 
 	// Check if stdout is a TTY
 	if !isTTYStdout() {
-		out, err := fn()
-		if err == nil {
-			fmt.Print(out)
-		}
-		return out, err
+		return fn()
 	}
 
 	// Run fn in a goroutine so spinner can run concurrently
@@ -57,12 +48,8 @@ func AnimateSpinner(msg string, quiet bool, fn func() (string, error)) (string, 
 			s++
 			fmt.Printf("\r%s %s  ", frame, msg)
 		case res := <-ch:
-			// Move to a new line, then print the result — success text only;
-			// error text is the caller's to report.
+			// Move to a new line; the caller writes the result.
 			fmt.Println()
-			if res.err == nil {
-				fmt.Print(res.out)
-			}
 			return res.out, res.err
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/config"
 	"bennypowers.dev/larry/internal/exit"
+	"bennypowers.dev/larry/internal/logger"
 	"bennypowers.dev/larry/internal/output"
 )
 
@@ -37,6 +38,7 @@ func NewCmdRunner() CmdRunner {
 var TestRunnerForTest CmdRunner
 
 func (r *runner) Run(name string, args ...string) error {
+	logger.Tracef("exec: %s %s", name, strings.Join(args, " "))
 	cmd := exec.Command(name, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -44,6 +46,7 @@ func (r *runner) Run(name string, args ...string) error {
 }
 
 func (r *runner) RunWithEnv(env []string, name string, args ...string) error {
+	logger.Tracef("exec: %s %s", name, strings.Join(args, " "))
 	cmd := exec.Command(name, args...)
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
@@ -91,11 +94,11 @@ func ValidPhases(phase string) bool {
 // buildPhaseList assembles the phase list from flags.
 //
 // Precedence (script L724–771):
-//   1. explicit phases win outright — overrides compile/merge entirely
-//   2. merge list if merge was given
-//   3. compile list if compile was given
-//   4. default list (clean fetch unpack)
-//   5. extra phases appended (bare --<phase> flags)
+//  1. explicit phases win outright — overrides compile/merge entirely
+//  2. merge list if merge was given
+//  3. compile list if compile was given
+//  4. default list (clean fetch unpack)
+//  5. extra phases appended (bare --<phase> flags)
 //
 // compile → [clean, fetch, unpack, compile]
 // merge   → [clean, fetch, unpack, compile, install]
@@ -158,16 +161,16 @@ func resolveEbuildFromCatPkg(catPkg string, overlay string) (string, error) {
 
 // TestLocalConfig holds configuration for the local test runner.
 type TestLocalConfig struct {
-	Compile        bool             // --compile flag
-	Merge          bool             // --merge flag
-	Pretend        bool             // --pretend flag
-	Overlay        string           // --overlay flag
-	Distdir        string           // --distdir flag
-	PortageTmpdir  string           // --portage-tmpdir flag
-	Phases         []string         // explicit --phase values (overrides compile/merge)
-	ExtraPhases    []string         // bare --<phase> flags
-	Cfg            *config.Config   // full config (for ResolveDistdir, etc.)
-	Log            *output.Logger   // logger (may be nil — TestLocal creates a default)
+	Compile       bool           // --compile flag
+	Merge         bool           // --merge flag
+	Pretend       bool           // --pretend flag
+	Overlay       string         // --overlay flag
+	Distdir       string         // --distdir flag
+	PortageTmpdir string         // --portage-tmpdir flag
+	Phases        []string       // explicit --phase values (overrides compile/merge)
+	ExtraPhases   []string       // bare --<phase> flags
+	Cfg           *config.Config // full config (for ResolveDistdir, etc.)
+	Log           *output.Logger // logger (may be nil — TestLocal creates a default)
 }
 
 // ---------------------------------------------------------------------------

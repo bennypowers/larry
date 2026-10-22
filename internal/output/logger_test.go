@@ -6,215 +6,188 @@ import (
 	"testing"
 )
 
-func TestMsgWarnErrorPrefixes(t *testing.T) {
-	color, err := NewColorHelper("never")
+func newTestLogger(t *testing.T, level int, quiet bool, colorMode string) (*Logger, *bytes.Buffer, *bytes.Buffer) {
+	t.Helper()
+	color, err := NewColorHelper(colorMode)
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	var outBuf, errBuf bytes.Buffer
-	log := &Logger{
-		verbose: 0,
-		quiet:   false,
-		color:   color,
-		out:     &outBuf,
-		errw:    &errBuf,
-	}
-
-	log.Msg("hello")
-	if got := outBuf.String(); got != ">>> hello\n" {
-		t.Errorf("Msg('hello') out = %q, want %q", got, ">>> hello\n")
-	}
-	if errBuf.Len() != 0 {
-		t.Errorf("Msg did not write to errw; errw = %q", errBuf.String())
-	}
-
-	outBuf.Reset()
-	log.Warn("careful")
-	if got := errBuf.String(); got != "*** careful\n" {
-		t.Errorf("Warn('careful') errw = %q, want %q", got, "*** careful\n")
-	}
-	if outBuf.Len() != 0 {
-		t.Errorf("Warn did not write to out; out = %q", outBuf.String())
-	}
-
-	errBuf.Reset()
-	log.Error("boom")
-	if got := errBuf.String(); got != "!!! boom\n" {
-		t.Errorf("Error('boom') errw = %q, want %q", got, "!!! boom\n")
-	}
+	return &Logger{
+		level: level,
+		quiet: quiet,
+		color: color,
+		out:   &outBuf,
+		errw:  &errBuf,
+	}, &outBuf, &errBuf
 }
 
-func TestWarnErrorGoToStderr(t *testing.T) {
-	color, err := NewColorHelper("never")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var outBuf, errBuf bytes.Buffer
-	log := &Logger{
-		verbose: 0,
-		quiet:   false,
-		color:   color,
-		out:     &outBuf,
-		errw:    &errBuf,
-	}
-
-	log.Msg("hello")
-	log.Warn("careful")
-	log.Error("boom")
-
-	if strings.Contains(outBuf.String(), "***") || strings.Contains(outBuf.String(), "!!!") {
-		t.Errorf("out should not contain *** or !!!; out = %q", outBuf.String())
-	}
-}
-
-func TestQuietSuppressesMsgAndWarnNotError(t *testing.T) {
-	color, err := NewColorHelper("never")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var outBuf, errBuf bytes.Buffer
-	log := &Logger{
-		verbose: 0,
-		quiet:   true,
-		color:   color,
-		out:     &outBuf,
-		errw:    &errBuf,
-	}
-
-	log.Msg("a")
-	log.Warn("b")
-	log.Error("c")
-
-	if got := outBuf.String(); got != "" {
-		t.Errorf("quiet out = %q, want empty", got)
-	}
-	if got := errBuf.String(); got != "!!! c\n" {
-		t.Errorf("quiet errw = %q, want '!!! c\\n'", got)
-	}
-}
-
-func TestLoggerFormatting(t *testing.T) {
-	color, err := NewColorHelper("never")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var buf bytes.Buffer
-	log := &Logger{
-		verbose: 0,
-		quiet:   false,
-		color:   color,
-		out:     &buf,
-		errw:    &buf,
-	}
-
-	log.Msg("x=%d", 7)
-	if got := buf.String(); got != ">>> x=7\n" {
-		t.Errorf("Msg formatting = %q, want %q", got, ">>> x=7\n")
-	}
-}
-
-func TestLogger_VerboseLevels(t *testing.T) {
-	color, err := NewColorHelper("never")
-	if err != nil {
-		t.Fatal(err)
-	}
-
+func TestLogger_LevelGating(t *testing.T) {
 	tests := []struct {
-		name    string
-		verbose int
-		quiet   bool
-		wantLog bool
+		level                                   int
+		wantMsg, wantInfo, wantDebug, wantTrace bool
+		wantWarn, wantError                     bool
 	}{
-		{"no verbosity", 0, false, false},
-		{"debug shown at -vv", 2, false, true},
-		{"quiet debug suppressed", 2, true, false},
+		{0, true, false, false, false, true, true},
+		{1, true, true, false, false, true, true},
+		{2, true, true, true, false, true, true},
+		{3, true, true, true, true, true, true},
 	}
-
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var errBuf bytes.Buffer
-			log := &Logger{
-				verbose: tt.verbose,
-				quiet:   tt.quiet,
-				color:   color,
-				out:     &bytes.Buffer{},
-				errw:    &errBuf,
-			}
+		t.Run(levelName(tt.level), func(t *testing.T) {
+			log, out, errw := newTestLogger(t, tt.level, false, "never")
+			log.Msg("m")
+			log.Info("i")
+			log.Debug("d")
+			log.Trace("t")
+			log.Warn("w")
+			log.Error("e")
 
-			log.Debug("test message")
-
-			hasLog := errBuf.Len() > 0
-			if hasLog != tt.wantLog {
-				t.Errorf("verbose=%d, quiet=%v, wantLog=%v, gotLog=%v, output=%q",
-					tt.verbose, tt.quiet, tt.wantLog, hasLog, errBuf.String())
+			gotOut := out.String()
+			gotErr := errw.String()
+			check := func(want bool, needle, stream string, got string) {
+				has := strings.Contains(got, needle)
+				if has != want {
+					t.Errorf("%s presence = %v, want %v; stream = %q", needle, has, want, got)
+				}
 			}
+			check(tt.wantMsg, ">>> m", "out", gotOut)
+			check(tt.wantInfo, ">>> i", "out", gotOut)
+			check(tt.wantDebug, ">>> d", "err", gotErr)
+			check(tt.wantTrace, "... t", "err", gotErr)
+			check(tt.wantWarn, "*** w", "err", gotErr)
+			check(tt.wantError, "!!! e", "err", gotErr)
 		})
 	}
 }
 
-func TestColorNeverProducesNoAnsi(t *testing.T) {
-	color, err := NewColorHelper("never")
-	if err != nil {
-		t.Fatal(err)
+func levelName(n int) string {
+	switch n {
+	case 0:
+		return "level0"
+	case 1:
+		return "level1"
+	case 2:
+		return "level2"
+	default:
+		return "level3"
 	}
+}
 
-	var outBuf, errBuf bytes.Buffer
-	log := &Logger{
-		verbose: 0,
-		quiet:   false,
-		color:   color,
-		out:     &outBuf,
-		errw:    &errBuf,
+func TestLogger_QuietNeverSuppressesError(t *testing.T) {
+	log, out, errw := newTestLogger(t, LevelTrace, true, "never")
+	log.Msg("m")
+	log.Info("i")
+	log.Debug("d")
+	log.Trace("t")
+	log.Warn("w")
+	log.Error("e")
+
+	if got := out.String(); got != "" {
+		t.Errorf("quiet out = %q, want empty", got)
 	}
+	if got := errw.String(); got != "!!! e\n" {
+		t.Errorf("quiet err = %q, want exactly %q", got, "!!! e\n")
+	}
+}
 
+func TestLogger_Streams(t *testing.T) {
+	log, out, errw := newTestLogger(t, LevelTrace, false, "never")
+	log.Msg("m")
+	log.Info("i")
+	log.Debug("d")
+	log.Trace("t")
+	log.Warn("w")
+	log.Error("e")
+
+	if strings.Contains(out.String(), "***") || strings.Contains(out.String(), "!!!") ||
+		strings.Contains(out.String(), "... ") {
+		t.Errorf("out contains error/trace lines: %q", out.String())
+	}
+	if strings.Contains(errw.String(), ">>> m") || strings.Contains(errw.String(), ">>> i") {
+		t.Errorf("err contains Msg/Info lines: %q", errw.String())
+	}
+}
+
+func TestLogger_Prefixes(t *testing.T) {
+	log, out, errw := newTestLogger(t, LevelTrace, false, "never")
 	log.Msg("hello")
+	log.Info("info")
+	log.Debug("debug")
+	log.Trace("trace")
+	log.Warn("warn")
+	log.Error("error")
+
+	wantOut := ">>> hello\n>>> info\n"
+	if got := out.String(); got != wantOut {
+		t.Errorf("out = %q, want %q", got, wantOut)
+	}
+	wantErr := ">>> debug\n... trace\n*** warn\n!!! error\n"
+	if got := errw.String(); got != wantErr {
+		t.Errorf("err = %q, want %q", got, wantErr)
+	}
+}
+
+func TestLogger_LevelClamp(t *testing.T) {
+	log, _, errw := newTestLogger(t, 0, false, "never")
+	log.SetLevel(-5)
+	if got := log.Level(); got != LevelResults {
+		t.Errorf("Level after SetLevel(-5) = %d, want %d", got, LevelResults)
+	}
+	log.Trace("hidden")
+	if errw.Len() != 0 {
+		t.Errorf("negative level enabled trace: %q", errw.String())
+	}
+
+	log.SetLevel(99)
+	if got := log.Level(); got != LevelTrace {
+		t.Errorf("Level after SetLevel(99) = %d, want %d", got, LevelTrace)
+	}
+	log.Trace("visible")
+	if !strings.Contains(errw.String(), "... visible") {
+		t.Errorf("clamped trace level did not emit: %q", errw.String())
+	}
+}
+
+func TestLoggerFormatting(t *testing.T) {
+	log, out, _ := newTestLogger(t, 0, false, "never")
+	log.Msg("x=%d", 7)
+	if got := out.String(); got != ">>> x=7\n" {
+		t.Errorf("Msg formatting = %q, want %q", got, ">>> x=7\n")
+	}
+}
+
+func TestColorNeverProducesNoAnsi(t *testing.T) {
+	log, out, errw := newTestLogger(t, LevelTrace, false, "never")
+	log.Msg("hello")
+	log.Info("info")
+	log.Debug("debug")
+	log.Trace("trace")
 	log.Warn("careful")
 	log.Error("boom")
 
-	outStr := outBuf.String()
-	errStr := errBuf.String()
-	if containsAnsi(outStr) {
-		t.Errorf("Msg/Warn/Error with 'never' produced ANSI in out: %q", outStr)
+	if containsAnsi(out.String()) {
+		t.Errorf("colour 'never' produced ANSI in out: %q", out.String())
 	}
-	if containsAnsi(errStr) {
-		t.Errorf("Msg/Warn/Error with 'never' produced ANSI in errw: %q", errStr)
+	if containsAnsi(errw.String()) {
+		t.Errorf("colour 'never' produced ANSI in err: %q", errw.String())
 	}
 }
 
 func TestColorAlwaysProducesAnsi(t *testing.T) {
-	color, err := NewColorHelper("always")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var outBuf, errBuf bytes.Buffer
-	log := &Logger{
-		verbose: 0,
-		quiet:   false,
-		color:   color,
-		out:     &outBuf,
-		errw:    &errBuf,
-	}
-
+	log, out, errw := newTestLogger(t, 0, false, "always")
 	log.Msg("hello")
 	log.Warn("careful")
 	log.Error("boom")
 
-	outStr := outBuf.String()
-	errStr := errBuf.String()
-	if !containsAnsi(outStr) {
+	if !containsAnsi(out.String()) {
 		t.Error("Msg with 'always' should produce ANSI in out")
 	}
-	if !containsAnsi(errStr) {
-		t.Error("Warn/Error with 'always' should produce ANSI in errw")
+	if !containsAnsi(errw.String()) {
+		t.Error("Warn/Error with 'always' should produce ANSI in err")
 	}
 }
 
 func containsAnsi(s string) bool {
-	return len(s) > 0 && s[0] == '\x1b' || len(s) > 1 && s[1] == '\x1b' ||
-		bytes.Contains([]byte(s), []byte{'\x1b', '['})
+	return bytes.Contains([]byte(s), []byte{'\x1b', '['})
 }

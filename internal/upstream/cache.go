@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"bennypowers.dev/larry/internal/logger"
 )
 
 const (
@@ -80,6 +82,7 @@ func (c *VersionCache) Get(key string) (string, bool) {
 	// Try in-memory first
 	if entry, ok := c.inMemory[key]; ok {
 		if time.Since(entry.timestamp) <= c.ttl {
+			logger.Tracef("cache hit (memory): %s", key)
 			return entry.version, true
 		}
 		// Expire stale in-memory entry
@@ -88,30 +91,36 @@ func (c *VersionCache) Get(key string) (string, bool) {
 
 	// Try disk
 	if c.dir == "" {
+		logger.Tracef("cache miss (no disk cache): %s", key)
 		return "", false
 	}
 
 	path := keyToPath(c.dir, key)
 	info, err := os.Stat(path)
 	if err != nil {
+		logger.Tracef("cache miss (not cached): %s", key)
 		return "", false
 	}
 
 	// Check TTL based on file mtime
 	if time.Since(info.ModTime()) > c.ttl {
+		logger.Tracef("cache miss (stale): %s", key)
 		return "", false
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
+		logger.Tracef("cache miss (read error): %s: %v", key, err)
 		return "", false
 	}
 
 	version := strings.TrimSpace(string(data))
 	if version == "" {
+		logger.Tracef("cache miss (empty entry): %s", key)
 		return "", false
 	}
 
+	logger.Tracef("cache hit (disk): %s = %s", key, version)
 	return version, true
 }
 
@@ -126,6 +135,7 @@ func (c *VersionCache) Set(key, version string) {
 		version:   version,
 		timestamp: time.Now(),
 	}
+	logger.Tracef("cache set: %s = %s", key, version)
 
 	// Write to disk if directory configured
 	if c.dir == "" {

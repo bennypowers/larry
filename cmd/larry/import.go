@@ -10,8 +10,7 @@ import (
 
 var (
 	importFrom  string // --from flag: raw value (path, repo name, or empty)
-	importDry   bool   // --dry-run flag
-	importForce bool  // --force flag
+	importForce bool   // --force flag
 )
 
 func init() {
@@ -19,8 +18,6 @@ func init() {
 
 	importCmd.Flags().StringVar(&importFrom, "from", "",
 		"source overlay path or repo name (default: auto-search /var/db/repos/*)")
-	importCmd.Flags().BoolVar(&importDry, "dry-run", false,
-		"show what would be done without making changes")
 	importCmd.Flags().BoolVar(&importForce, "force", false,
 		"overwrite even if target version is newer or equal")
 }
@@ -60,7 +57,7 @@ Examples:
 		importCfg := &importcmd.ImportConfig{
 			SourceOverlay:   importFrom,
 			TargetOverlay:   targetOverlay,
-			DryRun:          importDry,
+			DryRun:          cfg.DryRun,
 			Force:           importForce,
 			MaintainerName:  cfg.MaintainerName,
 			MaintainerEmail: cfg.MaintainerEmail,
@@ -72,7 +69,8 @@ Examples:
 			return fmt.Errorf("import failed: %w", err)
 		}
 
-		if importDry {
+		log.Info("Source overlay: %s", result.SourcePath)
+		if cfg.DryRun {
 			log.Msg("Would import:")
 			log.Msg("  Source: %s", result.SourcePath)
 			log.Msg("  Target: %s", result.EbuildPath)

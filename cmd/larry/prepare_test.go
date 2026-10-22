@@ -272,8 +272,6 @@ func TestResolvePrepareTarget_Missing(t *testing.T) {
 	}
 }
 
-
-
 // --- Helper to stub ManifestRunner for execCmd tests ---
 
 func TestPrepare_DryRun_MakesNoDistdir(t *testing.T) {

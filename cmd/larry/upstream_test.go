@@ -206,7 +206,6 @@ func TestUpstreamUnknownAtomErrors(t *testing.T) {
 	}
 }
 
-
 // TestUpstreamIncludesDependencyRows verifies that in-overlay dependencies
 // appear in the output (D1). Full content assertions are in the internal
 // upstream tests; this verifies the CLI doesn't crash or error.

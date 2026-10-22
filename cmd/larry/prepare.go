@@ -13,10 +13,9 @@ import (
 )
 
 var (
-	prepareType             string
-	prepareAll              bool
-	prepareDryRun           bool
-	prepareCleanupOrphans   bool
+	prepareType           string
+	prepareAll            bool
+	prepareCleanupOrphans bool
 )
 
 func init() {
@@ -26,8 +25,6 @@ func init() {
 		"force package type: npm, cargo, go, vendored, generic (overrides auto-detection)")
 	prepareCmd.Flags().BoolVarP(&prepareAll, "all", "a", false,
 		"regenerate Manifest for all packages via pkgdev (manifest-only, no type-specific pipeline)")
-	prepareCmd.Flags().BoolVarP(&prepareDryRun, "dry-run", "n", false,
-		"show what would be done without making changes")
 	prepareCmd.Flags().BoolVar(&prepareCleanupOrphans, "cleanup", false,
 		"remove orphaned GitHub release assets on prepare failure")
 }
@@ -93,11 +90,11 @@ Flags:
 
 		// Create config.
 		pcfg := &prepare.PrepareConfig{
-			DryRun:                  prepareDryRun,
-			Distdir:                 distdir,
-			Overlay:                 overlay,
-			UseTUI:                  false,
-			CleanupOrphanedAssets:   prepareCleanupOrphans,
+			DryRun:                cfg.DryRun,
+			Distdir:               distdir,
+			Overlay:               overlay,
+			UseTUI:                false,
+			CleanupOrphanedAssets: prepareCleanupOrphans,
 		}
 
 		// Resolve GitHub repo from overlay git remote (for release uploads).
@@ -117,6 +114,7 @@ Flags:
 		}
 
 		// Determine what to prepare.
+		log.Info("Preparing %d target(s) in %s (dry-run=%v)", len(args), overlay, cfg.DryRun)
 		switch {
 		case prepareAll && len(args) == 0:
 			// --all without args: manifest-only bulk pkgdev call (D8).

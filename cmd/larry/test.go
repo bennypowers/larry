@@ -116,6 +116,7 @@ Examples:
 
 		// Determine mode: container or local.
 		if testEmerge {
+			log.Info("Mode: container (image %s)", testImageName)
 			cacheDir := cfg.ResolveCacheDir(rootFlags.CacheDir)
 			cfg := &test.ContainerConfig{
 				Overlay:   overlayDir,
@@ -131,6 +132,7 @@ Examples:
 			log.Msg("Container test completed successfully.")
 		} else {
 			// Local mode.
+			log.Info("Mode: local (phases %v)", testPhases)
 			runner := test.NewCmdRunner()
 			testCfg := &test.TestLocalConfig{
 				Compile:       testCompile,
@@ -166,11 +168,11 @@ func splitPhaseFlags() (extraPhases []string, unknownFlag string) {
 		"compile": true, "c": true,
 		"merge": true, "m": true,
 		"pretend": true,
-		"emerge": true, "e": true,
+		"emerge":  true, "e": true,
 		"phase": true, "p": true,
 		"portage-tmpdir": true,
-		"image": true,
-		"use": true,
+		"image":          true,
+		"use":            true,
 		// Root persistent flags.
 		"verbose": true, "quiet": true, "color": true, "dry-run": true,
 		"cache-dir": true, "distdir": true, "jobs": true,

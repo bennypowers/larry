@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"bennypowers.dev/larry/internal/git"
+	"bennypowers.dev/larry/internal/logger"
 	"bennypowers.dev/larry/internal/version"
 	"github.com/go-git/go-git/v5/plumbing"
 )
@@ -70,6 +71,7 @@ func defaultEnv() []string {
 
 // gh runs a gh CLI command and returns its combined output.
 func (c *Client) gh(args ...string) ([]byte, error) {
+	logger.Tracef("exec: gh %s", strings.Join(args, " "))
 	cmd := exec.Command("gh", args...)
 	cmd.Env = c.env
 	return c.runner.Output(cmd)

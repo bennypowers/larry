@@ -302,9 +302,9 @@ func TestTestCmd_PicksHighestVersion(t *testing.T) {
 	runner := &cmdStubRunner{}
 	test.TestRunnerForTest = runner
 	tmpOverlay := fixtureOverlay(t, nil, map[string]string{
-		"dev-util/javy/javy-9.0.ebuild":   "EAPI=8\n",
-		"dev-util/javy/javy-10.0.ebuild":  "EAPI=8\n",
-		"dev-util/javy/javy-9999.ebuild":  "EAPI=8\n",
+		"dev-util/javy/javy-9.0.ebuild":  "EAPI=8\n",
+		"dev-util/javy/javy-10.0.ebuild": "EAPI=8\n",
+		"dev-util/javy/javy-9999.ebuild": "EAPI=8\n",
 	})
 	defer func() { test.TestRunnerForTest = nil }()
 

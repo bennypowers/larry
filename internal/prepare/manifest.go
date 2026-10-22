@@ -18,6 +18,7 @@ import (
 
 // ManifestRunner executes the resolved manifest subprocess. Tests replace it.
 var ManifestRunner = func(bin string, args []string, dir string, env []string) error {
+	logger.Tracef("exec: %s %s (dir=%s)", bin, strings.Join(args, " "), dir)
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = dir
 	cmd.Env = env
@@ -37,17 +38,17 @@ var ManifestRunner = func(bin string, args []string, dir string, env []string) e
 type manifestStyle int
 
 const (
-	stylePkgdev manifestStyle = iota // pkgdev manifest -d <distdir> <cat/pkg>, cwd = overlay
-	styleEbuildDigest                // <ebuild path> digest, cwd = overlay
+	stylePkgdev       manifestStyle = iota // pkgdev manifest -d <distdir> <cat/pkg>, cwd = overlay
+	styleEbuildDigest                      // <ebuild path> digest, cwd = overlay
 )
 
 // manifestRequest is the input to runManifest.
 type manifestRequest struct {
-	Overlay    string            // overlay root; becomes cmd.Dir
-	CatPkg     string            // "dev-util/fish-lsp" — NEVER a file path
-	Distdir    string            // must be non-empty
-	Distfiles  []string          // distfile basenames the caller expects; may be nil
-	EbuildPath string            // ebuild file path; used to target a single ebuild instead of the whole cat/pkg
+	Overlay    string                             // overlay root; becomes cmd.Dir
+	CatPkg     string                             // "dev-util/fish-lsp" — NEVER a file path
+	Distdir    string                             // must be non-empty
+	Distfiles  []string                           // distfile basenames the caller expects; may be nil
+	EbuildPath string                             // ebuild file path; used to target a single ebuild instead of the whole cat/pkg
 	Prefetch   func(pkgDir, distdir string) error // runs before Manifest removal; may be nil
 }
 

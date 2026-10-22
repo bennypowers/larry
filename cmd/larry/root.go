@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"bennypowers.dev/larry/internal/config"
+	"bennypowers.dev/larry/internal/logger"
 	"bennypowers.dev/larry/internal/output"
 
 	"github.com/spf13/cobra"
@@ -14,17 +16,17 @@ var (
 	// by cobra during flag parsing; persistentPreRunE then copies the
 	// changed values into cfg so flag precedence beats env and config file.
 	rootFlags = struct {
-		Verbose      int
-		Quiet        bool
-		Color        string
-		DryRun       bool
-		CacheDir     string
-		Distdir      string
-		Jobs         int
-		GitHubToken  string
-		Remote       string
-		ConfigPath   string
-		Overlay      string
+		Verbose     int
+		Quiet       bool
+		Color       string
+		DryRun      bool
+		CacheDir    string
+		Distdir     string
+		Jobs        int
+		GitHubToken string
+		Remote      string
+		ConfigPath  string
+		Overlay     string
 	}{
 		Color: "auto",
 	}
@@ -42,9 +44,9 @@ and manage the ebuild lifecycle with provider-specific pipelines.
 
 Run 'larry help' for detailed usage information.
 `,
-		Version:         "0.0.0-dev",
-		SilenceUsage:    true,
-		SilenceErrors:   true,
+		Version:           "0.0.0-dev",
+		SilenceUsage:      true,
+		SilenceErrors:     true,
 		PersistentPreRunE: persistentPreRunE,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return &ExitError{Code: 1, Err: fmt.Errorf("no subcommand")}
@@ -60,9 +62,9 @@ Run 'larry help' for detailed usage information.
 func init() {
 	// Persistent global flags.
 	rootCmd.PersistentFlags().CountVarP(&rootFlags.Verbose, "verbose", "v",
-		"verbose output (-v info, -vv debug)")
+		"increase verbosity: -v info, -vv debug, -vvv trace")
 	rootCmd.PersistentFlags().BoolVarP(&rootFlags.Quiet, "quiet", "q", false,
-		"suppress all output")
+		"suppress informational output (errors are still printed)")
 	rootCmd.PersistentFlags().StringVar(&rootFlags.Color, "color", "auto",
 		"color mode: auto, always, never")
 	rootCmd.PersistentFlags().BoolVarP(&rootFlags.DryRun, "dry-run", "n", false,
@@ -72,9 +74,9 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&rootFlags.Distdir, "distdir", "",
 		"distdir path for source downloads")
 	rootCmd.PersistentFlags().IntVar(&rootFlags.Jobs, "jobs", 0,
-		"number of parallel jobs (0 = auto-detect)")
+		"parallel worker count (0 = auto-detect; currently single-threaded)")
 	rootCmd.PersistentFlags().StringVar(&rootFlags.GitHubToken, "github-token", "",
-		"GitHub personal access token")
+		"GitHub personal access token (also exported as GITHUB_TOKEN for gh)")
 	rootCmd.PersistentFlags().StringVar(&rootFlags.Remote, "remote", "origin",
 		"git remote name for upstream resolution (default: origin)")
 	rootCmd.PersistentFlags().StringVar(&rootFlags.ConfigPath, "config", "",
@@ -86,6 +88,9 @@ func init() {
 // persistentPreRunE loads config, applies flag overrides, and
 // initializes color helper + logger from the final config.
 func persistentPreRunE(cmd *cobra.Command, args []string) error {
+	// Wire --config before loading: config.Load reads this package variable.
+	config.FilePath = rootFlags.ConfigPath
+
 	var err error
 	cfg, err = config.Load()
 	if err != nil {
@@ -144,6 +149,18 @@ func persistentPreRunE(cmd *cobra.Command, args []string) error {
 	// Wire injectable writers so test harnesses can capture output.
 	log.SetOut(cmd.OutOrStdout())
 	log.SetErr(cmd.ErrOrStderr())
+
+	// Give the prepare/ebuild diagnostics the same verbosity and stream.
+	logger.SetLevel(cfg.Verbose)
+	logger.SetOutput(cmd.ErrOrStderr())
+
+	// gh and internal/providers read GITHUB_TOKEN directly.
+	if cfg.GitHubToken != "" {
+		_ = os.Setenv("GITHUB_TOKEN", cfg.GitHubToken)
+	}
+
+	log.Debug("effective config: overlay=%q distdir=%q cache=%q color=%s verbose=%d quiet=%v",
+		cfg.Overlay, cfg.Distdir, cfg.CacheDir, cfg.Color, cfg.Verbose, cfg.Quiet)
 
 	return nil
 }
