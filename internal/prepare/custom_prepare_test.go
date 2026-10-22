@@ -205,7 +205,8 @@ func TestPrepare_CustomScript_EnvVars(t *testing.T) {
 	// Create script that writes env vars to a file
 	envFile := filepath.Join(tmpDir, "env.out")
 	scriptPath := filepath.Join(larryDir, "prepare.sh")
-	script := "#!/bin/sh\n"
+	// bash is required for ${!v} indirect expansion; /bin/sh is dash on Debian.
+	script := "#!/bin/bash\n"
 	script += "for v in EBUILD PN PV P CATEGORY DISTDIR LARRY_PREPARE; do\n"
 	script += "  echo \"$v=\"${!v}\"\" >> " + envFile + "\n"
 	script += "done\n"
@@ -220,8 +221,9 @@ func TestPrepare_CustomScript_EnvVars(t *testing.T) {
 		PVVal:    "6.1.0_p20230915",
 		PVal:     "rpi-kernel-6.1.0_p20230915",
 	}
+	distdir := t.TempDir()
 	cfg := &PrepareConfig{
-		Distdir: "/var/cache/distfiles",
+		Distdir: distdir,
 	}
 
 	err := Prepare(ei, cfg)
@@ -240,7 +242,7 @@ func TestPrepare_CustomScript_EnvVars(t *testing.T) {
 		"PV=6.1.0_p20230915": "",
 		"P=rpi-kernel-6.1.0_p20230915": "",
 		"CATEGORY=sys-kernel": "",
-		"DISTDIR=/var/cache/distfiles": "",
+		"DISTDIR=" + distdir: "",
 		"LARRY_PREPARE=1": "",
 	}
 
