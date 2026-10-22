@@ -77,10 +77,13 @@ older ebuilds; `A` toggles autoprune for the session. A successful bump shows
 the version transition (`369 → 370`) above the captured output.
 
 Running actions keep the table on screen and use a pane below it for the
-checklist, elapsed time, and the tail of the streamed output. The pane shows
-the most recent error line in red and adds a `no output` timer when a child
-goes quiet for more than ten seconds. Absolute paths under the overlay root
-are redacted to repository-relative paths. `esc` cancels.
+checklist, elapsed time, and the tail of the streamed output. Bump header
+lines are folded into a coloured `old → new` strip showing the versions the
+package has in the overlay. The pane shows the most recent error line in red
+and adds a `no output` timer when a child goes quiet for more than ten seconds.
+Under a pipe (which is what the TUI provides), manifest commands announce
+themselves and heartbeat every 15 seconds. Absolute paths under the overlay
+root are redacted to repository-relative paths. `esc` cancels.
 
 ### Examples
 

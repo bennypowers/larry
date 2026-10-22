@@ -495,6 +495,26 @@ func TestUpstreamModel_RunningActionKeepsTableVisible(t *testing.T) {
 	}
 }
 
+func TestUpstreamModel_BumpOutputFoldedIntoSummary(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.actionLines = nil
+	m.appendActionLine("Bumped: dev-util/foo/foo-2.0.ebuild")
+	m.appendActionLine("  Package:     foo")
+	m.appendActionLine("  Old version: 1.0")
+	m.appendActionLine("  New version: 2.0")
+
+	if len(m.actionLines) != 0 {
+		t.Errorf("bump header lines leaked into the log: %v", m.actionLines)
+	}
+	if m.actionDetail != "1.0 → 2.0" {
+		t.Errorf("actionDetail = %q, want 1.0 → 2.0", m.actionDetail)
+	}
+	strip := m.actionDetailStrip()
+	if !strings.Contains(strip, "1.0") || !strings.Contains(strip, "2.0") {
+		t.Errorf("detail strip = %q, want the version transition", strip)
+	}
+}
+
 func TestUpstreamModel_DetailShowsOverlayVersionsAndPrune(t *testing.T) {
 	overlay := t.TempDir()
 	pkgDir := filepath.Join(overlay, "app-shells", "alpha")

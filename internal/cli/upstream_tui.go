@@ -786,11 +786,16 @@ func (m *UpstreamModel) appendActionLine(line string) {
 	switch {
 	case strings.HasPrefix(trimmed, "Old version:"):
 		m.bumpOld = strings.TrimSpace(strings.TrimPrefix(trimmed, "Old version:"))
+		return
 	case strings.HasPrefix(trimmed, "New version:"):
 		m.bumpNew = strings.TrimSpace(strings.TrimPrefix(trimmed, "New version:"))
 		if m.bumpOld != "" {
 			m.actionDetail = m.bumpOld + " → " + m.bumpNew
 		}
+		return
+	case strings.HasPrefix(trimmed, "Bumped:"), strings.HasPrefix(trimmed, "Package:"):
+		// Folded into the pane's structured summary; do not duplicate here.
+		return
 	}
 	m.actionLines = append(m.actionLines, line)
 	m.actionView.SetContent(strings.Join(m.actionLines, "\n"))
@@ -1372,7 +1377,8 @@ func (m *UpstreamModel) actionPaneView() string {
 	}
 	lines = append(lines, m.colorizeStepGlyphs(truncateToWidth(steps.String(), max(m.width-1, 1))))
 
-	logHeight := paneHeight - 2
+	logHeight := paneHeight - 3
+	lines = append(lines, m.actionDetailStrip())
 	if m.actionError != "" {
 		lines = append(lines, m.theme.ErrorStyle().Render(
 			truncateToWidth(m.actionError, max(m.width-1, 1))))
@@ -1395,6 +1401,49 @@ func (m *UpstreamModel) actionPaneView() string {
 		lines = append(lines, "")
 	}
 	return strings.Join(lines[:paneHeight], "\n")
+}
+
+// actionDetailStrip is the package summary shared with the details pane:
+// version transition (when bumping) and the ebuilds present in the overlay.
+func (m *UpstreamModel) actionDetailStrip() string {
+	plain := ""
+	switch {
+	case m.bumpOld != "" && m.bumpNew != "":
+		plain = m.bumpOld + " → " + m.bumpNew
+	case len(m.visible) > 0:
+		r := m.visible[m.Selected()]
+		plain = "current " + r.Current
+		if r.Latest != "" {
+			plain += " · latest " + r.Latest
+		}
+	}
+	if plain == "" {
+		return ""
+	}
+	plain = truncateToWidth(plain, max(m.width-2, 1))
+	out := plain
+	if m.theme.Color && m.bumpOld != "" && m.bumpNew != "" {
+		renderer := m.theme.Renderer
+		out = renderer.NewStyle().Foreground(lipgloss.Color("208")).Render(m.bumpOld) +
+			renderer.NewStyle().Foreground(lipgloss.Color("240")).Render(" → ") +
+			renderer.NewStyle().Foreground(lipgloss.Color("42")).Bold(true).Render(m.bumpNew)
+	}
+
+	pkg := m.actionPkg
+	if pkg == "" {
+		pkg = m.selectedPackage()
+	}
+	ebuilds := m.overlayEbuilds(pkg)
+	if len(ebuilds) == 0 {
+		return out
+	}
+	versions := make([]string, 0, len(ebuilds))
+	for _, eb := range ebuilds {
+		versions = append(versions, eb.PVR)
+	}
+	suffix := "   overlay: " + strings.Join(versions, "  ")
+	remaining := m.width - 1 - runewidth.StringWidth(plain)
+	return out + truncateToWidth(suffix, max(remaining, 0))
 }
 
 // colorizeStepGlyphs tints checklist markers after the line has been measured

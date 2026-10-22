@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"bennypowers.dev/larry/internal/logger"
 )
@@ -27,7 +28,35 @@ var ManifestRunner = func(bin string, args []string, dir string, env []string) e
 	// progress instead of going silent until the process exits.
 	cmd.Stdout = io.MultiWriter(os.Stdout, &stdout)
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
-	if err := cmd.Run(); err != nil {
+
+	// Under a pipe (larry manage) there is no terminal progress bar, so portage
+	// can be silent for minutes. Announce the command and heartbeat.
+	interactive := false
+	if fi, statErr := os.Stdout.Stat(); statErr == nil {
+		interactive = fi.Mode()&os.ModeCharDevice != 0
+	}
+	done := make(chan struct{})
+	if !interactive {
+		_, _ = fmt.Fprintf(os.Stdout, ">>> %s %s\n", bin, strings.Join(args, " "))
+		go func() {
+			ticker := time.NewTicker(15 * time.Second)
+			defer ticker.Stop()
+			start := time.Now()
+			for {
+				select {
+				case <-done:
+					return
+				case <-ticker.C:
+					_, _ = fmt.Fprintf(os.Stdout, ">>> still running (%s)\n",
+						time.Since(start).Round(time.Second))
+				}
+			}
+		}()
+	}
+
+	err := cmd.Run()
+	close(done)
+	if err != nil {
 		return err
 	}
 	logger.Debug("stdout:\n" + stdout.String())
