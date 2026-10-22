@@ -221,8 +221,9 @@ func TestPrepare_CustomScript_EnvVars(t *testing.T) {
 		PVVal:    "6.1.0_p20230915",
 		PVal:     "rpi-kernel-6.1.0_p20230915",
 	}
+	distdir := t.TempDir()
 	cfg := &PrepareConfig{
-		Distdir: "/var/cache/distfiles",
+		Distdir: distdir,
 	}
 
 	err := Prepare(ei, cfg)
@@ -241,7 +242,7 @@ func TestPrepare_CustomScript_EnvVars(t *testing.T) {
 		"PV=6.1.0_p20230915": "",
 		"P=rpi-kernel-6.1.0_p20230915": "",
 		"CATEGORY=sys-kernel": "",
-		"DISTDIR=/var/cache/distfiles": "",
+		"DISTDIR=" + distdir: "",
 		"LARRY_PREPARE=1": "",
 	}
 
