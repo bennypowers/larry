@@ -50,7 +50,14 @@ Requires a terminal; use **larry-upstream**(1) for piped or scripted use.
 : Re-run the upstream check.
 
 **enter**
-: Show source URL, target, error, and depth.
+: Toggle the detail pane: source URL, target, error, depth, and every ebuild
+  version present in the overlay.
+
+**x**
+: Prune older ebuilds, keeping the newest and any live (9999) ebuilds.
+
+**A**
+: Toggle autoprune for the session: prune after a successful bump.
 
 **?**
 : Toggle full key help.

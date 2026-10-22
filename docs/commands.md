@@ -45,7 +45,9 @@ Overlay, cache, jobs, colour, and remote flags are the global flags below.
 | `p` | Prepare the package (`larry prepare`), with a live step checklist |
 | `t` | Choose test mode/phases/USE, then run `larry test` |
 | `R` | Re-run the upstream check |
-| `enter` | Show source URL, target, error, and depth |
+| `enter` | Show the detail pane: versions in the overlay, source URL, target, error, depth |
+| `x` | Prune older ebuilds, keeping the newest and any live (9999) ebuilds |
+| `A` | Toggle autoprune: prune after a successful bump |
 | `?` | Toggle full key help |
 | `up`/`k`, `down`/`j` | Move the selection |
 | `pgup`/`b`, `pgdown`/`f` | Page the table |
@@ -67,6 +69,12 @@ check finishes. CURRENT and SOURCE are resolved locally, so they render
 immediately; LATEST and STATUS show a spinner per row until that package
 resolves. Overall progress sits in the header and footer, and the layout and
 column widths stay fixed while results arrive.
+
+The detail pane has the same bordered rule as the action pane. It lists the
+package, current/latest/status, source, depth, every ebuild version present in
+the overlay, and the prune controls. `x` asks for confirmation before removing
+older ebuilds; `A` toggles autoprune for the session. A successful bump shows
+the version transition (`369 → 370`) above the captured output.
 
 Running actions keep the table on screen and use a pane below it for the
 checklist, elapsed time, and the tail of the streamed output. The pane shows

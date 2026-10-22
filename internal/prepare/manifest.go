@@ -23,10 +23,11 @@ var ManifestRunner = func(bin string, args []string, dir string, env []string) e
 	cmd.Dir = dir
 	cmd.Env = env
 	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Stream live so long manifest runs (distfile downloads, digesting) show
+	// progress instead of going silent until the process exits.
+	cmd.Stdout = io.MultiWriter(os.Stdout, &stdout)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
 	if err := cmd.Run(); err != nil {
-		fmt.Fprint(os.Stderr, stdout.String(), stderr.String())
 		return err
 	}
 	logger.Debug("stdout:\n" + stdout.String())

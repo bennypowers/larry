@@ -161,6 +161,7 @@ func runBump(cmd *cobra.Command, args []string) error {
 		ForceType:             forceType,
 		CleanupOrphanedAssets: true,
 		RevisionBump:          mode == bump.BumpModeRevision,
+		Log:                   log,
 		// Prepare runs inside bump; forward its named steps so the pane is
 		// not stuck on a single opaque "prepare" row.
 		Progress: func(ev prepare.ProgressEvent) {

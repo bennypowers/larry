@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -490,6 +492,87 @@ func TestUpstreamModel_RunningActionKeepsTableVisible(t *testing.T) {
 	}
 	if lines := strings.Split(view, "\n"); len(lines) != 30 {
 		t.Errorf("view with error has %d lines, want 30", len(lines))
+	}
+}
+
+func TestUpstreamModel_DetailShowsOverlayVersionsAndPrune(t *testing.T) {
+	overlay := t.TempDir()
+	pkgDir := filepath.Join(overlay, "app-shells", "alpha")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"1.0.0", "1.1.0", "9999"} {
+		if err := os.WriteFile(filepath.Join(pkgDir, "alpha-"+v+".ebuild"), []byte("EAPI=8\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m, _ := newModelForTest(t, true)
+	m.overlay = overlay
+	m.Update(upstreamDoneMsg{Results: []upstream.UpstreamResult{{
+		Package: "app-shells/alpha", Current: "1.1.0", Latest: "1.2.0",
+		Status: upstream.StatusOutdated,
+	}}})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	view := m.View()
+	for _, want := range []string{"details", "In overlay:", "1.1.0", "9999", "autoprune off", "x remove 1 older"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("detail view missing %q:\n%s", want, view)
+		}
+	}
+	if lines := strings.Split(view, "\n"); len(lines) != 30 {
+		t.Errorf("detail view has %d lines, want 30", len(lines))
+	}
+}
+
+func TestUpstreamModel_PruneOlderKeepsNewestAndLive(t *testing.T) {
+	overlay := t.TempDir()
+	pkgDir := filepath.Join(overlay, "app-shells", "alpha")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"1.0.0", "1.1.0", "9999"} {
+		if err := os.WriteFile(filepath.Join(pkgDir, "alpha-"+v+".ebuild"), []byte("EAPI=8\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m, _ := newModelForTest(t, true)
+	m.overlay = overlay
+	if got := m.prunableCount(m.overlayEbuilds("app-shells/alpha")); got != 1 {
+		t.Errorf("prunableCount = %d, want 1", got)
+	}
+
+	removed, err := m.pruneOlder("app-shells/alpha")
+	if err != nil {
+		t.Fatalf("pruneOlder: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != "alpha-1.0.0.ebuild" {
+		t.Errorf("removed = %v, want alpha-1.0.0.ebuild", removed)
+	}
+	remaining := m.overlayEbuilds("app-shells/alpha")
+	var names []string
+	for _, eb := range remaining {
+		names = append(names, eb.PVR)
+	}
+	if strings.Join(names, ",") != "1.1.0,9999" {
+		t.Errorf("remaining = %v, want 1.1.0 and 9999", names)
+	}
+}
+
+func TestUpstreamModel_BumpSummary(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.actionPkg = "app-admin/cockpit"
+	m.appendActionLine("  Old version: 369")
+	m.appendActionLine("  New version: 370")
+
+	if m.bumpOld != "369" || m.bumpNew != "370" {
+		t.Errorf("parsed bump = %q -> %q", m.bumpOld, m.bumpNew)
+	}
+	summary := m.bumpSummary()
+	if !strings.Contains(summary, "369") || !strings.Contains(summary, "370") || !strings.Contains(summary, "→") {
+		t.Errorf("summary = %q", summary)
 	}
 }
 

@@ -315,6 +315,7 @@ func prepareGeneric(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 		EbuildPath: ei.Path,
 		Prefetch:   nil,
 	}
+	cfg.report(ProgressEvent{Kind: ProgressStep, Package: ei.Category + "/" + ei.Pkg, Step: "manifest"})
 	if err := runManifest(req); err != nil {
 		// Rollback on failure
 		_ = Restore(ei.Path) // best-effort recovery after failure
@@ -483,6 +484,7 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 	// Pipe stdout/stderr through progress events when a TUI consumes them;
 	// otherwise inherit so the user sees the script's output live.
 	var pipeWG sync.WaitGroup
+	var closePipe func()
 	if cfg.UseTUI {
 		pr, pw := io.Pipe()
 		cmd.Stdout = pw
@@ -499,19 +501,25 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 				})
 			}
 		}()
-		defer func() {
+		closePipe = func() {
 			_ = pw.Close()
 			pipeWG.Wait()
-		}()
+		}
 	} else {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 	}
 
-	if err := cmd.Run(); err != nil {
+	runErr := cmd.Run()
+	if closePipe != nil {
+		// Finish the log goroutine before reporting more progress, so the
+		// callback is never invoked concurrently.
+		closePipe()
+	}
+	if runErr != nil {
 		// Rollback ebuild on script failure.
 		_ = Restore(ei.Path) // best-effort recovery after failure
-		return fmt.Errorf("custom prepare script %q failed: %w", scriptPath, err)
+		return fmt.Errorf("custom prepare script %q failed: %w", scriptPath, runErr)
 	}
 
 	// Run manifest for this package (catPkg, not a file path).

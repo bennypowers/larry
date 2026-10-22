@@ -3,9 +3,12 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/upstream"
 
 	"github.com/charmbracelet/bubbles/progress"
@@ -24,6 +27,7 @@ const (
 	ActionBump    ActionKind = "bump"
 	ActionPrepare ActionKind = "prepare"
 	ActionTest    ActionKind = "test"
+	ActionPrune   ActionKind = "prune"
 )
 
 // ActionFunc runs one action for a package, streaming its output line by line
@@ -194,6 +198,8 @@ type UpstreamModel struct {
 	actionError  string
 	actionStart  time.Time
 	lastActivity time.Time
+	bumpOld      string
+	bumpNew      string
 
 	// Test options are remembered between runs. testInput edits one field of
 	// testDraft while modeTestOptions is active.
@@ -212,6 +218,7 @@ type UpstreamModel struct {
 	width, height int
 	showDetail    bool
 	showHelp      bool
+	autoprune     bool
 
 	checked int
 	total   int
@@ -382,6 +389,13 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.actionErr = ev.err
 			m.mode = modeBrowse
 			if ev.err == nil {
+				if m.pending == ActionBump && m.autoprune {
+					if removed, err := m.pruneOlder(m.actionPkg); err == nil {
+						for _, name := range removed {
+							m.appendActionLine("autopruned " + name)
+						}
+					}
+				}
 				return m, m.startFetch()
 			}
 		}
@@ -491,6 +505,19 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selectedPkg = m.selectedPackage()
 					return m, m.startFetch()
 				}
+			case 'x':
+				if m.mode == modeBrowse && m.state == upstreamResults &&
+					m.showDetail && len(m.visible) > 0 {
+					m.pending = ActionPrune
+					m.mode = modeConfirm
+				}
+				return m, nil
+			case 'A':
+				if m.mode == modeBrowse && m.state == upstreamResults {
+					m.autoprune = !m.autoprune
+					m.updateDetail()
+				}
+				return m, nil
 			}
 		}
 		if m.mode == modeBrowse && (m.state == upstreamResults || m.state == upstreamFetching) {
@@ -587,6 +614,30 @@ func (m *UpstreamModel) quitWithCancel() {
 }
 
 func (m *UpstreamModel) startAction() tea.Cmd {
+	if m.pending == ActionPrune {
+		if len(m.visible) == 0 {
+			m.mode = modeBrowse
+			return nil
+		}
+		pkg := m.visible[m.Selected()].Package
+		m.selectedPkg = pkg
+		m.actionPkg = pkg
+		m.actionLines = nil
+		m.actionErr = nil
+		removed, err := m.pruneOlder(pkg)
+		for _, name := range removed {
+			m.appendActionLine("pruned " + name)
+		}
+		if err != nil {
+			m.actionErr = err
+			m.appendActionLine("!!! prune failed: " + err.Error())
+		} else if len(removed) == 0 {
+			m.appendActionLine("nothing to prune: only the newest ebuild remains")
+		}
+		m.mode = modeBrowse
+		m.updateDetail()
+		return nil
+	}
 	var fn ActionFunc
 	if m.pending != ActionTest {
 		fn = m.actions.forKind(m.pending)
@@ -609,6 +660,8 @@ func (m *UpstreamModel) startAction() tea.Cmd {
 	m.actionSteps = nil
 	m.actionDetail = ""
 	m.actionError = ""
+	m.bumpOld = ""
+	m.bumpNew = ""
 	m.actionStart = time.Now()
 	m.lastActivity = m.actionStart
 	m.actionView.SetContent("")
@@ -728,6 +781,16 @@ func (m *UpstreamModel) appendActionLine(line string) {
 	m.lastActivity = time.Now()
 	if isActionErrorLine(line) {
 		m.actionError = line
+	}
+	trimmed := strings.TrimSpace(line)
+	switch {
+	case strings.HasPrefix(trimmed, "Old version:"):
+		m.bumpOld = strings.TrimSpace(strings.TrimPrefix(trimmed, "Old version:"))
+	case strings.HasPrefix(trimmed, "New version:"):
+		m.bumpNew = strings.TrimSpace(strings.TrimPrefix(trimmed, "New version:"))
+		if m.bumpOld != "" {
+			m.actionDetail = m.bumpOld + " → " + m.bumpNew
+		}
 	}
 	m.actionLines = append(m.actionLines, line)
 	m.actionView.SetContent(strings.Join(m.actionLines, "\n"))
@@ -862,13 +925,16 @@ func (m *UpstreamModel) listHeight() int {
 		height -= m.actionPaneHeight()
 	} else {
 		if m.showDetail {
-			height -= 6
+			height -= 7
 		}
 		if m.actionErr != nil {
 			height--
 		}
 		if len(m.actionLines) > 0 {
 			height -= 11
+			if m.bumpNew != "" {
+				height--
+			}
 		}
 		if m.mode == modeConfirm {
 			height--
@@ -1118,7 +1184,78 @@ func (m *UpstreamModel) updateDetail() {
 		fmt.Fprintf(&b, "Error:   %s\n", r.Error)
 	}
 	fmt.Fprintf(&b, "Depth:   %d\n", r.Depth)
+
+	if ebuilds := m.overlayEbuilds(r.Package); len(ebuilds) > 0 {
+		versions := make([]string, 0, len(ebuilds))
+		for _, eb := range ebuilds {
+			versions = append(versions, eb.PVR)
+		}
+		fmt.Fprintf(&b, "In overlay: %s\n", strings.Join(versions, "  "))
+		auto := "off"
+		if m.autoprune {
+			auto = "on"
+		}
+		fmt.Fprintf(&b, "Prune: x remove %d older ebuild(s)   A: autoprune %s\n",
+			m.prunableCount(ebuilds), auto)
+	}
 	m.viewport.SetContent(b.String())
+}
+
+// overlayEbuilds lists the package's ebuilds in the overlay, oldest first.
+func (m *UpstreamModel) overlayEbuilds(pkg string) []*atom.ParsedEbuild {
+	if m.overlay == "" || pkg == "" {
+		return nil
+	}
+	ebuilds, err := atom.ListEbuilds(filepath.Join(m.overlay, pkg))
+	if err != nil {
+		return nil
+	}
+	return ebuilds
+}
+
+// prunableCount is how many ebuilds x would remove: every non-live ebuild
+// except the newest.
+func (m *UpstreamModel) prunableCount(ebuilds []*atom.ParsedEbuild) int {
+	newest := -1
+	for i, eb := range ebuilds {
+		if !eb.Live {
+			newest = i
+		}
+	}
+	count := 0
+	for i, eb := range ebuilds {
+		if !eb.Live && i != newest {
+			count++
+		}
+	}
+	return count
+}
+
+// pruneOlder removes every non-live ebuild except the newest, returning the
+// removed paths. Live ebuilds are always kept.
+func (m *UpstreamModel) pruneOlder(pkg string) ([]string, error) {
+	ebuilds := m.overlayEbuilds(pkg)
+	newest := -1
+	for i, eb := range ebuilds {
+		if !eb.Live {
+			newest = i
+		}
+	}
+	var removed []string
+	var firstErr error
+	for i, eb := range ebuilds {
+		if eb.Live || i == newest {
+			continue
+		}
+		if err := os.Remove(eb.Path); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		removed = append(removed, filepath.Base(eb.Path))
+	}
+	return removed, firstErr
 }
 
 // View implements tea.Model.
@@ -1192,6 +1329,17 @@ func (m *UpstreamModel) actionRunningView() string {
 
 // actionPaneView renders exactly actionPaneHeight lines: a title rule, the
 // checklist, and the tail of the child's output.
+// rule renders a full-width rule with a left label, used for the detail and
+// action panes.
+func (m *UpstreamModel) rule(label string) string {
+	plain := "─ " + label
+	fill := m.width - runewidth.StringWidth(plain) - 1
+	if fill < 0 {
+		fill = 0
+	}
+	return m.theme.HeaderStyle().Render(plain + " " + strings.Repeat("─", fill))
+}
+
 func (m *UpstreamModel) actionPaneView() string {
 	paneHeight := m.actionPaneHeight()
 
@@ -1208,12 +1356,8 @@ func (m *UpstreamModel) actionPaneView() string {
 		}
 	}
 	label = truncateToWidth(label, max(m.width-4, 1))
-	fill := m.width - 2 - runewidth.StringWidth(label)
-	if fill < 0 {
-		fill = 0
-	}
 	lines := make([]string, 0, paneHeight)
-	lines = append(lines, m.theme.HeaderStyle().Render("─ "+label+" "+strings.Repeat("─", fill)))
+	lines = append(lines, m.rule(label))
 
 	var steps strings.Builder
 	for i, step := range m.actionSteps {
@@ -1368,6 +1512,8 @@ func (m *UpstreamModel) resultsView() string {
 		b.WriteString(m.renderTable())
 		b.WriteString("\n")
 		if m.showDetail {
+			b.WriteString(m.rule("details"))
+			b.WriteString("\n")
 			b.WriteString(m.theme.LogStyle().Render(m.viewport.View()))
 			b.WriteString("\n")
 		}
@@ -1377,6 +1523,10 @@ func (m *UpstreamModel) resultsView() string {
 		b.WriteString("\n")
 	}
 	if len(m.actionLines) > 0 {
+		if m.bumpNew != "" {
+			b.WriteString(m.bumpSummary())
+			b.WriteString("\n")
+		}
 		b.WriteString(m.theme.FooterStyle().Render("last action output:"))
 		b.WriteString("\n")
 		b.WriteString(m.theme.LogStyle().Render(m.actionView.View()))
@@ -1391,6 +1541,19 @@ func (m *UpstreamModel) resultsView() string {
 	return b.String()
 }
 
+// bumpSummary renders the package's version transition.
+func (m *UpstreamModel) bumpSummary() string {
+	if !m.theme.Color {
+		return fmt.Sprintf("%s  %s → %s", m.actionPkg, m.bumpOld, m.bumpNew)
+	}
+	renderer := m.theme.Renderer
+	oldStyle := renderer.NewStyle().Foreground(lipgloss.Color("208"))
+	newStyle := renderer.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
+	arrow := renderer.NewStyle().Foreground(lipgloss.Color("240")).Render("→")
+	return fmt.Sprintf("%s  %s %s %s", m.actionPkg,
+		oldStyle.Render(m.bumpOld), arrow, newStyle.Render(m.bumpNew))
+}
+
 func (m *UpstreamModel) selectedPackage() string {
 	if len(m.visible) == 0 {
 		return ""
@@ -1402,7 +1565,7 @@ func (m *UpstreamModel) footer() string {
 	short := "↑/↓: move  enter: details  b: bump  p: prepare  t: test  R: refresh  q: quit"
 	if m.showHelp {
 		short = "↑/↓ or j/k: move  pgup/pgdn or b/f: page  g/G: first/last  enter: details  " +
-			"b: bump  p: prepare  t: test  R: refresh  ?: help  q: quit"
+			"b: bump  p: prepare  t: test  R: refresh  x: prune older  A: autoprune  ?: help  q: quit"
 	}
 	if m.mode == modeConfirm {
 		short = "y: confirm  n/esc: cancel"
