@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"bennypowers.dev/larry/internal/cli"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/prepare"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 )
 
@@ -16,6 +20,7 @@ var (
 	prepareType           string
 	prepareAll            bool
 	prepareCleanupOrphans bool
+	prepareTUI            bool
 )
 
 func init() {
@@ -27,6 +32,8 @@ func init() {
 		"regenerate Manifest for all packages via pkgdev (manifest-only, no type-specific pipeline)")
 	prepareCmd.Flags().BoolVar(&prepareCleanupOrphans, "cleanup", false,
 		"remove orphaned GitHub release assets on prepare failure")
+	prepareCmd.Flags().BoolVar(&prepareTUI, "tui", false,
+		"interactive progress UI (requires a TTY; falls back to plain output)")
 }
 
 var prepareCmd = cobra.Command{
@@ -95,6 +102,7 @@ Flags:
 			Overlay:               overlay,
 			UseTUI:                false,
 			CleanupOrphanedAssets: prepareCleanupOrphans,
+			Log:                   log,
 		}
 
 		// Resolve GitHub repo from overlay git remote (for release uploads).
@@ -115,48 +123,110 @@ Flags:
 
 		// Determine what to prepare.
 		log.Info("Preparing %d target(s) in %s (dry-run=%v)", len(args), overlay, cfg.DryRun)
-		switch {
-		case prepareAll && len(args) == 0:
-			// --all without args: manifest-only bulk pkgdev call (D8).
-			return prepare.PrepareManifestAll(overlay, distdir)
-		case len(args) == 0:
-			// No args: show help.
-			return cmd.Help()
-		case len(args) == 1 && !prepareAll:
-			// Single path (file or directory).
-			resolved, fi, err := resolvePrepareTarget(args[0], overlay)
-			if err != nil {
-				return err
-			}
 
-			if fi.IsDir() {
-				// Directory: prepare all ebuilds with failure counting.
-				return prepare.PrepareDir(resolved, pcfg)
+		if prepareTUI {
+			if cli.IsTTY(cmd.OutOrStdout()) {
+				return runPrepareTUI(cmd, args, pcfg)
 			}
-
-			// Single file: prepare that ebuild.
-			return prepare.PrepareFromFile(resolved, pcfg)
-		default:
-			// Multiple paths: attempt each, aggregate failures (D9).
-			var failures int
-			for _, raw := range args {
-				resolved, _, err := resolvePrepareTarget(raw, overlay)
-				if err != nil {
-					log.Error("prepare %s: %v\n", raw, err)
-					failures++
-					continue
-				}
-				if err := prepare.PrepareFile(resolved, pcfg); err != nil {
-					log.Error("prepare %s: %v\n", resolved, err)
-					failures++
-				}
-			}
-			if failures > 0 {
-				return fmt.Errorf("%d package(s) failed", failures)
-			}
-			return nil
+			log.Warn("--tui requires a terminal; falling back to plain output")
 		}
+		return runPrepareTargets(cmd, args, pcfg)
 	},
+}
+
+// runPrepareTargets executes prepare for the requested targets. It is shared
+// by the plain and TUI paths.
+func runPrepareTargets(cmd *cobra.Command, args []string, pcfg *prepare.PrepareConfig) error {
+	switch {
+	case prepareAll && len(args) == 0:
+		// --all without args: manifest-only bulk pkgdev call (D8).
+		return prepare.PrepareManifestAllWithConfig(pcfg)
+	case len(args) == 0:
+		// No args: show help.
+		return cmd.Help()
+	case len(args) == 1 && !prepareAll:
+		// Single path (file or directory).
+		resolved, fi, err := resolvePrepareTarget(args[0], pcfg.Overlay)
+		if err != nil {
+			return err
+		}
+
+		if fi.IsDir() {
+			// Directory: prepare all ebuilds with failure counting.
+			return prepare.PrepareDir(resolved, pcfg)
+		}
+
+		// Single file: prepare that ebuild.
+		return prepare.PrepareFromFile(resolved, pcfg)
+	default:
+		// Multiple paths: attempt each, aggregate failures (D9).
+		var failures int
+		for _, raw := range args {
+			resolved, _, err := resolvePrepareTarget(raw, pcfg.Overlay)
+			if err != nil {
+				log.Error("prepare %s: %v\n", raw, err)
+				failures++
+				continue
+			}
+			if err := prepare.PrepareFile(resolved, pcfg); err != nil {
+				log.Error("prepare %s: %v\n", resolved, err)
+				failures++
+			}
+		}
+		if failures > 0 {
+			return fmt.Errorf("%d package(s) failed", failures)
+		}
+		return nil
+	}
+}
+
+// runPrepareTUI runs the pipeline in a goroutine and streams progress events
+// into the Bubble Tea model.
+func runPrepareTUI(cmd *cobra.Command, args []string, pcfg *prepare.PrepareConfig) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	pcfg.Context = ctx
+	pcfg.UseTUI = true
+
+	events := make(chan prepare.ProgressEvent, 128)
+	send := func(ev prepare.ProgressEvent) {
+		select {
+		case events <- ev:
+		case <-ctx.Done():
+		}
+	}
+	pcfg.Progress = send
+
+	go func() {
+		err := runPrepareTargets(cmd, args, pcfg)
+		if err != nil {
+			send(prepare.ProgressEvent{Kind: prepare.ProgressError, Message: err.Error(), Err: err})
+		} else {
+			send(prepare.ProgressEvent{Kind: prepare.ProgressDone})
+		}
+		close(events)
+	}()
+
+	title := "prepare"
+	if len(args) > 0 {
+		title = "prepare " + strings.Join(args, " ")
+	}
+	m := cli.NewPrepareModel(cli.PrepareModelOptions{
+		Context: ctx,
+		Events:  events,
+		Theme: cli.NewTheme(cli.ThemeOptions{
+			Color:      color.Enabled(),
+			Hyperlinks: color.Enabled(),
+			Renderer:   lipgloss.NewRenderer(cmd.OutOrStdout()),
+		}),
+		Title:  title,
+		Cancel: cancel,
+	})
+	_, runErr := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(cmd.OutOrStdout())).Run()
+	cancel()
+	if runErr != nil {
+		return runErr
+	}
+	return m.Err()
 }
 
 // resolvePrepareTarget resolves a path to an absolute filesystem path and returns its info.

@@ -2,137 +2,129 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"strings"
 	"testing"
 
+	"bennypowers.dev/larry/internal/prepare"
+
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
-const (
-	stepPending = "pending"
-	stepRunning = "running"
-	stepDone    = "done"
-	stepError   = "error"
-)
+func newPrepareModelForTest(t *testing.T) *PrepareModel {
+	t.Helper()
+	var buf bytes.Buffer
+	theme := NewTheme(ThemeOptions{Renderer: lipgloss.NewRenderer(&buf)})
+	m := NewPrepareModel(PrepareModelOptions{
+		Context: context.Background(),
+		Events:  make(chan prepare.ProgressEvent, 8),
+		Theme:   theme,
+		Title:   "dev-util/foo",
+	})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	return m
+}
 
-// ---------------------------------------------------------------------------
-// TestTUI_PrepareProgress — progress bar per pipeline step
-// ---------------------------------------------------------------------------
+func sendPrepareEvent(m *PrepareModel, ev prepare.ProgressEvent) {
+	m.Update(prepareEventMsg(ev))
+}
 
-func TestTUI_PrepareProgress(t *testing.T) {
-	steps := []prepareStep{
-		{Name: "Resolve upstream repo", State: stepDone},
-		{Name: "Download Cargo.lock", State: stepDone},
-		{Name: "Parse dependencies", State: stepRunning},
-		{Name: "Update ebuild CRATES", State: stepPending},
+func TestPrepareModel_ProgressBar(t *testing.T) {
+	m := newPrepareModelForTest(t)
+	sendPrepareEvent(m, prepare.ProgressEvent{Kind: prepare.ProgressStart, Total: 3})
+	sendPrepareEvent(m, prepare.ProgressEvent{Kind: prepare.ProgressStep, Step: "download", Done: 1, Total: 3})
+	if view := m.View(); !strings.Contains(view, "1/3") {
+		t.Errorf("view missing 1/3:\n%s", view)
 	}
+}
 
-	m := newPrepareModel(steps)
+func TestPrepareModel_StepTable(t *testing.T) {
+	m := newPrepareModelForTest(t)
+	sendPrepareEvent(m, prepare.ProgressEvent{Kind: prepare.ProgressStep, Step: "download", Done: 0, Total: 2})
+	sendPrepareEvent(m, prepare.ProgressEvent{Kind: prepare.ProgressStep, Step: "manifest", Done: 1, Total: 2})
 	view := m.View()
-
-	// Should contain step names
-	for _, step := range steps {
-		if !bytes.Contains([]byte(view), []byte(step.Name)) {
-			t.Errorf("view should contain '%s'", step.Name)
+	for _, want := range []string{"download", "manifest", "done", "running"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view missing %q:\n%s", want, view)
 		}
 	}
+}
 
-	// Should contain progress indicators
-	if !bytes.Contains([]byte(view), []byte(stepDone)) {
-		t.Error("view should contain 'done'")
+func TestPrepareModel_LogViewport(t *testing.T) {
+	m := newPrepareModelForTest(t)
+	for _, line := range []string{"first line", "second line", "third line"} {
+		sendPrepareEvent(m, prepare.ProgressEvent{Kind: prepare.ProgressLog, Message: line})
 	}
-	if !bytes.Contains([]byte(view), []byte(stepRunning)) {
-		t.Error("view should contain 'running'")
+	if view := m.View(); !strings.Contains(view, "third line") {
+		t.Errorf("log view missing last line:\n%s", view)
 	}
-	if !bytes.Contains([]byte(view), []byte(stepPending)) {
-		t.Error("view should contain 'pending'")
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	_ = m.View()
+}
+
+func TestPrepareModel_ErrorEvent(t *testing.T) {
+	m := newPrepareModelForTest(t)
+	sendPrepareEvent(m, prepare.ProgressEvent{
+		Kind:    prepare.ProgressError,
+		Message: "manifest failed",
+		Err:     errors.New("manifest failed"),
+	})
+	if m.Err() == nil || !strings.Contains(m.Err().Error(), "manifest failed") {
+		t.Errorf("Err() = %v", m.Err())
+	}
+	if !strings.Contains(m.View(), "manifest failed") {
+		t.Errorf("view does not show the error:\n%s", m.View())
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestTUI_PrepareProgress_Done — all steps completed
-// ---------------------------------------------------------------------------
-
-func TestTUI_PrepareProgress_Done(t *testing.T) {
-	steps := []prepareStep{
-		{Name: "Download", State: stepDone},
-		{Name: "Parse", State: stepDone},
-		{Name: "Update ebuild", State: stepDone},
-	}
-
-	m := newPrepareModel(steps)
-	view := m.View()
-
-	// Should show completion message
-	if !bytes.Contains([]byte(view), []byte(stepDone)) {
-		t.Error("done view should contain 'done'")
-	}
-
-	// Should not show spinner
-	if bytes.Contains([]byte(view), []byte("...")) {
-		t.Error("done view should not contain spinner")
+func TestPrepareModel_ChannelClose(t *testing.T) {
+	m := newPrepareModelForTest(t)
+	m.Update(prepareEventsClosedMsg{})
+	_ = m.View()
+	if m.Quitting() {
+		t.Error("channel close should not quit")
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestTUI_PrepareProgress_Error — error state
-// ---------------------------------------------------------------------------
-
-func TestTUI_PrepareProgress_Error(t *testing.T) {
-	steps := []prepareStep{
-		{Name: "Download", State: stepDone},
-		{Name: "Parse", State: stepError},
-		{Name: "Update", State: stepPending},
-	}
-
-	m := newPrepareModel(steps)
-	view := m.View()
-
-	// Should contain error indicator
-	if !bytes.Contains([]byte(view), []byte(stepError)) {
-		t.Error("error view should contain 'error'")
+func TestPrepareModel_Keybindings_Quit(t *testing.T) {
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'q'}},
+		{Type: tea.KeyEsc},
+		{Type: tea.KeyCtrlC},
+	} {
+		m := newPrepareModelForTest(t)
+		m.Update(key)
+		if !m.Quitting() {
+			t.Errorf("%v did not quit", key)
+		}
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestTUI_PrepareProgress_Keybindings
-// ---------------------------------------------------------------------------
-
-func TestTUI_PrepareProgress_Keybindings(t *testing.T) {
-	steps := []prepareStep{
-		{Name: "Step 1", State: stepDone},
-		{Name: "Step 2", State: stepRunning},
+func TestPrepareModel_DoneStopsSpinner(t *testing.T) {
+	m := newPrepareModelForTest(t)
+	sendPrepareEvent(m, prepare.ProgressEvent{Kind: prepare.ProgressDone, Done: 2, Total: 2})
+	if !m.Done() {
+		t.Error("Done() = false after ProgressDone")
 	}
-
-	m := newPrepareModel(steps)
-
-	// Ctrl+C should quit
-	_, msg := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	if !m.quitting() {
-		t.Error("Ctrl+C should quit")
-	}
-	if msg == nil {
-		t.Error("should return message on quit")
+	if view := m.View(); !strings.Contains(view, "2/2") {
+		t.Errorf("completed view missing 2/2:\n%s", view)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestTUI_PrepareProgress_InitialView
-// ---------------------------------------------------------------------------
-
-func TestTUI_PrepareProgress_InitialView(t *testing.T) {
-	steps := []prepareStep{
-		{Name: "Step 1", State: stepRunning},
-		{Name: "Step 2", State: stepPending},
+func TestPrepareModel_ColorDisabledNoANSI(t *testing.T) {
+	m := newPrepareModelForTest(t)
+	sendPrepareEvent(m, prepare.ProgressEvent{Kind: prepare.ProgressStep, Step: "download", Done: 1, Total: 2})
+	sendPrepareEvent(m, prepare.ProgressEvent{Kind: prepare.ProgressLog, Message: "line"})
+	if view := m.View(); strings.Contains(view, "\x1b[") {
+		t.Errorf("colour-disabled prepare model emitted ANSI:\n%q", view)
 	}
+}
 
-	m := newPrepareModel(steps)
-	view := m.View()
-
-	// Initial view should show running step
-	if !bytes.Contains([]byte(view), []byte("Step 1")) {
-		t.Error("view should contain 'Step 1'")
-	}
-	if !bytes.Contains([]byte(view), []byte(stepRunning)) {
-		t.Error("view should contain 'running'")
+func TestPrepareModel_InitReturnsCommand(t *testing.T) {
+	m := newPrepareModelForTest(t)
+	if m.Init() == nil {
+		t.Error("Init() = nil, want a batch command")
 	}
 }

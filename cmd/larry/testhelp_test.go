@@ -33,6 +33,9 @@ func execCmd(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	upstreamPrereleases = false
 	upstreamTUI = false
 	upstreamOutput = "text"
+	prepareTUI = false
+	prepareType = ""
+	prepareAll = false
 
 	// Reset root persistent flags too: pflag keeps both values and Changed
 	// markers from a previous ParseFlags when a flag is absent from the new

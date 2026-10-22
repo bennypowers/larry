@@ -1,13 +1,17 @@
 package prepare
 
 import (
+	"bufio"
+	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
@@ -19,16 +23,22 @@ import (
 
 // PrepareConfig holds configuration for the prepare command.
 type PrepareConfig struct {
-	DryRun                  bool
-	Distdir                 string
-	Overlay                 string // overlay root path for manifest
-	GitHubRepo              string // GitHub repo (owner/repo) for release operations
-	UseTUI                  bool
-	ForceType               ebuild.PackageType
-	HTTPClient              *http.Client
-	CleanupOrphanedAssets   bool // removes orphaned GitHub assets on prepare failure
-	RevisionBump            bool // skip source download, only run manifest
-	CustomPrepareScript     string // relative path (from pkg dir) to custom prepare script; default: .larry/prepare.sh
+	DryRun                bool
+	Distdir               string
+	Overlay               string // overlay root path for manifest
+	GitHubRepo            string // GitHub repo (owner/repo) for release operations
+	UseTUI                bool
+	ForceType             ebuild.PackageType
+	HTTPClient            *http.Client
+	CleanupOrphanedAssets bool   // removes orphaned GitHub assets on prepare failure
+	RevisionBump          bool   // skip source download, only run manifest
+	CustomPrepareScript   string // relative path (from pkg dir) to custom prepare script; default: .larry/prepare.sh
+
+	// Context cancels long-running work between pipeline steps. A running
+	// external command is allowed to finish.
+	Context context.Context
+	// Progress receives pipeline events. Nil means no reporting.
+	Progress ProgressFunc
 
 	// GitHubBaseURL is the scheme+host used to build archive URLs.
 	// Empty means "https://github.com". Tests set it to an httptest server URL.
@@ -48,6 +58,11 @@ func Prepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	if cfg == nil {
 		cfg = &PrepareConfig{}
 	}
+	if err := cfg.contextErr(); err != nil {
+		return err
+	}
+	pkgName := ei.Category + "/" + ei.Pkg
+	cfg.report(ProgressEvent{Kind: ProgressStart, Package: pkgName})
 
 	// Version-pinned ${FILESDIR} references that do not resolve break
 	// src_install — warn about them before any work happens. Resolving
@@ -97,6 +112,12 @@ func Prepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 
 	logger.Debug("detected type: " + string(pkgType))
 	logger.Debug("ebuild: " + ei.Path)
+	cfg.report(ProgressEvent{
+		Kind:    ProgressStep,
+		Package: pkgName,
+		Step:    "type: " + string(pkgType),
+		Message: ei.Path,
+	})
 
 	// Propagate cleanup setting from .larry/config.yaml if not already
 	// set via CLI.
@@ -141,8 +162,21 @@ func PrepareFromFile(path string, cfg *PrepareConfig) error {
 // Used only by `larry prepare --all` with no positional arguments.
 // It does NOT run any type-specific pipeline.
 func PrepareManifestAll(overlay, distdir string) error {
+	return PrepareManifestAllWithConfig(&PrepareConfig{Overlay: overlay, Distdir: distdir})
+}
+
+// PrepareManifestAllWithConfig is PrepareManifestAll with progress and
+// cancellation. It runs one manifest per category/package.
+func PrepareManifestAllWithConfig(cfg *PrepareConfig) error {
+	if cfg == nil {
+		cfg = &PrepareConfig{}
+	}
+	overlay, distdir := cfg.Overlay, cfg.Distdir
 	if distdir == "" {
 		return fmt.Errorf("manifest: distdir is empty")
+	}
+	if err := cfg.contextErr(); err != nil {
+		return err
 	}
 	// mkdir -p $DISTDIR
 	if err := os.MkdirAll(distdir, 0o755); err != nil {
@@ -155,16 +189,24 @@ func PrepareManifestAll(overlay, distdir string) error {
 	if err != nil {
 		return fmt.Errorf("collect cat/pkg: %w", err)
 	}
-	for _, cp := range dirs {
+	cfg.report(ProgressEvent{Kind: ProgressStart, Total: len(dirs)})
+	for i, cp := range dirs {
+		if err := cfg.contextErr(); err != nil {
+			return err
+		}
+		cfg.report(ProgressEvent{Kind: ProgressStep, Package: cp, Step: "manifest", Done: i, Total: len(dirs)})
 		bin2, style2, err2 := findManifestRunner()
 		if err2 != nil {
 			return err2
 		}
 		args := manifestArgs(style2, distdir, cp, "")
 		if err := ManifestRunner(bin2, args, overlay, append(os.Environ(), "DISTDIR="+distdir)); err != nil {
-			return fmt.Errorf("manifest %s: %w", cp, err)
+			wrapped := fmt.Errorf("manifest %s: %w", cp, err)
+			cfg.report(ProgressEvent{Kind: ProgressError, Package: cp, Message: wrapped.Error(), Err: wrapped, Done: i + 1, Total: len(dirs)})
+			return wrapped
 		}
 	}
+	cfg.report(ProgressEvent{Kind: ProgressDone, Done: len(dirs), Total: len(dirs)})
 	return nil
 }
 
@@ -210,14 +252,30 @@ func collectCatPkgs(overlay string) ([]string, error) {
 // PrepareDir runs the full per-type pipeline for every *.ebuild in dir,
 // counting failures instead of aborting on the first one (D9).
 func PrepareDir(dir string, cfg *PrepareConfig) error {
+	if cfg == nil {
+		cfg = &PrepareConfig{}
+	}
+	if err := cfg.contextErr(); err != nil {
+		return err
+	}
 	files, err := collectEbuilds(dir)
 	if err != nil {
 		return fmt.Errorf("collect ebuilds: %w", err)
 	}
 
+	cfg.report(ProgressEvent{Kind: ProgressStart, Total: len(files)})
 	var failures int
-	for _, f := range files {
+	for i, f := range files {
+		if err := cfg.contextErr(); err != nil {
+			return err
+		}
+		cfg.report(ProgressEvent{Kind: ProgressStep, Package: f, Step: "prepare", Done: i, Total: len(files)})
 		if err := PrepareFile(f, cfg); err != nil {
+			cfg.report(ProgressEvent{
+				Kind: ProgressError, Package: f, Message: err.Error(),
+				Err: err, Done: i + 1, Total: len(files),
+			})
+			// Direct stderr is the non-TUI fallback; TUI consumers use the event.
 			fmt.Fprintf(os.Stderr, "prepare %s: %v\n", f, err)
 			failures++
 		}
@@ -225,6 +283,7 @@ func PrepareDir(dir string, cfg *PrepareConfig) error {
 	if failures > 0 {
 		return fmt.Errorf("%d package(s) failed", failures)
 	}
+	cfg.report(ProgressEvent{Kind: ProgressDone, Done: len(files), Total: len(files)})
 	return nil
 }
 
@@ -418,8 +477,33 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 	cmd.Env = env
 	cmd.Dir = filepath.Dir(ei.Path)
 
-	// Pipe stdout/stderr unless TUI is active (TUI has its own stream isolation).
-	if !cfg.UseTUI {
+	pkgName := ei.Category + "/" + ei.Pkg
+	cfg.report(ProgressEvent{Kind: ProgressStep, Package: pkgName, Step: "custom script", Message: scriptPath})
+
+	// Pipe stdout/stderr through progress events when a TUI consumes them;
+	// otherwise inherit so the user sees the script's output live.
+	var pipeWG sync.WaitGroup
+	if cfg.UseTUI {
+		pr, pw := io.Pipe()
+		cmd.Stdout = pw
+		cmd.Stderr = pw
+		pipeWG.Add(1)
+		go func() {
+			defer pipeWG.Done()
+			scanner := bufio.NewScanner(pr)
+			for scanner.Scan() {
+				cfg.report(ProgressEvent{
+					Kind:    ProgressLog,
+					Package: pkgName,
+					Message: scanner.Text(),
+				})
+			}
+		}()
+		defer func() {
+			_ = pw.Close()
+			pipeWG.Wait()
+		}()
+	} else {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 	}
@@ -451,6 +535,7 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 		EbuildPath: manifestTarget,
 		Prefetch:   nil,
 	}
+	cfg.report(ProgressEvent{Kind: ProgressStep, Package: pkgName, Step: "manifest"})
 	if err := runManifest(req); err != nil {
 		// Rollback ebuild on manifest failure.
 		_ = Restore(ei.Path) // best-effort recovery after failure
