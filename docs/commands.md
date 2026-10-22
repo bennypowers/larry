@@ -43,7 +43,7 @@ Overlay, cache, jobs, colour, and remote flags are the global flags below.
 |-----|--------|
 | `b` | Bump the package (`larry bump <cat/pkg>`) |
 | `p` | Prepare the package (`larry prepare <cat/pkg>`) |
-| `t` | Run `larry test --compile <cat/pkg>` |
+| `t` | Choose test mode/phases/USE, then run `larry test` |
 | `R` | Re-run the upstream check |
 | `enter` | Show source URL, target, error, and depth |
 | `?` | Toggle full key help |
@@ -54,6 +54,12 @@ Overlay, cache, jobs, colour, and remote flags are the global flags below.
 
 Mutating actions ask for confirmation. Their stdout and stderr stream into the
 view; a successful action refreshes the table automatically.
+
+Pressing `t` opens a test prompt: `c` compile, `m` merge, `d` default phases,
+`p` custom phases, `u` USE flags, `tab` next field, `enter` run. The chosen
+options are remembered for the next test. While a test runs, the pane shows a
+step checklist (podman, image, emerge for `--emerge`; the phase list locally),
+elapsed time, and the streamed output. `esc` cancels.
 
 ### Examples
 

@@ -3,13 +3,16 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 
 	"bennypowers.dev/larry/internal/cli"
+	"bennypowers.dev/larry/internal/test"
 	"bennypowers.dev/larry/internal/upstream"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -117,15 +120,85 @@ func buildUpstreamActions(overlay string) cli.UpstreamActions {
 			return runLarryChild(ctx, args, onLine)
 		}
 	}
+	testAction := func(ctx context.Context, pkg string, opts cli.TestOptions,
+		onLine func(string), onProgress func(cli.ActionProgress)) error {
+		args := []string{"test"}
+		switch opts.Mode {
+		case "compile":
+			args = append(args, "--compile")
+		case "merge":
+			args = append(args, "--merge")
+		case "phases":
+			for _, phase := range opts.Phases {
+				args = append(args, "--phase", phase)
+			}
+		}
+		if opts.Use != "" {
+			args = append(args, "--use", opts.Use)
+		}
+		args = append(args, "--progress", "json", "--overlay", overlay, "--color", "never", pkg)
+		return runLarryChildWithProgress(ctx, args, onLine, onProgress)
+	}
 	return cli.UpstreamActions{
 		Bump:    run("bump"),
 		Prepare: run("prepare"),
-		Test:    run("test", "--compile"),
+		Test:    testAction,
 	}
 }
 
 // runLarryChild executes larry with args, forwarding stdout and stderr lines.
 func runLarryChild(ctx context.Context, args []string, onLine func(string)) error {
+	return runLarryChildFunc(ctx, args, onLine)
+}
+
+// runLarryChildWithProgress splits structured progress lines out of the child's
+// stderr before they reach the log pane.
+func runLarryChildWithProgress(ctx context.Context, args []string,
+	onLine func(string), onProgress func(cli.ActionProgress)) error {
+	return runLarryChildFunc(ctx, args, func(line string) {
+		if progress, ok := parseTestProgress(line); ok {
+			if onProgress != nil {
+				onProgress(progress)
+			}
+			return
+		}
+		onLine(line)
+	})
+}
+
+// parseTestProgress decodes a hidden --progress=json line from the test child.
+func parseTestProgress(line string) (cli.ActionProgress, bool) {
+	if !strings.HasPrefix(line, testProgressPrefix) {
+		return cli.ActionProgress{}, false
+	}
+	var wire testProgressWire
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(line, testProgressPrefix)), &wire); err != nil {
+		return cli.ActionProgress{}, false
+	}
+	progress := cli.ActionProgress{Steps: wire.Steps, Step: wire.Step, Message: wire.Message}
+	switch test.StepState(wire.State) {
+	case test.StepRunning:
+		progress.State = cli.ActionStepRunning
+	case test.StepDone:
+		progress.State = cli.ActionStepDone
+	case test.StepFailed:
+		progress.State = cli.ActionStepFailed
+	default:
+		progress.State = cli.ActionStepPending
+	}
+	switch test.ProgressKind(wire.Kind) {
+	case test.ProgressDone:
+		progress.Done = true
+	case test.ProgressError:
+		progress.Failed = true
+		if wire.Error != "" {
+			progress.Err = fmt.Errorf("%s", wire.Error)
+		}
+	}
+	return progress, true
+}
+
+func runLarryChildFunc(ctx context.Context, args []string, onLine func(string)) error {
 	exe, err := larryExecutable()
 	if err != nil {
 		return fmt.Errorf("resolve larry executable: %w", err)
@@ -141,6 +214,7 @@ func runLarryChild(ctx context.Context, args []string, onLine func(string)) erro
 	go func() {
 		defer wg.Done()
 		scanner := bufio.NewScanner(pr)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			onLine(scanner.Text())
 		}

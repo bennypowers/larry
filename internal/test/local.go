@@ -171,6 +171,7 @@ type TestLocalConfig struct {
 	ExtraPhases   []string       // bare --<phase> flags
 	Cfg           *config.Config // full config (for ResolveDistdir, etc.)
 	Log           *output.Logger // logger (may be nil — TestLocal creates a default)
+	Progress      ProgressFunc   // optional progress sink
 }
 
 // ---------------------------------------------------------------------------
@@ -261,10 +262,15 @@ func TestLocalWithConfig(ebuildPath string, phases []string, runner CmdRunner, p
 	log.Msg("Phases:  %s", strings.Join(phases, " "))
 	fmt.Println() // blank line after banner
 
+	// ebuild runs every phase in one process, so the checklist is the planned
+	// phase list; it is marked done or failed as a whole.
+	reportProgress(cfg.Progress, ProgressEvent{Kind: ProgressStart, Steps: phases})
+
 	// Pretend mode (script L790–792).
 	if pretend {
 		log.Warn("Pretend mode: would run:")
 		log.Msg("  ebuild %s %s", resolved, strings.Join(phases, " "))
+		reportProgress(cfg.Progress, ProgressEvent{Kind: ProgressDone, Message: "pretend"})
 		return nil
 	}
 
@@ -308,12 +314,14 @@ func TestLocalWithConfig(ebuildPath string, phases []string, runner CmdRunner, p
 		fmt.Println() // blank line before summary
 		log.Error("Failed: %s (%s)", pkgName, strings.Join(phases, " "))
 		log.Error("Exit code: %d", exitCode)
+		reportProgress(cfg.Progress, ProgressEvent{Kind: ProgressError, Err: err})
 		return err
 	}
 
 	// Success summary (script L810).
 	fmt.Println()
 	log.Msg("Success: %s (%s)", pkgName, strings.Join(phases, " "))
+	reportProgress(cfg.Progress, ProgressEvent{Kind: ProgressDone})
 
 	return nil
 }

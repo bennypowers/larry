@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"bennypowers.dev/larry/internal/upstream"
 
@@ -27,12 +28,44 @@ const (
 // ActionFunc runs one action for a package, streaming its output line by line.
 type ActionFunc func(ctx context.Context, pkg string, onLine func(string)) error
 
+// TestOptions selects how the test action invokes `larry test`.
+type TestOptions struct {
+	Mode   string   // "compile", "merge", "default", or "phases"
+	Phases []string // used when Mode == "phases"
+	Use    string   // --use value
+}
+
+// ActionStepState is the state of one action checklist entry.
+type ActionStepState int
+
+const (
+	ActionStepPending ActionStepState = iota
+	ActionStepRunning
+	ActionStepDone
+	ActionStepFailed
+)
+
+// ActionProgress is a structured progress event from a child action.
+type ActionProgress struct {
+	Steps   []string        // first event: ordered checklist entries
+	Step    string          // entry whose state changed
+	State   ActionStepState // new state
+	Message string
+	Done    bool
+	Failed  bool
+	Err     error
+}
+
+// TestActionFunc runs the test action with the chosen options.
+type TestActionFunc func(ctx context.Context, pkg string, opts TestOptions,
+	onLine func(string), onProgress func(ActionProgress)) error
+
 // UpstreamActions are the in-session actions available for the selected row.
 // Nil callbacks disable the corresponding key.
 type UpstreamActions struct {
 	Bump    ActionFunc
 	Prepare ActionFunc
-	Test    ActionFunc
+	Test    TestActionFunc
 }
 
 func (a UpstreamActions) forKind(kind ActionKind) ActionFunc {
@@ -41,11 +74,16 @@ func (a UpstreamActions) forKind(kind ActionKind) ActionFunc {
 		return a.Bump
 	case ActionPrepare:
 		return a.Prepare
-	case ActionTest:
-		return a.Test
 	default:
 		return nil
 	}
+}
+
+func (a UpstreamActions) enabled(kind ActionKind) bool {
+	if kind == ActionTest {
+		return a.Test != nil
+	}
+	return a.forKind(kind) != nil
 }
 
 // UpstreamModelOptions configures the interactive upstream table.
@@ -80,9 +118,10 @@ type upstreamDoneMsg struct {
 }
 
 type actionEvent struct {
-	line string
-	done bool
-	err  error
+	line     string
+	progress *ActionProgress
+	done     bool
+	err      error
 }
 
 type actionEventMsg actionEvent
@@ -90,10 +129,17 @@ type actionClosedMsg struct{}
 
 type upstreamMode int
 
+// actionStep is one checklist entry in the running-action view.
+type actionStep struct {
+	name  string
+	state ActionStepState
+}
+
 const (
 	modeBrowse upstreamMode = iota
 	modeConfirm
 	modeRunning
+	modeTestOptions
 )
 
 // UpstreamModel is the Bubble Tea model for `larry upstream --tui`.
@@ -129,6 +175,15 @@ type UpstreamModel struct {
 	actionErr    error
 	actionPkg    string
 	actionView   viewport.Model
+	actionSteps  []actionStep
+	actionStart  time.Time
+
+	// Test options are remembered between runs. testInput edits one field of
+	// testDraft while modeTestOptions is active.
+	testOptions TestOptions
+	testDraft   TestOptions
+	testInput   string
+	testField   int
 
 	done bool
 	quit bool
@@ -174,22 +229,23 @@ func NewUpstreamModel(opts UpstreamModelOptions) *UpstreamModel {
 	av := viewport.New(80, 10)
 
 	return &UpstreamModel{
-		ctx:        ctx,
-		cancel:     opts.Cancel,
-		fetch:      fetch,
-		showAll:    opts.ShowAll,
-		theme:      theme,
-		overlay:    opts.Overlay,
-		state:      upstreamFetching,
-		spinner:    sp,
-		progress:   pr,
-		viewport:   vp,
-		actionView: av,
-		progressCh: make(chan upstream.Progress, 128),
-		actions:    opts.Actions,
-		mode:       modeBrowse,
-		width:      80,
-		height:     24,
+		ctx:         ctx,
+		cancel:      opts.Cancel,
+		fetch:       fetch,
+		showAll:     opts.ShowAll,
+		theme:       theme,
+		overlay:     opts.Overlay,
+		state:       upstreamFetching,
+		spinner:     sp,
+		progress:    pr,
+		viewport:    vp,
+		actionView:  av,
+		progressCh:  make(chan upstream.Progress, 128),
+		actions:     opts.Actions,
+		mode:        modeBrowse,
+		testOptions: TestOptions{Mode: "compile"},
+		width:       80,
+		height:      24,
 	}
 }
 
@@ -265,6 +321,10 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case actionEventMsg:
 		ev := actionEvent(msg)
+		if ev.progress != nil {
+			m.applyActionProgress(*ev.progress)
+			return m, m.waitAction(m.actionCh)
+		}
 		if ev.line != "" {
 			m.appendActionLine(ev.line)
 			return m, m.waitAction(m.actionCh)
@@ -295,6 +355,9 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.mode == modeTestOptions {
+			return m.updateTestOptions(msg)
+		}
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			m.quitWithCancel()
@@ -355,9 +418,16 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					case 't':
 						kind = ActionTest
 					}
-					if m.actions.forKind(kind) != nil {
-						m.pending = kind
-						m.mode = modeConfirm
+					if m.actions.enabled(kind) {
+						if kind == ActionTest {
+							m.testDraft = m.testOptions
+							m.testInput = ""
+							m.testField = 0
+							m.mode = modeTestOptions
+						} else {
+							m.pending = kind
+							m.mode = modeConfirm
+						}
 					}
 					return m, nil
 				}
@@ -377,6 +447,80 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// updateTestOptions handles the pre-test prompt: pick a mode, edit custom
+// phases or USE flags, then enter to run.
+func (m *UpstreamModel) updateTestOptions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.mode = modeBrowse
+		m.testField = 0
+		m.testInput = ""
+		return m, nil
+	case tea.KeyEnter:
+		m.commitTestInput()
+		m.testOptions = m.testDraft
+		m.testField = 0
+		m.testInput = ""
+		m.pending = ActionTest
+		return m, m.startAction()
+	case tea.KeyTab:
+		m.commitTestInput()
+		m.testField = (m.testField + 1) % 3
+		switch m.testField {
+		case 1:
+			m.testInput = strings.Join(m.testDraft.Phases, " ")
+		case 2:
+			m.testInput = m.testDraft.Use
+		default:
+			m.testInput = ""
+		}
+		return m, nil
+	case tea.KeyBackspace:
+		if m.testField != 0 && m.testInput != "" {
+			runes := []rune(m.testInput)
+			m.testInput = string(runes[:len(runes)-1])
+		}
+		return m, nil
+	}
+
+	if msg.Type != tea.KeyRunes || len(msg.Runes) != 1 {
+		return m, nil
+	}
+	r := msg.Runes[0]
+	if m.testField != 0 {
+		m.testInput += string(r)
+		return m, nil
+	}
+	switch r {
+	case 'c':
+		m.testDraft.Mode = "compile"
+	case 'm':
+		m.testDraft.Mode = "merge"
+	case 'd':
+		m.testDraft.Mode = "default"
+	case 'p':
+		m.testField = 1
+		m.testInput = strings.Join(m.testDraft.Phases, " ")
+	case 'u':
+		m.testField = 2
+		m.testInput = m.testDraft.Use
+	}
+	return m, nil
+}
+
+// commitTestInput copies the active field's buffer into the draft options.
+func (m *UpstreamModel) commitTestInput() {
+	switch m.testField {
+	case 1:
+		if phases := strings.Fields(m.testInput); len(phases) > 0 {
+			m.testDraft.Mode = "phases"
+			m.testDraft.Phases = phases
+		}
+	case 2:
+		m.testDraft.Use = strings.TrimSpace(m.testInput)
+	}
+}
+
 func (m *UpstreamModel) quitWithCancel() {
 	m.quit = true
 	if m.actionCancel != nil {
@@ -388,8 +532,16 @@ func (m *UpstreamModel) quitWithCancel() {
 }
 
 func (m *UpstreamModel) startAction() tea.Cmd {
-	fn := m.actions.forKind(m.pending)
-	if fn == nil || len(m.visible) == 0 {
+	var fn ActionFunc
+	if m.pending != ActionTest {
+		fn = m.actions.forKind(m.pending)
+	}
+	if (fn == nil && m.pending != ActionTest) || len(m.visible) == 0 {
+		m.mode = modeBrowse
+		return nil
+	}
+	testFn := m.actions.Test
+	if m.pending == ActionTest && testFn == nil {
 		m.mode = modeBrowse
 		return nil
 	}
@@ -399,6 +551,8 @@ func (m *UpstreamModel) startAction() tea.Cmd {
 	m.mode = modeRunning
 	m.actionLines = nil
 	m.actionErr = nil
+	m.actionSteps = nil
+	m.actionStart = time.Now()
 	m.actionView.SetContent("")
 
 	ctx, cancel := context.WithCancel(m.ctx)
@@ -406,20 +560,64 @@ func (m *UpstreamModel) startAction() tea.Cmd {
 	ch := make(chan actionEvent, 128)
 	m.actionCh = ch
 
+	line := func(line string) {
+		select {
+		case ch <- actionEvent{line: line}:
+		case <-ctx.Done():
+		}
+	}
+	progress := func(p ActionProgress) {
+		select {
+		case ch <- actionEvent{progress: &p}:
+		case <-ctx.Done():
+		}
+	}
+
 	go func() {
 		defer close(ch)
-		err := fn(ctx, pkg, func(line string) {
-			select {
-			case ch <- actionEvent{line: line}:
-			case <-ctx.Done():
-			}
-		})
+		var err error
+		if m.pending == ActionTest {
+			err = testFn(ctx, pkg, m.testOptions, line, progress)
+		} else {
+			err = fn(ctx, pkg, line)
+		}
 		select {
 		case ch <- actionEvent{done: true, err: err}:
 		case <-ctx.Done():
 		}
 	}()
 	return m.waitAction(ch)
+}
+
+// applyActionProgress folds one structured event into the checklist.
+func (m *UpstreamModel) applyActionProgress(p ActionProgress) {
+	if len(p.Steps) > 0 {
+		m.actionSteps = make([]actionStep, 0, len(p.Steps))
+		for _, name := range p.Steps {
+			m.actionSteps = append(m.actionSteps, actionStep{name: name})
+		}
+		return
+	}
+	for i := range m.actionSteps {
+		if m.actionSteps[i].name != p.Step {
+			continue
+		}
+		m.actionSteps[i].state = p.State
+		if p.Step != "" {
+			return
+		}
+	}
+	if p.Done || p.Failed {
+		state := ActionStepDone
+		if p.Failed {
+			state = ActionStepFailed
+		}
+		for i := range m.actionSteps {
+			if m.actionSteps[i].state == ActionStepPending || m.actionSteps[i].state == ActionStepRunning {
+				m.actionSteps[i].state = state
+			}
+		}
+	}
 }
 
 func (m *UpstreamModel) waitAction(ch chan actionEvent) tea.Cmd {
@@ -440,6 +638,9 @@ func (m *UpstreamModel) appendActionLine(line string) {
 
 // ActionLines returns output captured from the last action.
 func (m *UpstreamModel) ActionLines() []string { return m.actionLines }
+
+// ActionSteps returns the checklist from the last action.
+func (m *UpstreamModel) ActionSteps() []actionStep { return m.actionSteps }
 
 // ActionErr returns the last action's error, if any.
 func (m *UpstreamModel) ActionErr() error { return m.actionErr }
@@ -755,6 +956,9 @@ func (m *UpstreamModel) updateDetail() {
 
 // View implements tea.Model.
 func (m *UpstreamModel) View() string {
+	if m.mode == modeTestOptions {
+		return m.testOptionsView()
+	}
 	if m.mode == modeRunning {
 		return m.actionRunningView()
 	}
@@ -787,7 +991,23 @@ func (m *UpstreamModel) actionRunningView() string {
 	var b strings.Builder
 	b.WriteString(m.theme.HeaderStyle().Render(
 		fmt.Sprintf("%s %s", m.pending, m.actionPkg)))
+	if !m.actionStart.IsZero() {
+		fmt.Fprintf(&b, "  %s", time.Since(m.actionStart).Round(time.Second))
+	}
 	b.WriteString("\n\n")
+
+	for _, step := range m.actionSteps {
+		fmt.Fprintf(&b, " %s %s\n", stepGlyph(step.state), step.name)
+	}
+	if len(m.actionSteps) > 0 {
+		b.WriteString("\n")
+	}
+
+	height := m.height - 4 - len(m.actionSteps)
+	if height < 3 {
+		height = 3
+	}
+	m.actionView.Height = height
 	if len(m.actionLines) == 0 {
 		b.WriteString(m.spinner.View())
 		b.WriteString(" running")
@@ -797,6 +1017,68 @@ func (m *UpstreamModel) actionRunningView() string {
 	b.WriteString("\n")
 	b.WriteString(m.theme.FooterStyle().Render("esc: cancel action  q: quit"))
 	return b.String()
+}
+
+// stepGlyph is the checklist marker for one step state.
+func stepGlyph(state ActionStepState) string {
+	switch state {
+	case ActionStepRunning:
+		return "▸"
+	case ActionStepDone:
+		return "✓"
+	case ActionStepFailed:
+		return "✗"
+	default:
+		return "○"
+	}
+}
+
+// testOptionsView is the pre-test prompt. Mode keys apply immediately; p and u
+// focus an editable line for custom phases or USE flags.
+func (m *UpstreamModel) testOptionsView() string {
+	var b strings.Builder
+	b.WriteString(m.theme.HeaderStyle().Render("Test " + m.selectedPackage()))
+	b.WriteString("\n\n")
+
+	fmt.Fprintf(&b, " mode   %s\n", testModeLabel(m.testDraft.Mode, m.testDraft.Phases))
+	fmt.Fprintf(&b, " phases %s\n", m.displayTestField(1, strings.Join(m.testDraft.Phases, " ")))
+	fmt.Fprintf(&b, " use    %s\n", m.displayTestField(2, m.testDraft.Use))
+	b.WriteString("\n")
+	b.WriteString(m.theme.FooterStyle().Render(
+		"c: compile  m: merge  d: default  p: phases  u: use  tab: next field  enter: run  esc: cancel"))
+	return b.String()
+}
+
+// displayTestField shows the draft value, or the live input buffer when the
+// field is focused.
+func (m *UpstreamModel) displayTestField(field int, value string) string {
+	if m.testField != field {
+		if value == "" {
+			return "(none)"
+		}
+		return value
+	}
+	prompt := value
+	if field == 1 || field == 2 {
+		prompt = m.testInput
+	}
+	return prompt + "█"
+}
+
+func testModeLabel(mode string, phases []string) string {
+	switch mode {
+	case "merge":
+		return "merge (clean fetch unpack compile install)"
+	case "default":
+		return "default (clean fetch unpack)"
+	case "phases":
+		if len(phases) > 0 {
+			return "custom: " + strings.Join(phases, " ")
+		}
+		return "custom (set phases)"
+	default:
+		return "compile (clean fetch unpack compile)"
+	}
 }
 
 func errText(err error) string {

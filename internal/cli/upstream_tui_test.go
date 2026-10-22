@@ -357,16 +357,69 @@ func TestUpstreamModel_RunsAction(t *testing.T) {
 }
 
 func TestUpstreamModel_ActionError(t *testing.T) {
-	m := actionModel(t, UpstreamActions{Test: func(context.Context, string, func(string)) error {
+	m := actionModel(t, UpstreamActions{Test: func(context.Context, string, TestOptions,
+		func(string), func(ActionProgress)) error {
 		return errors.New("test failed")
 	}})
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	drainCmd(t, m, cmd)
 	if m.ActionErr() == nil || !strings.Contains(m.ActionErr().Error(), "test failed") {
 		t.Errorf("ActionErr() = %v", m.ActionErr())
 	}
 	if !strings.Contains(m.View(), "test failed") {
 		t.Errorf("view does not show the action error:\n%s", m.View())
+	}
+}
+
+func TestUpstreamModel_TestOptionsPrompt(t *testing.T) {
+	var got TestOptions
+	m := actionModel(t, UpstreamActions{Test: func(_ context.Context, _ string, opts TestOptions,
+		_ func(string), _ func(ActionProgress)) error {
+		got = opts
+		return nil
+	}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	view := m.View()
+	for _, want := range []string{"Test dev-util/alpha", "compile", "phases", "use"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("test options view missing %q:\n%s", want, view)
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	for _, r := range "fetch unpack" {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	drainCmd(t, m, cmd)
+	if got.Mode != "phases" {
+		t.Errorf("Mode = %q, want phases", got.Mode)
+	}
+	if strings.Join(got.Phases, " ") != "fetch unpack" {
+		t.Errorf("Phases = %v, want fetch unpack", got.Phases)
+	}
+}
+
+func TestUpstreamModel_TestProgressChecklist(t *testing.T) {
+	m := actionModel(t, UpstreamActions{Test: func(_ context.Context, _ string, _ TestOptions,
+		_ func(string), onProgress func(ActionProgress)) error {
+		onProgress(ActionProgress{Steps: []string{"podman", "image", "emerge"}})
+		onProgress(ActionProgress{Step: "podman", State: ActionStepRunning})
+		onProgress(ActionProgress{Step: "podman", State: ActionStepDone})
+		return nil
+	}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	drainCmd(t, m, cmd)
+
+	steps := m.ActionSteps()
+	if len(steps) != 3 {
+		t.Fatalf("steps = %v, want 3 entries", steps)
+	}
+	if steps[0].name != "podman" || steps[0].state != ActionStepDone {
+		t.Errorf("first step = %+v, want podman done", steps[0])
+	}
+	if steps[1].state != ActionStepPending || steps[2].state != ActionStepPending {
+		t.Errorf("unreported steps should stay pending: %+v", steps)
 	}
 }

@@ -13,11 +13,12 @@ import (
 
 // ContainerConfig holds configuration for the container test runner.
 type ContainerConfig struct {
-	Overlay   string // --overlay flag
-	Distdir   string // --distdir flag
-	CacheDir  string // --cache-dir flag
-	ImageName string // --image flag (empty = default "larry-test")
-	UseFlags  string // --use flag (comma or space separated; passed to the container as USE)
+	Overlay   string       // --overlay flag
+	Distdir   string       // --distdir flag
+	CacheDir  string       // --cache-dir flag
+	ImageName string       // --image flag (empty = default "larry-test")
+	UseFlags  string       // --use flag (comma or space separated; passed to the container as USE)
+	Progress  ProgressFunc // optional progress sink
 }
 
 // getImageName returns the container image name.
@@ -292,20 +293,37 @@ func TestContainer(ebuildPath string, cfg *ContainerConfig, runner CmdRunner, pr
 	}
 
 	// D4: Check podman availability (now actually uses runner — D11).
+	reportProgress(cfg.Progress, ProgressEvent{
+		Kind:  ProgressStart,
+		Steps: []string{"podman", "image", "emerge"},
+	})
+	reportProgress(cfg.Progress, ProgressEvent{Kind: ProgressStep, Step: "podman", State: StepRunning})
 	if err := checkPodmanAvailable(runner); err != nil {
+		reportProgress(cfg.Progress, ProgressEvent{Kind: ProgressError, Err: err})
 		return err
 	}
+	reportProgress(cfg.Progress, ProgressEvent{Kind: ProgressStep, Step: "podman", State: StepDone})
 
 	// D5: Check image existence via podman image exists.
+	reportProgress(cfg.Progress, ProgressEvent{Kind: ProgressStep, Step: "image", State: StepRunning})
 	if !imageExists(imageName, runner) {
 		// D5: Image absent — build it.
 		if err := buildImage(containerfile, cfg.Overlay, imageName, runner); err != nil {
+			reportProgress(cfg.Progress, ProgressEvent{Kind: ProgressError, Err: err})
 			return err
 		}
 	}
+	reportProgress(cfg.Progress, ProgressEvent{Kind: ProgressStep, Step: "image", State: StepDone})
 
 	// Run emerge in container.
-	return runContainerEmerge(ebuildPath, cfg, runner, false)
+	reportProgress(cfg.Progress, ProgressEvent{Kind: ProgressStep, Step: "emerge", State: StepRunning})
+	if err := runContainerEmerge(ebuildPath, cfg, runner, false); err != nil {
+		reportProgress(cfg.Progress, ProgressEvent{Kind: ProgressError, Err: err})
+		return err
+	}
+	reportProgress(cfg.Progress, ProgressEvent{Kind: ProgressStep, Step: "emerge", State: StepDone})
+	reportProgress(cfg.Progress, ProgressEvent{Kind: ProgressDone})
+	return nil
 }
 
 // realRunner is the real CmdRunner implementation.

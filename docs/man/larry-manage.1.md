@@ -44,7 +44,7 @@ Requires a terminal; use **larry-upstream**(1) for piped or scripted use.
 : Prepare the selected package (`larry prepare`).
 
 **t**
-: Run the test pipeline (`larry test --compile`).
+: Choose test mode, custom phases, or USE flags, then run the test pipeline.
 
 **R**
 : Re-run the upstream check.
@@ -64,6 +64,11 @@ Mutating actions ask for confirmation. Their stdout and stderr stream into
 the view. A successful action refreshes the table; a failure stays visible.
 Actions execute the larry binary as a child, so flags, logging, and exit
 codes match the standalone commands.
+
+The test action opens a prompt: **c** compile, **m** merge, **d** default,
+**p** custom phases, **u** USE flags, **tab** next field, **enter** run. The
+choice is remembered. While it runs, a checklist shows podman, image, and
+emerge steps (or the planned phase list locally) plus elapsed time.
 
 ## EXAMPLES
 

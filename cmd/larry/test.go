@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,7 +22,12 @@ var (
 	testEmerge        bool
 	testImageName     string
 	testUse           string
+	testProgress      string
 )
+
+// testProgressPrefix marks structured progress lines on stderr so the manage
+// session can tell them apart from ebuild and podman output.
+const testProgressPrefix = "larry-progress:"
 
 func init() {
 	rootCmd.AddCommand(&testCmd)
@@ -42,6 +48,9 @@ func init() {
 		"container image name (default: larry-test)")
 	testCmd.Flags().StringVar(&testUse, "use", "",
 		`USE flags for the build, space separated (e.g. --use="cuda rocm"); sets USE in the emerge container`)
+	testCmd.Flags().StringVar(&testProgress, "progress", "",
+		"internal: emit NDJSON progress on stderr (json)")
+	_ = testCmd.Flags().MarkHidden("progress")
 
 	// Allow unknown flags (e.g. bare --<phase>) so splitPhaseFlags can detect them.
 	testCmd.FParseErrWhitelist = cobra.FParseErrWhitelist{
@@ -125,6 +134,7 @@ Modes:
 				CacheDir:  cacheDir,
 				ImageName: testImageName,
 				UseFlags:  testUse,
+				Progress:  testProgressReporter(testProgress),
 			}
 			err := test.TestContainer(ebuildPath, cfg, nil, testPretend)
 			if err != nil {
@@ -146,6 +156,7 @@ Modes:
 				ExtraPhases:   extraPhases,
 				Cfg:           cfg,
 				Log:           log,
+				Progress:      testProgressReporter(testProgress),
 			}
 			err := test.TestLocalWithConfig(ebuildPath, nil, runner, testPretend, testCfg)
 			if err != nil {
@@ -158,6 +169,42 @@ Modes:
 		}
 		return nil
 	},
+}
+
+// testProgressWire is the NDJSON shape consumed by `larry manage`.
+type testProgressWire struct {
+	Kind    int      `json:"kind"`
+	Steps   []string `json:"steps,omitempty"`
+	Step    string   `json:"step,omitempty"`
+	State   int      `json:"state,omitempty"`
+	Message string   `json:"message,omitempty"`
+	Error   string   `json:"error,omitempty"`
+}
+
+func testProgressReporter(mode string) test.ProgressFunc {
+	if mode != "json" {
+		return nil
+	}
+	return func(ev test.ProgressEvent) {
+		wire := testProgressWire{
+			Kind:    int(ev.Kind),
+			Steps:   ev.Steps,
+			Step:    ev.Step,
+			State:   int(ev.State),
+			Message: ev.Message,
+		}
+		if ev.Err != nil {
+			wire.Error = ev.Err.Error()
+		}
+		data, err := json.Marshal(wire)
+		if err != nil {
+			return
+		}
+		// Deliberately raw stderr: this is a machine channel, not user output.
+		line := append([]byte(testProgressPrefix), data...)
+		line = append(line, '\n')
+		_, _ = os.Stderr.Write(line)
+	}
 }
 
 // splitPhaseFlags extracts bare --<phase> flags from os.Args[2:].
@@ -174,6 +221,7 @@ func splitPhaseFlags() (extraPhases []string, unknownFlag string) {
 		"portage-tmpdir": true,
 		"image":          true,
 		"use":            true,
+		"progress":       true,
 		// Root persistent flags.
 		"verbose": true, "quiet": true, "color": true, "dry-run": true,
 		"cache-dir": true, "distdir": true, "jobs": true,

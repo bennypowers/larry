@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"bennypowers.dev/larry/internal/cli"
 	"bennypowers.dev/larry/internal/upstream"
 )
 
@@ -73,13 +74,65 @@ func TestBuildUpstreamActionsArgs(t *testing.T) {
 func TestBuildUpstreamActionsTestUsesCompile(t *testing.T) {
 	stubExecutable(t, "#!/bin/sh\necho \"$@\"\n")
 	var lines []string
-	if err := buildUpstreamActions("/tmp/overlay").Test(context.Background(), "dev-util/foo", func(line string) {
-		lines = append(lines, line)
-	}); err != nil {
+	err := buildUpstreamActions("/tmp/overlay").Test(context.Background(), "dev-util/foo",
+		cli.TestOptions{Mode: "compile"},
+		func(line string) { lines = append(lines, line) }, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(lines, " "), "--compile") {
-		t.Errorf("test action args = %v, want --compile", lines)
+	got := strings.Join(lines, " ")
+	for _, want := range []string{"--compile", "--progress json", "--overlay /tmp/overlay", "dev-util/foo"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("test action args = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestBuildUpstreamActionsTestModes(t *testing.T) {
+	stubExecutable(t, "#!/bin/sh\necho \"$@\"\n")
+	action := buildUpstreamActions("/tmp/overlay").Test
+
+	var lines []string
+	if err := action(context.Background(), "dev-util/foo",
+		cli.TestOptions{Mode: "merge", Use: "cuda rocm"},
+		func(line string) { lines = append(lines, line) }, nil); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(lines, " ")
+	if !strings.Contains(got, "--merge") || !strings.Contains(got, "--use cuda rocm") {
+		t.Errorf("merge args = %q", got)
+	}
+
+	lines = nil
+	if err := action(context.Background(), "dev-util/foo",
+		cli.TestOptions{Mode: "phases", Phases: []string{"fetch", "unpack"}},
+		func(line string) { lines = append(lines, line) }, nil); err != nil {
+		t.Fatal(err)
+	}
+	got = strings.Join(lines, " ")
+	if !strings.Contains(got, "--phase fetch --phase unpack") {
+		t.Errorf("phase args = %q", got)
+	}
+}
+
+func TestParseTestProgress(t *testing.T) {
+	line := `larry-progress:{"kind":1,"step":"image","state":1}`
+	got, ok := parseTestProgress(line)
+	if !ok {
+		t.Fatalf("parseTestProgress(%q) did not parse", line)
+	}
+	if got.Step != "image" || got.State != cli.ActionStepRunning {
+		t.Errorf("progress = %+v, want image running", got)
+	}
+
+	line = `larry-progress:{"kind":2}`
+	got, ok = parseTestProgress(line)
+	if !ok || !got.Done {
+		t.Errorf("done event = %+v, ok=%v", got, ok)
+	}
+
+	if _, ok := parseTestProgress("ordinary output"); ok {
+		t.Error("ordinary line parsed as progress")
 	}
 }
 
