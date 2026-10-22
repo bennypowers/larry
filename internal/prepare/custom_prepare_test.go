@@ -205,7 +205,8 @@ func TestPrepare_CustomScript_EnvVars(t *testing.T) {
 	// Create script that writes env vars to a file
 	envFile := filepath.Join(tmpDir, "env.out")
 	scriptPath := filepath.Join(larryDir, "prepare.sh")
-	script := "#!/bin/sh\n"
+	// bash is required for ${!v} indirect expansion; /bin/sh is dash on Debian.
+	script := "#!/bin/bash\n"
 	script += "for v in EBUILD PN PV P CATEGORY DISTDIR LARRY_PREPARE; do\n"
 	script += "  echo \"$v=\"${!v}\"\" >> " + envFile + "\n"
 	script += "done\n"
