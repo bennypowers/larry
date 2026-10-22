@@ -610,6 +610,25 @@ func TestUpstreamModel_StalledHeader(t *testing.T) {
 	}
 }
 
+func TestUpstreamModel_BlankOutputLineDoesNotStallAction(t *testing.T) {
+	m := actionModel(t, UpstreamActions{Bump: func(_ context.Context, _ string,
+		onLine func(string), _ func(ActionProgress)) error {
+		onLine("")
+		onLine("Preparing foo...")
+		return nil
+	}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	drainCmd(t, m, cmd)
+
+	if m.mode == modeRunning {
+		t.Error("blank output line left the action running")
+	}
+	if !strings.Contains(m.View(), "Checking upstream") {
+		t.Errorf("successful action did not refresh:\n%s", m.View())
+	}
+}
+
 func TestUpstreamModel_TestProgressChecklist(t *testing.T) {
 	m := actionModel(t, UpstreamActions{Test: func(_ context.Context, _ string, _ TestOptions,
 		_ func(string), onProgress func(ActionProgress)) error {

@@ -377,14 +377,6 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case actionEventMsg:
 		ev := actionEvent(msg)
-		if ev.progress != nil {
-			m.applyActionProgress(*ev.progress)
-			return m, m.waitAction(m.actionCh)
-		}
-		if ev.line != "" {
-			m.appendActionLine(ev.line)
-			return m, m.waitAction(m.actionCh)
-		}
 		if ev.done {
 			m.actionErr = ev.err
 			m.mode = modeBrowse
@@ -398,8 +390,17 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, m.startFetch()
 			}
+			return m, nil
 		}
-		return m, nil
+		if ev.progress != nil {
+			m.applyActionProgress(*ev.progress)
+			return m, m.waitAction(m.actionCh)
+		}
+		// Blank lines are real output. Treating ev.line == "" as "nothing"
+		// used to stop the reader, leaving the rest of the action (including
+		// its completion) stranded in the channel.
+		m.appendActionLine(ev.line)
+		return m, m.waitAction(m.actionCh)
 
 	case actionClosedMsg:
 		return m, nil
