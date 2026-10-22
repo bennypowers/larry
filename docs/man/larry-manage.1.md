@@ -11,8 +11,12 @@ larry-manage - Interactive session for checking, bumping, preparing, and testing
 ## DESCRIPTION
 
 Opens an interactive upstream table for the overlay and runs actions on the
-selected package. Requires a terminal; use **larry-upstream**(1) for piped or
-scripted use.
+selected package. Every package is listed; rows that need attention sort above
+up-to-date, live, deprecated, and manual rows. Discovery order is preserved
+inside each group, and the cursor follows its package across refreshes, so a
+bump followed by a test targets the same package.
+
+Requires a terminal; use **larry-upstream**(1) for piped or scripted use.
 
 ## FLAGS
 

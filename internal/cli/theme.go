@@ -54,6 +54,39 @@ func (t *Theme) StatusLabel(s upstream.Status) string {
 	return t.StatusStyle(s).Render(s.String())
 }
 
+// TableHeaderCell styles a table header cell. Callers own the padding so the
+// header lines up with the body.
+func (t *Theme) TableHeaderCell() lipgloss.Style {
+	s := t.Renderer.NewStyle().Bold(true)
+	if t.Color {
+		s = s.Foreground(lipgloss.Color("240"))
+	}
+	return s
+}
+
+// TableCell styles an unselected table cell.
+func (t *Theme) TableCell() lipgloss.Style {
+	return t.Renderer.NewStyle()
+}
+
+// TableSelectedCell styles one cell of the cursor row. Callers pad the cell, so
+// the background spans the whole row without shifting any column.
+func (t *Theme) TableSelectedCell() lipgloss.Style {
+	s := t.Renderer.NewStyle().Bold(true)
+	if t.Color {
+		s = s.Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57"))
+	}
+	return s
+}
+
+// Link wraps text in an OSC-8 hyperlink when hyperlinks are enabled.
+func (t *Theme) Link(url, text string) string {
+	if !t.Hyperlinks || url == "" {
+		return text
+	}
+	return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\"
+}
+
 // TableStyles returns renderer-bound styles for bubbles/table.
 func (t *Theme) TableStyles() table.Styles {
 	styles := table.Styles{

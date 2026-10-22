@@ -9,10 +9,10 @@ import (
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 // ActionKind identifies an in-session action.
@@ -109,8 +109,9 @@ type UpstreamModel struct {
 	state    upstreamUIState
 	spinner  spinner.Model
 	progress progress.Model
-	table    table.Model
 	viewport viewport.Model
+	cursor   int
+	offset   int
 
 	results []upstream.UpstreamResult
 	visible []upstream.UpstreamResult
@@ -131,6 +132,10 @@ type UpstreamModel struct {
 
 	done bool
 	quit bool
+
+	// selectedPkg survives a refresh so a bump followed by test still targets
+	// the same package even after it moves down the list.
+	selectedPkg string
 
 	width, height int
 	showDetail    bool
@@ -165,8 +170,6 @@ func NewUpstreamModel(opts UpstreamModelOptions) *UpstreamModel {
 		sp.Style = theme.Renderer.NewStyle()
 	}
 	pr := progress.New(progress.WithWidth(40))
-	tbl := table.New(table.WithFocused(true), table.WithHeight(10))
-	tbl.SetStyles(theme.TableStyles())
 	vp := viewport.New(80, 6)
 	av := viewport.New(80, 10)
 
@@ -180,7 +183,6 @@ func NewUpstreamModel(opts UpstreamModelOptions) *UpstreamModel {
 		state:      upstreamFetching,
 		spinner:    sp,
 		progress:   pr,
-		table:      tbl,
 		viewport:   vp,
 		actionView: av,
 		progressCh: make(chan upstream.Progress, 128),
@@ -361,14 +363,13 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case 'R':
 				if m.mode == modeBrowse && m.state == upstreamResults {
+					m.selectedPkg = m.selectedPackage()
 					return m, m.startFetch()
 				}
 			}
 		}
 		if m.state == upstreamResults && m.mode == modeBrowse {
-			var cmd tea.Cmd
-			m.table, cmd = m.table.Update(msg)
-			return m, cmd
+			m.navigate(msg.String())
 		}
 		return m, nil
 	}
@@ -393,6 +394,7 @@ func (m *UpstreamModel) startAction() tea.Cmd {
 		return nil
 	}
 	pkg := m.visible[m.Selected()].Package
+	m.selectedPkg = pkg
 	m.actionPkg = pkg
 	m.mode = modeRunning
 	m.actionLines = nil
@@ -444,59 +446,286 @@ func (m *UpstreamModel) ActionErr() error { return m.actionErr }
 
 func (m *UpstreamModel) applyFilter() {
 	m.visible = m.visible[:0]
-	for _, r := range m.results {
-		if m.showAll || r.Status.IsSignificant() {
-			m.visible = append(m.visible, r)
+	if !m.showAll {
+		for _, r := range m.results {
+			if r.Status.IsSignificant() {
+				m.visible = append(m.visible, r)
+			}
+		}
+	} else {
+		// Actionable rows first, then the rest. Both passes preserve the
+		// deterministic discovery order, so rows never shuffle between checks.
+		for _, r := range m.results {
+			if r.Status.IsSignificant() {
+				m.visible = append(m.visible, r)
+			}
+		}
+		for _, r := range m.results {
+			if !r.Status.IsSignificant() {
+				m.visible = append(m.visible, r)
+			}
 		}
 	}
-	m.buildTable()
-}
-
-func (m *UpstreamModel) buildTable() {
-	rows := make([]table.Row, 0, len(m.visible))
-	for _, r := range m.visible {
-		rows = append(rows, table.Row{
-			m.theme.PackageCell(r),
-			r.Current,
-			r.Latest,
-			m.theme.StatusLabel(r.Status),
-			m.theme.SourceCell(r),
-		})
-	}
-	m.table.SetRows(rows)
-	m.table.SetCursor(0)
+	m.restoreSelection()
 	m.resize()
 }
 
-func (m *UpstreamModel) resize() {
-	sourceWidth := m.width - 70
-	if sourceWidth < 12 {
-		sourceWidth = 12
+// restoreSelection puts the cursor back on the package that survived a
+// refresh, falling back to the first row.
+func (m *UpstreamModel) restoreSelection() {
+	m.cursor = 0
+	m.offset = 0
+	if m.selectedPkg != "" {
+		for i, r := range m.visible {
+			if r.Package == m.selectedPkg {
+				m.cursor = i
+				break
+			}
+		}
 	}
-	m.table.SetColumns([]table.Column{
-		{Title: "PACKAGE", Width: 30},
-		{Title: "CURRENT", Width: 12},
-		{Title: "LATEST", Width: 12},
-		{Title: "STATUS", Width: 13},
-		{Title: "SOURCE", Width: sourceWidth},
-	})
-	m.table.SetWidth(m.width)
-	height := m.height - 6
-	if height < 1 {
-		height = 1
+	m.ensureCursorVisible()
+	if m.showDetail {
+		m.updateDetail()
 	}
+}
+
+// navigate moves the cursor. Keeping this in the model (rather than a table
+// component) lets cells carry ANSI colour without breaking width math.
+func (m *UpstreamModel) navigate(key string) {
+	if len(m.visible) == 0 {
+		return
+	}
+	page := m.listHeight()
+	switch key {
+	case "up", "k":
+		m.cursor--
+	case "down", "j":
+		m.cursor++
+	case "pgup", "b":
+		m.cursor -= page
+	case "pgdown", "f":
+		m.cursor += page
+	case "home", "g":
+		m.cursor = 0
+	case "end", "G":
+		m.cursor = len(m.visible) - 1
+	default:
+		return
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	if m.cursor >= len(m.visible) {
+		m.cursor = len(m.visible) - 1
+	}
+	m.ensureCursorVisible()
+	if m.showDetail {
+		m.updateDetail()
+	}
+}
+
+// ensureCursorVisible scrolls the window so the cursor row stays on screen.
+func (m *UpstreamModel) ensureCursorVisible() {
+	height := m.listHeight()
+	if m.cursor < m.offset {
+		m.offset = m.cursor
+	}
+	if m.cursor >= m.offset+height {
+		m.offset = m.cursor - height + 1
+	}
+	maxOffset := len(m.visible) - height
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.offset > maxOffset {
+		m.offset = maxOffset
+	}
+	if m.offset < 0 {
+		m.offset = 0
+	}
+}
+
+// listHeight is the number of table rows that fit between the title, header,
+// detail pane, and footer at the current terminal size.
+func (m *UpstreamModel) listHeight() int {
+	height := m.height - 3
 	if m.showDetail {
 		height -= 6
 	}
+	if m.actionErr != nil {
+		height--
+	}
+	if len(m.actionLines) > 0 {
+		height -= 11
+	}
+	if m.mode == modeConfirm {
+		height--
+	}
 	if height < 1 {
 		height = 1
 	}
-	m.table.SetHeight(height)
+	return height
+}
+
+func (m *UpstreamModel) resize() {
 	m.viewport.Width = m.width
 	m.viewport.Height = 6
 	m.actionView.Width = m.width
 	m.actionView.Height = 10
 	m.progress.Width = m.width - 4
+	m.ensureCursorVisible()
+}
+
+var upstreamColumnTitles = [5]string{"PACKAGE", "CURRENT", "LATEST", "STATUS", "SOURCE"}
+
+// rowValues returns the plain text of each cell. ANSI is added at render time
+// so column widths are measured on visible text, never on escape sequences.
+func (m *UpstreamModel) rowValues(r upstream.UpstreamResult) [5]string {
+	return [5]string{
+		m.theme.PackageCell(r),
+		r.Current,
+		r.Latest,
+		r.Status.String(),
+		upstream.SourceText(r),
+	}
+}
+
+// columnWidths sizes columns to their content, then gives SOURCE whatever is
+// left. SOURCE is the first column to truncate; only when it hits its minimum
+// do PACKAGE, STATUS, CURRENT, and LATEST give up space.
+func (m *UpstreamModel) columnWidths() [5]int {
+	natural := [5]int{}
+	for i, title := range upstreamColumnTitles {
+		natural[i] = runewidth.StringWidth(title)
+	}
+	for _, r := range m.visible {
+		values := m.rowValues(r)
+		for i, v := range values {
+			natural[i] = max(natural[i], runewidth.StringWidth(v))
+		}
+	}
+
+	widths := natural
+	// One space of padding on each side of every cell.
+	avail := m.width - 2*len(upstreamColumnTitles)
+	if avail < len(upstreamColumnTitles) {
+		avail = len(upstreamColumnTitles)
+	}
+
+	sumFixed := func() int {
+		return widths[0] + widths[1] + widths[2] + widths[3]
+	}
+
+	const minSource = 6
+	if source := avail - sumFixed(); source < minSource {
+		deficit := minSource - source
+
+		// PACKAGE keeps at least 12 columns before it yields.
+		shrink := min(deficit, max(0, widths[0]-12))
+		widths[0] -= shrink
+		deficit -= shrink
+
+		// Then trim STATUS and the two version columns back to their headers.
+		for _, i := range []int{3, 1, 2} {
+			header := runewidth.StringWidth(upstreamColumnTitles[i])
+			shrink = min(deficit, max(0, widths[i]-header))
+			widths[i] -= shrink
+			deficit -= shrink
+		}
+		if deficit > 0 {
+			shrink = min(deficit, max(0, widths[0]-4))
+			widths[0] -= shrink
+		}
+	}
+	widths[4] = max(avail-sumFixed(), 1)
+
+	if total := sumFixed() + widths[4]; total > avail {
+		widths[4] -= total - avail
+		if widths[4] < 1 {
+			widths[4] = 1
+		}
+	}
+	return widths
+}
+
+// renderTable draws the fixed-width header plus the visible slice of rows. It
+// pads short pages so the footer stays on the last line of the screen.
+func (m *UpstreamModel) renderTable() string {
+	widths := m.columnWidths()
+	lines := make([]string, 0, m.listHeight()+1)
+
+	var header strings.Builder
+	for i, title := range upstreamColumnTitles {
+		header.WriteString(renderPaddedCell(title, widths[i], m.theme.TableHeaderCell(), "", m.theme))
+	}
+	lines = append(lines, header.String())
+
+	height := m.listHeight()
+	end := min(m.offset+height, len(m.visible))
+	for i := m.offset; i < end; i++ {
+		lines = append(lines, m.renderRow(m.visible[i], i == m.cursor, widths))
+	}
+	blank := strings.Repeat(" ", m.width)
+	for len(lines) < height+1 {
+		lines = append(lines, blank)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *UpstreamModel) renderRow(r upstream.UpstreamResult, selected bool, widths [5]int) string {
+	values := m.rowValues(r)
+	var b strings.Builder
+	for i, value := range values {
+		style := m.theme.TableCell()
+		switch {
+		case selected:
+			style = m.theme.TableSelectedCell()
+		case i == 3:
+			style = m.theme.StatusStyle(r.Status)
+		}
+		url := ""
+		if i == 4 && r.Status != upstream.StatusDeprecated {
+			url = r.Source.URL
+		}
+		b.WriteString(renderPaddedCell(value, widths[i], style, url, m.theme))
+	}
+	return b.String()
+}
+
+// renderPaddedCell truncates on visible width, pads inside the style, then
+// wraps only the text in a hyperlink, so background and link stay aligned.
+func renderPaddedCell(text string, width int, style lipgloss.Style, url string, theme *Theme) string {
+	text = truncateToWidth(text, width)
+	padding := width - runewidth.StringWidth(text)
+	if padding < 0 {
+		padding = 0
+	}
+	if url != "" {
+		text = theme.Link(url, text)
+	}
+	return style.Render(" " + text + strings.Repeat(" ", padding) + " ")
+}
+
+// truncateToWidth shortens plain text to width cells, ending with an ellipsis.
+func truncateToWidth(text string, width int) string {
+	if runewidth.StringWidth(text) <= width {
+		return text
+	}
+	if width <= 1 {
+		return "…"
+	}
+	var b strings.Builder
+	used := 0
+	for _, r := range text {
+		rw := runewidth.RuneWidth(r)
+		if used+rw > width-1 {
+			break
+		}
+		b.WriteRune(r)
+		used += rw
+	}
+	b.WriteString("…")
+	return b.String()
 }
 
 func (m *UpstreamModel) updateDetail() {
@@ -610,7 +839,7 @@ func (m *UpstreamModel) resultsView() string {
 		}
 		b.WriteString("\n\n")
 	} else {
-		b.WriteString(m.table.View())
+		b.WriteString(m.renderTable())
 		b.WriteString("\n")
 		if m.showDetail {
 			b.WriteString(m.theme.LogStyle().Render(m.viewport.View()))
@@ -659,7 +888,7 @@ func (m *UpstreamModel) footer() string {
 func (m *UpstreamModel) Quitting() bool { return m.quit }
 
 // Selected returns the table cursor index.
-func (m *UpstreamModel) Selected() int { return m.table.Cursor() }
+func (m *UpstreamModel) Selected() int { return m.cursor }
 
 // Err returns the walk error, if any.
 func (m *UpstreamModel) Err() error { return m.err }

@@ -13,9 +13,14 @@ larry manage [cat/pkg...] [overlay-path] [flags]
 
 ### Description
 
-`larry manage` shows the same upstream table as `larry upstream`, then runs the
-selected action as a child `larry` process. Because the child is the real
-binary, flags, logging, and exit codes match the standalone commands.
+`larry manage` shows every package in the overlay, with actionable rows
+(outdated, newer tag, unknown, and so on) sorted above up-to-date, live,
+deprecated, and manual rows. Discovery order is preserved inside each group.
+After a refresh the cursor follows the package it was on, so `b` followed by
+`t` acts on the same package even when it moves down the list.
+
+The selected action runs as a child `larry` process. Because the child is the
+real binary, flags, logging, and exit codes match the standalone commands.
 
 Requires a terminal. Running bare `larry` opens this session when stdin and
 stdout are terminals; otherwise it prints help. For piped or scripted checks

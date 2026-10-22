@@ -85,7 +85,9 @@ func runManage(cmd *cobra.Command, args []string) error {
 			opts.Progress = progress
 			return runUpstreamWithTargets(opts)
 		},
-		ShowAll: cfg.Verbose >= 1,
+		// The session is for acting on packages: show everything, with the
+		// actionable rows sorted to the top by the model.
+		ShowAll: true,
 		Theme: cli.NewTheme(cli.ThemeOptions{
 			Color:      color.Enabled(),
 			Hyperlinks: color.Enabled(),

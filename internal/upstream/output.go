@@ -52,15 +52,11 @@ func SourceGlyph(info SourceInfo) string {
 	}
 }
 
-// SourceCell builds a source cell. hyperlinks==false means plain text only:
-// no OSC-8 escape is emitted. This function reads no environment.
-func SourceCell(r UpstreamResult, hyperlinks bool) string {
+// SourceText returns the plain display text for a source cell, without any
+// hyperlink escape. Callers that need to truncate first use this.
+func SourceText(r UpstreamResult) string {
 	switch r.Status {
 	case StatusManual:
-		// Vendor-only package: link to the upstream homepage when possible.
-		if r.Source.URL != "" && hyperlinks {
-			return renderCellHyperlink(r.Source.URL, "vendor")
-		}
 		return "vendor"
 	case StatusDeprecated:
 		// Show deprecated/renamed status — no glyph, no hyperlink.
@@ -70,24 +66,15 @@ func SourceCell(r UpstreamResult, hyperlinks bool) string {
 		return r.Source.Label
 	}
 
-	var glyph, shortLabel string
 	if r.Source.Label != "" {
-		glyph = SourceGlyph(r.Source)
-		shortLabel = SourceLabelShort(r.Source)
-		if glyph != "" && r.Source.URL != "" && hyperlinks {
-			return renderCellHyperlink(r.Source.URL, glyph+" "+shortLabel)
-		}
-		if glyph != "" {
-			return glyph + " " + shortLabel
+		if glyph := SourceGlyph(r.Source); glyph != "" {
+			return glyph + " " + SourceLabelShort(r.Source)
 		}
 		return r.Source.Label
 	}
 
 	// Fallback: use r.Source.URL directly (deprecated path).
 	if r.Source.URL != "" {
-		if hyperlinks {
-			return renderCellHyperlink(r.Source.URL, r.Source.URL)
-		}
 		return r.Source.URL
 	}
 
@@ -96,6 +83,30 @@ func SourceCell(r UpstreamResult, hyperlinks bool) string {
 		return "unknown"
 	}
 	return ""
+}
+
+// SourceCell builds a source cell. hyperlinks==false means plain text only:
+// no OSC-8 escape is emitted. This function reads no environment.
+func SourceCell(r UpstreamResult, hyperlinks bool) string {
+	text := SourceText(r)
+	if !hyperlinks || text == "" {
+		return text
+	}
+	switch r.Status {
+	case StatusManual:
+		// Vendor-only package: link to the upstream homepage when possible.
+		if r.Source.URL != "" {
+			return renderCellHyperlink(r.Source.URL, text)
+		}
+		return text
+	case StatusDeprecated:
+		// Deprecated rows do not link even when they carry a URL.
+		return text
+	}
+	if r.Source.URL != "" {
+		return renderCellHyperlink(r.Source.URL, text)
+	}
+	return text
 }
 
 // SourceLabelShort strips the provider prefix from a SourceInfo.Label.

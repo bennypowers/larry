@@ -178,6 +178,97 @@ func TestUpstreamModel_WindowResize(t *testing.T) {
 	}
 }
 
+func TestUpstreamModel_ActionableRowsSortFirst(t *testing.T) {
+	results := []upstream.UpstreamResult{
+		{Package: "app/uptodate", Current: "1.0.0", Latest: "1.0.0", Status: upstream.StatusUpToDate},
+		{Package: "app/outdated", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated},
+		{Package: "app/live", Current: "9999 (live)", Status: upstream.StatusLive},
+		{Package: "app/newer", Current: "3.0.0", Latest: "3.1.0", Status: upstream.StatusNewerTag},
+	}
+	m, _ := newModelForTest(t, true)
+	m.Update(upstreamDoneMsg{Results: results})
+
+	want := []string{"app/outdated", "app/newer", "app/uptodate", "app/live"}
+	if len(m.visible) != len(want) {
+		t.Fatalf("visible rows = %d, want %d", len(m.visible), len(want))
+	}
+	for i, pkg := range want {
+		if m.visible[i].Package != pkg {
+			t.Errorf("visible[%d] = %q, want %q", i, m.visible[i].Package, pkg)
+		}
+	}
+	if got := m.visible[m.Selected()].Package; got != "app/outdated" {
+		t.Errorf("cursor starts on %q, want the first actionable row", got)
+	}
+}
+
+func TestUpstreamModel_RefreshKeepsSelectedPackage(t *testing.T) {
+	first := []upstream.UpstreamResult{
+		{Package: "app/alpha", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated},
+		{Package: "app/beta", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated},
+	}
+	m, _ := newModelForTest(t, true)
+	m.Update(upstreamDoneMsg{Results: first})
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if got := m.selectedPackage(); got != "app/beta" {
+		t.Fatalf("cursor on %q, want app/beta", got)
+	}
+
+	// Refresh; beta is now up to date and sorts below the remaining actionable
+	// row, but the cursor must follow the package, not the index.
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	m.Update(upstreamDoneMsg{Results: []upstream.UpstreamResult{
+		{Package: "app/beta", Current: "2.0.0", Latest: "2.0.0", Status: upstream.StatusUpToDate},
+		{Package: "app/alpha", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated},
+	}})
+	if got := m.selectedPackage(); got != "app/beta" {
+		t.Errorf("after refresh cursor on %q, want app/beta", got)
+	}
+}
+
+func TestUpstreamModel_ColumnsFitContent(t *testing.T) {
+	results := []upstream.UpstreamResult{{
+		Package: "dev-util/alpha", Current: "0.11.0", Latest: "0.11.3",
+		Status: upstream.StatusOutdated,
+		Source: upstream.SourceInfo{Label: "GitHub:bennypowers/a-very-long-repository-name"},
+	}}
+	m, _ := newModelForTest(t, true)
+	m.Update(tea.WindowSizeMsg{Width: 70, Height: 30})
+	m.Update(upstreamDoneMsg{Results: results})
+	view := m.View()
+	if !strings.Contains(view, "OUTDATED") {
+		t.Errorf("status column truncated:\n%s", view)
+	}
+	if strings.Contains(view, "bennypowers/a-very-long-repository-name") {
+		t.Errorf("source should truncate before other columns:\n%s", view)
+	}
+	if !strings.Contains(view, "…") {
+		t.Errorf("source was not truncated with an ellipsis:\n%s", view)
+	}
+}
+
+func TestUpstreamModel_FooterSitsOnLastLine(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.Update(upstreamDoneMsg{Results: sampleResults()})
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) != 30 {
+		t.Errorf("view has %d lines, want 30 (terminal height):\n%s", len(lines), m.View())
+	}
+	last := lines[len(lines)-1]
+	if !strings.Contains(last, "q: quit") {
+		t.Errorf("last line = %q, want the key help footer", last)
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // open the detail pane
+	lines = strings.Split(m.View(), "\n")
+	if len(lines) != 30 {
+		t.Errorf("with detail, view has %d lines, want 30", len(lines))
+	}
+	if !strings.Contains(lines[len(lines)-1], "q: quit") {
+		t.Errorf("with detail, last line = %q, want the footer", lines[len(lines)-1])
+	}
+}
+
 func TestUpstreamModel_ColorDisabledNoANSI(t *testing.T) {
 	m, _ := newModelForTest(t, true)
 	m.Update(upstreamDoneMsg{Results: sampleResults()})
