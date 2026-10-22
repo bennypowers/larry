@@ -52,28 +52,30 @@ func init() {
 var testCmd = cobra.Command{
 	Use:   "test [flags] <category/package|ebuild-path>",
 	Short: "Run ebuild test phases",
-	Long: `Run ebuild test phases for a package. By default runs 'clean fetch unpack'.
+	Long: `Run ebuild test phases for a package, locally or in a container.
 
-With --compile/-c, runs clean + fetch + unpack + compile.
-With --merge/-m, runs clean + fetch + unpack + compile + install.
-With --phase/-p, specifies exact phase(s) to run (can be repeated).
+Phase selection:
+  default        clean fetch unpack
+  -c, --compile  clean fetch unpack compile
+  -m, --merge    clean fetch unpack compile install
+  -p, --phase    an exact phase; repeat the flag for several
+  --<phase>      bare phase flags are appended (e.g. --prepare)
 
-Bare --<phase> flags (e.g., --prepare, --install) are appended to the phase list.
+  --pretend shows the commands without executing anything. The global
+  -n/--dry-run is inherited but is not the pretend switch.
 
-The --pretend/-n flag shows what would be executed without actually running.
-
-Examples:
-  larry test dev-lisp/sbcl-unicode-dictionary     # Clean fetch unpack
-  larry test -c dev-lisp/sbcl-unicode-dictionary  # Compile
-  larry test -m dev-lisp/sbcl-unicode-dictionary  # Merge (install)
-  larry test --prepare dev-lisp/foo               # Add prepare phase
-  larry test --phase fetch --phase unpack dev-lisp/foo
+Modes:
+  local (default)   runs ebuild <path> <phases...>
+  -e, --emerge      runs emerge in a podman container with GPU passthrough
+                    (--image, --use, --portage-tmpdir tune the run)`,
+	Example: `  larry test dev-lisp/sbcl-unicode-dictionary
+  larry test -c dev-lisp/sbcl-unicode-dictionary
+  larry test -m dev-lisp/sbcl-unicode-dictionary
   larry test -p fetch -p unpack dev-lisp/foo
-  larry test --pretend dev-lisp/foo               # Preview only
-  larry test --emerge dev-lisp/foo             # Run in podman container
-  larry test --emerge --use="cuda rocm" dev-lisp/foo  # Container build with USE flags
-  larry test /var/db/repos/gentoo/foo/foo-1.0.0.ebuild  # Direct ebuild path
-`,
+  larry test --prepare dev-lisp/foo
+  larry test --pretend dev-lisp/foo
+  larry test --emerge --use="cuda rocm" dev-lisp/foo
+  larry test /var/db/repos/gentoo/foo/foo-1.0.0.ebuild`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {

@@ -39,11 +39,30 @@ var (
 		Short: "Larry — Gentoo upstream tooling",
 		Long: `Larry is a Gentoo overlay upstream management tool.
 
-It helps Gentoo maintainers check for upstream version updates, prepare ebuild bumps,
-and manage the ebuild lifecycle with provider-specific pipelines.
+Commands:
+  upstream   Check ebuilds for newer upstream versions
+  bump       Create a new ebuild version or revision
+  prepare    Generate Manifest and distfiles for an ebuild
+  import     Copy an ebuild from another overlay
+  test       Run ebuild phases locally or in a container
 
-Run 'larry help' for detailed usage information.
+Global flags apply to every command. Verbosity is cumulative:
+  -v   informational messages and every upstream status
+  -vv  debug diagnostics
+  -vvv trace (provider resolution, cache hits, HTTP, subprocess argv)
+
+Machine output:
+  larry upstream --output json
+
+Run 'larry <command> --help' for command-specific details.
 `,
+		Example: `  larry upstream
+  larry upstream --fresh --prereleases
+  larry upstream --output json | jq '.results[] | select(.status != "up_to_date")'
+  larry bump dev-python/requests
+  larry prepare dev-python/requests
+  larry test --compile dev-python/requests
+  larry import --from gentoo dev-python/requests`,
 		Version:           "0.0.0-dev",
 		SilenceUsage:      true,
 		SilenceErrors:     true,

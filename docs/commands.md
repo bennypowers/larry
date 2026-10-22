@@ -7,7 +7,7 @@ Check packages in a Gentoo overlay for upstream version updates.
 ### Synopsis
 
 ```bash
-larry upstream [category]... [flags]
+larry upstream [cat/pkg...] [overlay-path] [flags]
 ```
 
 ### Description
@@ -21,7 +21,7 @@ Providers are auto-detected from `SRC_URI`:
 | SRC_URI Prefix | Provider |
 |----------------|----------|
 | `mirror://pypi/` | PyPI |
-| `mirror://npm/` | npm |
+| `mirror://npm/`, `registry.npmjs.org/` | npm |
 | `mirror://github/` | GitHub |
 | `mirror://gitlab/` | GitLab |
 | `mirror://codeberg/` | Codeberg |
@@ -33,23 +33,27 @@ Providers are auto-detected from `SRC_URI`:
 |------|---------|-------------|
 | `-f, --fresh` | `false` | Bypass cache and fetch fresh versions |
 | `-p, --prereleases` | `false` | Include pre-release versions |
-| `-v, --verbose` | `false` | Show all packages (not just outdated) |
+| `-v, --verbose` | 0 | Count: `-v` shows all statuses, `-vv` debug, `-vvv` trace |
 | `--remote` | `origin` | Git remote name for upstream resolution |
 | `--overlay` | `$LARRY_OVERLAY` | Overlay root path |
-| `--tui` | `false` | Interactive TUI with colored table |
+| `--output` | `text` | `text` or `json` (JSON always includes every status) |
+| `--tui` | `false` | Interactive TUI with a colored table (requires a TTY) |
 | `-h, --help` | | Help for upstream |
 
 ### Examples
 
 ```bash
-# Check all categories
+# Check the overlay resolved from the current git repository
 larry upstream
 
-# Check specific categories
-larry upstream dev-python dev-lisp
+# Check specific packages
+larry upstream dev-python/requests dev-lisp/sbcl
 
-# Include prereleases and use verbose output
-larry upstream --prereleases --verbose
+# Include prereleases and show every status
+larry upstream --prereleases -v
+
+# Machine-readable output
+larry upstream --output json | jq '.results[] | select(.status == "outdated")'
 
 # Interactive TUI
 larry upstream --tui
@@ -164,9 +168,9 @@ Runs the appropriate pipeline based on the ebuild's `INHERIT` line:
 | `vendor` | Download vendor tarball from SRC_URI |
 | (none) | Generic: manifest only (no pipeline) |
 
-#### Escape hatch: `files/prepare.sh`
+#### Escape hatch: `.larry/prepare.sh`
 
-Any package type can be handled by placing an executable `files/prepare.sh`
+Any package type can be handled by placing an executable `.larry/prepare.sh`
 script in the ebuild's directory. The script runs with a sandboxed environment
 (PATH restricted, dangerous vars stripped) and receives `EBUILD`, `PN`, `PV`,
 `P`, `CATEGORY`, and `DISTDIR` as environment variables.
@@ -184,7 +188,7 @@ and rolls back the ebuild on any failure.
 |------|---------|-------------|
 | `-a, --all` | `false` | Prepare all ebuilds in the directory |
 | `-n, --dry-run` | `false` | Show what would be done |
-| `-t, --type` | auto | Force type: npm, cargo, go, vendored, generic (rpi-kernel requires a custom `files/prepare.sh` script) |
+| `-t, --type` | auto | Force type: npm, cargo, go, vendored, generic (rpi-kernel requires a custom `.larry/prepare.sh` script) |
 | `--distdir` | `$LARRY_DISTDIR` | Distdir path |
 | `--overlay` | `$LARRY_OVERLAY` | Overlay root path |
 | `-h, --help` | | Help for prepare |
@@ -262,14 +266,16 @@ either locally or in a Podman container with GPU passthrough.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--container` | `false` | Use Podman container testing |
+| `-e, --emerge` | `false` | Use Podman container testing |
 | `--distdir` | | Distdir path |
-| `--compile` | `false` | Only compile phase |
-| `--merge` | `false` | Only merge phase |
-| `--pretend` | `false` | Pretend mode (no actual changes) |
-| `--phase` | | Run specific phase |
+| `-c, --compile` | `false` | Run through compile |
+| `-m, --merge` | `false` | Run through install |
+| `--pretend` | `false` | Print the commands without executing (no shorthand) |
+| `-p, --phase` | | Run a specific phase (repeatable) |
+| `--image` | `larry-test` | Container image name |
+| `--use` | | USE flags for the container build |
+| `--portage-tmpdir` | | Override `PORTAGE_TMPDIR` |
 | `--overlay` | `$LARRY_OVERLAY` | Overlay root path |
-| `--tui` | `false` | Use TUI for output |
 | `-h, --help` | | Help for test |
 
 ### Examples
@@ -279,10 +285,10 @@ either locally or in a Podman container with GPU passthrough.
 larry test dev-python/requests --compile
 
 # Container test
-larry test dev-python/requests --container
+larry test dev-python/requests --emerge
 
 # Pretend mode
-larry test dev-python/requests --container --pretend
+larry test dev-python/requests --emerge --pretend
 
 # Specific phase
 larry test dev-python/requests --phase fetch
@@ -294,13 +300,15 @@ These flags apply to all subcommands:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-v, --verbose` | 0 | Verbose output (repeat for debug) |
-| `-q, --quiet` | `false` | Suppress all output |
+| `-v, --verbose` | 0 | Count: `-v` info, `-vv` debug, `-vvv` trace |
+| `-q, --quiet` | `false` | Suppress informational output (errors still print) |
 | `--color` | auto | Color mode: auto, always, never |
-| `--dry-run` | `false` | Show what would be done |
+| `--dry-run` | `false` | Preview bump/import/prepare without changes |
 | `--cache-dir` | | Cache directory |
-| `--jobs` | 0 | Number of parallel jobs |
-| `--github-token` | | GitHub PAT |
+| `--distdir` | | Distfile directory |
+| `--overlay` | | Overlay root path |
+| `--jobs` | 0 | Parallel worker count (currently single-threaded) |
+| `--github-token` | | GitHub PAT (also exported as `GITHUB_TOKEN`) |
 | `--remote` | origin | Git remote name |
 | `--config` | | Config file path |
 

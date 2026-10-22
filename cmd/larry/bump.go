@@ -29,31 +29,30 @@ var bumpCmd = cobra.Command{
 	Short: "Bump an ebuild to a newer version or revision",
 	Long: `Bump an ebuild to a newer version or revision number.
 
-Version bump (default / --auto):
+Version bump (default):
   Finds the latest non-live ebuild in the category/package directory,
-  queries the upstream provider for the latest version, and creates a
-  new ebuild file with the updated version.
+  queries the upstream provider for the latest version, and creates a new
+  ebuild with the updated version. The new version must use the Gentoo
+  version charset (start with a digit; letters, digits, '.', '+', '_', '-').
 
-  Examples:
-    larry bump dev-lang/python        # Auto-version bump using upstream
-    larry bump --version 3.12.0       # Bump to specific version
-    larry bump --prereleases          # Include prereleases in auto-version
+  larry bump dev-lang/python
+  larry bump --version 3.12.0
+  larry bump --prereleases
 
-Revision bump (--revision / -r):
-  Appends a new revision number to the ebuild filename.
-  Increments the existing revision or starts at -r1.
+Revision bump (-r):
+  Appends or increments the revision suffix on the latest ebuild.
 
-  Examples:
-    larry bump dev-libs/openssl -r    # Bump to -r1
-    larry bump dev-libs/openssl -rr   # Increment to next revision
+  larry bump dev-libs/openssl -r
 
-Examples:
-  larry bump dev-python/requests              # Auto-version bump
-  larry bump dev-python/requests -r           # Revision bump
+The new ebuild is then prepared (distfiles + Manifest) and committed.
+Use the global -n/--dry-run to preview without writing anything.`,
+	Example: `  larry bump dev-python/requests
   larry bump dev-python/requests --version 2.31.0
   larry bump dev-python/requests --prereleases
-  larry bump /path/to/category/package        # Specify full path
-`,
+  larry bump dev-python/requests -r
+  larry bump dev-python/requests --dry-run
+  larry bump --type npm dev-python/requests
+  larry bump /abs/path/to/category/package`,
 	Args: cobra.MaximumNArgs(1),
 }
 
@@ -63,7 +62,7 @@ func init() {
 	bumpCmd.Flags().BoolVarP(&bumpRevision, "revision", "r", false,
 		"bump revision number instead of version")
 	bumpCmd.Flags().StringVar(&bumpVersion, "version", "",
-		"version to bump to (requires --auto or --version mode)")
+		"target version (implies version mode; mutually exclusive with --revision)")
 	bumpCmd.Flags().BoolVarP(&bumpPrereleases, "prereleases", "p", false,
 		"include pre-release versions in auto-version lookup")
 	bumpCmd.Flags().StringVarP(&bumpForceType, "type", "t", "",

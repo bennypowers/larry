@@ -34,14 +34,17 @@ go build -o larry ./cmd/larry
 ### Check upstream versions
 
 ```bash
-# Check all categories in the default overlay
+# Check the overlay resolved from the current git repository
 larry upstream
 
-# Check specific categories
-larry upstream dev-python dev-lisp
+# Check specific packages
+larry upstream dev-python/requests dev-lisp/sbcl
 
-# Include pre-release versions
-larry upstream --prereleases
+# Include pre-release versions and show every status
+larry upstream --prereleases -v
+
+# Machine-readable output
+larry upstream --output json | jq '.results[] | select(.status == "outdated")'
 
 # Use interactive TUI (requires TTY)
 larry upstream --tui
@@ -92,7 +95,7 @@ larry import --from /var/db/repos/gentoo dev-python/requests
 larry test dev-python/requests --compile
 
 # Container-based testing (requires podman)
-larry test dev-python/requests --container
+larry test dev-python/requests --emerge
 
 # Pretend mode
 larry test dev-python/requests --pretend
@@ -100,11 +103,11 @@ larry test dev-python/requests --pretend
 
 ## Custom prepare scripts
 
-For packages with non-standard prepare logic, drop a `files/prepare.sh` script
+For packages with non-standard prepare logic, drop a `.larry/prepare.sh` script
 into the package directory. Larry executes it instead of any built-in pipeline.
 
 ```bash
-# sys-kernel/raspberrypi-kernel/files/prepare.sh
+# sys-kernel/raspberrypi-kernel/.larry/prepare.sh
 #!/bin/sh
 date=$(echo "$PV" | grep -oP '_p\K\d{8}$')
 date=$(echo $date | sed 's/^\(\.{4}\)\(\.{2}\)\(\.{2}\)$/\1-\2-\3/')
@@ -126,12 +129,12 @@ Larry reads configuration from `$XDG_CONFIG_HOME/larry/config.yaml`:
 
 ```yaml
 color: auto        # auto, always, never
-dry-run: false     # default dry-run mode
+dry_run: false     # default dry-run mode
 overlay:           # default overlay path
-verbose: 0         # 0=normal, 1=verbose, 2=debug
-cache-dir:         # version query cache directory
-jobs: 0            # parallel jobs (0 = auto)
-github-token:      # GitHub PAT for API rate limits
+verbose: 0         # 0=results, 1=info, 2=debug, 3=trace
+cache_dir:         # version query cache directory
+jobs: 0            # parallel jobs (0 = auto; currently single-threaded)
+github_token:      # GitHub PAT for API rate limits
 remote: origin     # git remote for upstream resolution
 ```
 
@@ -179,13 +182,13 @@ Generate shell completion scripts:
 
 ```bash
 # Bash
-generate-completion larry bash > /usr/share/bash-completion/completions/larry
+larry completion bash > /usr/share/bash-completion/completions/larry
 
 # Zsh
-generate-completion larry zsh > /usr/share/zsh/site-functions/_larry
+larry completion zsh > /usr/share/zsh/site-functions/_larry
 
 # Fish
-generate-completion larry fish > ~/.config/fish/completions/larry.fish
+larry completion fish > ~/.config/fish/completions/larry.fish
 ```
 
 ## Documentation

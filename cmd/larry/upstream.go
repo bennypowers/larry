@@ -46,39 +46,44 @@ var upstreamCmd = cobra.Command{
 	Short: "Check for upstream version updates",
 	Long: `Check for upstream version updates for packages in a Gentoo overlay.
 
-Walks the specified overlay directory and checks each ebuild against its
-upstream source. Skips acct-group/* and acct-user/* packages. Live versions
-(9999) are reported separately.
+Walks the overlay and compares each ebuild with its upstream source.
+acct-group/* and acct-user/* are skipped. Dependencies declared in
+DEPEND/RDEPEND are scanned up to 3 levels deep and shown indented.
+Live (9999) ebuilds are reported separately.
 
 Overlay directory resolution (priority order):
   1. --overlay flag
   2. $LARRY_OVERLAY environment variable
-  3. git rev-parse --show-toplevel of the current working directory
+  3. the current git repository root
 
 Providers are auto-detected from SRC_URI:
-  mirror://pypi/   -> PyPI
+  mirror://pypi/                    -> PyPI
   mirror://npm/, registry.npmjs.org/ -> npm
-  mirror://github/ -> GitHub
-  mirror://gitlab/ -> GitLab
-  mirror://codeberg/ -> Codeberg
-  mirror://sourcehut/ -> SourceHut
+  mirror://github/                  -> GitHub
+  mirror://gitlab/                  -> GitLab
+  mirror://codeberg/                -> Codeberg
+  mirror://sourcehut/               -> SourceHut
 
 Positional arguments:
   larry upstream [cat/pkg ...] [overlay-path]
 
-  An argument is the overlay root iff os.Stat says it is a directory
-  and it contains a profiles/ subdirectory. At most one such argument
-  is allowed. Every other argument is a category/package atom.
+  An argument is the overlay root when it is a directory containing
+  profiles/. At most one is allowed; every other argument is an atom.
 
-  The overlay root is detected first, then atoms are resolved against it,
-  so "larry upstream dev-util/cem /path/to/overlay" works regardless of order.
+Output:
+  default        significant statuses only (outdated, ahead, newer-tag, ...)
+  -v             every status, including up-to-date, live, and manual
+  --output json  complete machine-readable document (ignores the filter)
+  --tui          interactive filtered table with details (requires a TTY)
 
-Examples:
-  larry upstream                      # Check overlay from git CWD
-  larry upstream dev-util/cem         # Check one package
-  larry upstream --fresh              # Bypass cache
-  larry upstream --prereleases        # Include prereleases
-`,
+Use --fresh to bypass the 6-hour version cache.`,
+	Example: `  larry upstream
+  larry upstream dev-util/cem
+  larry upstream --fresh --prereleases
+  larry upstream -v
+  larry upstream --output json | jq '.results[] | select(.status == "outdated")'
+  larry upstream --tui
+  larry upstream dev-util/cem /path/to/overlay`,
 	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		switch upstreamOutput {

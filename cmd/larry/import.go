@@ -27,23 +27,26 @@ var importCmd = cobra.Command{
 	Short: "Import an ebuild from another overlay",
 	Long: `Import an ebuild from a source overlay to the local overlay.
 
-Searches the source overlay (--from to specify a path or repo name, or
-auto-searches /var/db/repos/* skipping the target overlay) for the latest
-stable ebuild, copies it along with the files/ directory and
-metadata.xml (merging maintainers and preserving upstream remote-ids) into
-the local overlay at the same category/package path.
+Searches the source overlay for the latest stable ebuild and copies it,
+along with files/ and metadata.xml (merging maintainers and preserving
+upstream remote-ids), into the local overlay at the same path.
 
-The target overlay (where the ebuild is imported to) is auto-detected from the
-local git repository (same resolution as all other larry commands).
+Source resolution (--from):
+  - an overlay path, e.g. --from /var/db/repos/guru
+  - a repository name, e.g. --from guru
+  - omitted: search /var/db/repos/*, skipping the target overlay
 
-The imported ebuild is prepared automatically; use 'larry prepare' to re-run it.
+The target overlay is resolved like every other command (--overlay,
+$LARRY_OVERLAY, config, or the current git repository).
 
-Examples:
-  larry import dev-lisp/sbcl-unicode-dictionary  # Import to local overlay
-  larry import --from /var/db/repos/guru dev-lisp/foo  # Explicit source path
-  larry import --from guru dev-lisp/foo  # Repo name
-  larry import --dry-run dev-lisp/foo  # Preview only
-`,
+--force overwrites the target even when its version is newer or equal.
+
+Import does not run prepare automatically; run 'larry prepare' afterward.`,
+	Example: `  larry import dev-lisp/sbcl-unicode-dictionary
+  larry import --from /var/db/repos/guru dev-lisp/foo
+  larry import --from guru dev-lisp/foo
+  larry import --force --from guru dev-lisp/foo
+  larry import --dry-run dev-lisp/foo`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		catPkg := args[0]

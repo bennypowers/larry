@@ -52,7 +52,6 @@ Custom prepare scripts (escape hatch):
   Example: docs/examples/rpi-kernel-prepare.sh
 
 Type detection (auto):
-  Detects package type from ebuild content:
   - npm:       mirror://npm/ or registry.npmjs.org/ in SRC_URI
   - cargo:     CRATES= variable present
   - go:        inherits go-module
@@ -60,25 +59,21 @@ Type detection (auto):
   - generic:   everything else (including rpi-kernel)
 
   rpi-kernel packages are detected as generic. Use a custom
-  .larry/prepare.sh for those — see docs/examples/rpi-kernel-prepare.sh.
+  .larry/prepare.sh for those. Override detection with --type.
 
-Override detection with --type flag.
+Modes:
+  Single ebuild   larry prepare sys-apps/foo/foo-1.0.0.ebuild
+  Package dir     larry prepare sys-apps/foo
+  Whole overlay   larry prepare --all   (Manifest only, no pipeline)
 
-Commands:
-  larry prepare sys-apps/foo/foo-1.0.0.ebuild    # Prepare single ebuild
-  larry prepare sys-apps/foo                      # Prepare all ebuilds in pkg dir
-  larry prepare --all                             # Manifest-only: all packages in overlay
-  larry prepare --type generic sys-apps/foo/foo.ebuild # Force type
-
-Flags:
-  -t, --type string       Force package type (overrides auto-detection)
-  -n, --dry-run           Show what would be done without making changes
-  -a, --all               Manifest-only: pkgdev for every cat/pkg in overlay (no pipeline)
-  -n, --dry-run           Show what would be done without making changes
-      --distdir string    Distdir path for source downloads
-      --overlay string    Overlay root path
-      --cleanup           Remove orphaned GitHub release assets on failure
-`,
+Use the global -n/--dry-run to preview. --tui streams live pipeline
+progress in an interactive view (requires a terminal; falls back to
+plain output when piped).`,
+	Example: `  larry prepare dev-util/cem/cem-1.2.0.ebuild
+  larry prepare dev-util/cem
+  larry prepare --all
+  larry prepare --type generic dev-util/cem/cem-1.2.0.ebuild
+  larry prepare --dry-run --tui dev-util/cem`,
 	Args: cobra.MinimumNArgs(0),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Resolve distdir through config.
