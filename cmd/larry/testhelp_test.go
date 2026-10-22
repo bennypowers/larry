@@ -7,6 +7,7 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
+	"github.com/spf13/pflag"
 )
 
 // execCmd builds a fresh root command tree, runs it with args,
@@ -28,6 +29,25 @@ func execCmd(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	testPhases = nil
 	testEmerge = false
 	testPortageTmpdir = ""
+
+	// Reset root persistent flags too: pflag keeps both values and Changed
+	// markers from a previous ParseFlags when a flag is absent from the new
+	// args, so a leaked --overlay/--config would silently redirect later
+	// commands at fixtures that t.TempDir already removed (and a leaked
+	// Changed marker would clobber env-derived config with the reset value).
+	rootFlags.Verbose = 0
+	rootFlags.Quiet = false
+	rootFlags.Color = "auto"
+	rootFlags.DryRun = false
+	rootFlags.CacheDir = ""
+	rootFlags.Distdir = ""
+	rootFlags.Jobs = 0
+	rootFlags.GitHubToken = ""
+	rootFlags.Remote = "origin"
+	rootFlags.ConfigPath = ""
+	rootFlags.Overlay = ""
+	resetFlagChanges(rootCmd.Flags())
+	resetFlagChanges(rootCmd.PersistentFlags())
 
 	var outBuf, errBuf []byte
 	cmd := newRootCmd()
@@ -57,6 +77,14 @@ type captureWriter struct {
 func (w *captureWriter) Write(p []byte) (n int, err error) {
 	*w.buf = append(*w.buf, p...)
 	return len(p), nil
+}
+
+// resetFlagChanges clears every flag's Changed marker so persistentPreRunE's
+// `Flags().Changed(...)` checks reflect only the args of the current run.
+func resetFlagChanges(fs *pflag.FlagSet) {
+	fs.VisitAll(func(f *pflag.Flag) {
+		f.Changed = false
+	})
 }
 
 // fixtureOverlay creates a temp overlay containing profiles/repo_name, an

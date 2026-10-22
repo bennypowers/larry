@@ -1,8 +1,13 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"bennypowers.dev/larry/internal/atom"
+	"bennypowers.dev/larry/internal/provider"
+	"bennypowers.dev/larry/internal/upstream"
 )
 
 // fixtureUpstream creates a minimal overlay with known ebuilds for upstream tests.
@@ -12,6 +17,42 @@ func fixtureUpstream(t *testing.T, pkgs map[string]string) string {
 		map[string]string{"origin": "https://example.com"},
 		pkgs,
 	)
+}
+
+// TestUpstreamRunWithTargetsErrorIsFatal verifies that a total walk failure
+// in the non-TUI path produces a non-nil RunE error (which main prints to
+// stderr and turns into a non-zero exit) instead of exiting 0 with the error
+// on stdout.
+func TestUpstreamRunWithTargetsErrorIsFatal(t *testing.T) {
+	t.Setenv("LARRY_COLOR", "never")
+	ov := fixtureUpstream(t, map[string]string{
+		"dev-util/cem/cem-1.0.0.ebuild": `EAPI=8
+DESCRIPTION="Test"
+SRC_URI=""
+LICENSE="MIT"
+SLOT="0"
+`,
+	})
+
+	orig := runUpstreamWithTargets
+	runUpstreamWithTargets = func(overlayDir string, registry *provider.ProviderRegistry, targets []*atom.Atom, allowPrereleases bool, fresh bool) ([]upstream.UpstreamResult, error) {
+		return nil, errors.New("walk exploded")
+	}
+	defer func() { runUpstreamWithTargets = orig }()
+
+	_, _, err := execCmd(t, "upstream", "--overlay", ov)
+	if err == nil {
+		t.Fatal("expected non-nil RunE error when RunWithTargets fails")
+	}
+	if !strings.Contains(err.Error(), "upstream check failed") {
+		t.Errorf("error = %v, want it to mention 'upstream check failed'", err)
+	}
+	if !strings.Contains(err.Error(), "walk exploded") {
+		t.Errorf("error = %v, want it to contain the underlying error", err)
+	}
+	if got := exitCodeFor(err); got == 0 {
+		t.Error("exitCodeFor(err) must be non-zero for a failed upstream check")
+	}
 }
 
 // TestUpstreamPositionalAtomFilter verifies positional atom filtering (D3, D4).
@@ -93,6 +134,10 @@ LICENSE="MIT"
 SLOT="0"
 `,
 	})
+	// A valid overlay via the env fallback so overlay resolution does not
+	// depend on cobra flag state leaked from an earlier execCmd call — the
+	// positional path must still win.
+	t.Setenv("LARRY_OVERLAY", fixtureUpstream(t, nil))
 	_, _, err := execCmd(t, "upstream", "-v", ov)
 	if err != nil {
 		t.Fatalf("execCmd: %v", err)
@@ -110,6 +155,8 @@ LICENSE="MIT"
 SLOT="0"
 `,
 	})
+	// See TestUpstreamPositionalOverlayPath: valid overlay via env fallback.
+	t.Setenv("LARRY_OVERLAY", fixtureUpstream(t, nil))
 	_, _, err := execCmd(t, "upstream", "-v", "dev-util/cem", ov)
 	if err != nil {
 		t.Fatalf("execCmd: %v", err)
@@ -120,6 +167,8 @@ SLOT="0"
 func TestUpstreamTwoOverlayPathsErrors(t *testing.T) {
 	ov1 := fixtureUpstream(t, map[string]string{})
 	ov2 := fixtureUpstream(t, map[string]string{})
+	// See TestUpstreamPositionalOverlayPath: valid overlay via env fallback.
+	t.Setenv("LARRY_OVERLAY", fixtureUpstream(t, nil))
 	_, _, err := execCmd(t, "upstream", ov1, ov2)
 	if err == nil {
 		t.Fatal("expected error for two overlay paths")

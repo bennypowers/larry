@@ -151,6 +151,11 @@ func TestConfigLoadIsCalled(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
+	// The --config flag is not yet wired into config.Load (later wave), so
+	// provide the overlay through the documented env fallback instead of the
+	// leaked cobra flag state this test used to depend on.
+	t.Setenv("LARRY_OVERLAY", fixture)
+
 	stdout, stderr, err := execCmd(t, "upstream", "--config", configFile)
 	output := stdout + stderr
 
