@@ -630,6 +630,25 @@ func TestUpstreamModel_BlankOutputLineDoesNotStallAction(t *testing.T) {
 	}
 }
 
+func TestUpstreamModel_RefreshKeepsTableAndPane(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.Update(upstreamDoneMsg{Results: sampleResults()})
+	m.pending = ActionBump
+	m.actionPkg = "dev-util/alpha"
+	m.appendActionLine("Preparing foo...")
+
+	m.startFetch()
+	view := m.View()
+	for _, want := range []string{"Checking upstream packages", "PACKAGE", "dev-util/alpha", "─ last bump"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("refresh view missing %q (blank flash):\n%s", want, view)
+		}
+	}
+	if lines := strings.Split(view, "\n"); len(lines) != 30 {
+		t.Errorf("refresh view has %d lines, want 30", len(lines))
+	}
+}
+
 func TestUpstreamModel_CompletedActionReusesPane(t *testing.T) {
 	m, _ := newModelForTest(t, true)
 	m.Update(upstreamDoneMsg{Results: sampleResults()})

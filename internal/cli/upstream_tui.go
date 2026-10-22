@@ -283,8 +283,8 @@ func (m *UpstreamModel) startFetch() tea.Cmd {
 	m.state = upstreamFetching
 	m.done = false
 	m.err = nil
-	m.results = nil
-	m.visible = nil
+	// Keep the previous results and pane on screen until the new plan
+	// arrives; clearing them here flashed a blank view during discovery.
 	m.checked = 0
 	m.total = 0
 	m.plan = nil
@@ -1274,22 +1274,11 @@ func (m *UpstreamModel) View() string {
 	}
 	switch m.state {
 	case upstreamFetching:
-		if len(m.plan) == 0 {
-			var b strings.Builder
-			b.WriteString(m.theme.HeaderStyle().Render("Checking upstream packages"))
-			if m.total > 0 {
-				fmt.Fprintf(&b, "  %d/%d", m.checked, m.total)
-			}
-			b.WriteString("\n\n")
-			b.WriteString(m.spinner.View())
-			b.WriteString(" checking")
-			b.WriteString("\n\n")
-			b.WriteString(m.theme.FooterStyle().Render("q: quit"))
-			return b.String()
-		}
 		var b strings.Builder
 		b.WriteString(m.theme.HeaderStyle().Render("Checking upstream packages"))
-		fmt.Fprintf(&b, "  %d/%d", m.checked, m.total)
+		if m.total > 0 {
+			fmt.Fprintf(&b, "  %d/%d", m.checked, m.total)
+		}
 		b.WriteString("\n")
 		b.WriteString(m.renderTable())
 		b.WriteString("\n")
