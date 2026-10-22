@@ -10,6 +10,7 @@ import (
 	"bennypowers.dev/larry/internal/test"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var (
@@ -82,17 +83,24 @@ Modes:
   larry test /var/db/repos/gentoo/foo/foo-1.0.0.ebuild`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) == 0 {
-			return &test.ExitError{Code: 1, Err: fmt.Errorf("missing package argument")}
+		if err := validateProgressMode(testProgress); err != nil {
+			return err
 		}
-		input := args[0]
-
-		// Extract bare --<phase> flags and detect unknown flags.
-		extraPhases, unknownFlag := splitPhaseFlags()
+		// Check flag-shaped arguments before the positional check: an unknown
+		// --flag=value is otherwise silently ignored, and an unknown bare flag
+		// can consume the package token.
+		extraPhases, unknownFlag := splitPhaseFlags(cmd)
 		if unknownFlag != "" {
 			log.Error("Unknown option or phase: %s", unknownFlag)
 			return &test.ExitError{Code: 1, Err: fmt.Errorf("unknown option or phase: %s", unknownFlag)}
 		}
+		if len(args) == 0 {
+			return &test.ExitError{Code: 1, Err: fmt.Errorf("missing package argument")}
+		}
+		if cfg.DryRun {
+			return fmt.Errorf("--dry-run is not supported by test; use --pretend to preview phases")
+		}
+		input := args[0]
 
 		// Resolve overlay directory.
 		overlayDir, err := cfg.ResolveOverlay(rootFlags.Overlay)
@@ -189,35 +197,43 @@ func testProgressReporter(mode string) test.ProgressFunc {
 // splitPhaseFlags extracts bare --<phase> flags from os.Args[2:].
 // It skips known cobra flags and reports unknown ones.
 // Returns (extraPhases, unknownFlagOrEmpty).
-func splitPhaseFlags() (extraPhases []string, unknownFlag string) {
-	// All known cobra flags (test-local + inherited from root).
-	knownFlags := map[string]bool{
-		"compile": true, "c": true,
-		"merge": true, "m": true,
-		"pretend": true,
-		"emerge":  true, "e": true,
-		"phase": true, "p": true,
-		"portage-tmpdir": true,
-		"image":          true,
-		"use":            true,
-		"progress":       true,
-		// Root persistent flags.
-		"verbose": true, "quiet": true, "color": true, "dry-run": true,
-		"cache-dir": true, "distdir": true, "jobs": true,
-		"github-token": true, "remote": true, "config": true,
-		"overlay": true,
-	}
+func splitPhaseFlags(cmd *cobra.Command) (extraPhases []string, unknownFlag string) {
+	return splitPhaseFlagsFrom(os.Args[2:], knownFlagNames(cmd))
+}
 
-	for _, arg := range os.Args[2:] {
-		if !strings.HasPrefix(arg, "--") || strings.Contains(arg, "=") {
+func knownFlagNames(cmd *cobra.Command) map[string]bool {
+	known := make(map[string]bool)
+	add := func(f *pflag.FlagSet) {
+		if f == nil {
+			return
+		}
+		f.VisitAll(func(flag *pflag.Flag) {
+			known[flag.Name] = true
+			if flag.Shorthand != "" {
+				known[flag.Shorthand] = true
+			}
+		})
+	}
+	add(cmd.Flags())
+	add(cmd.InheritedFlags())
+	return known
+}
+
+func splitPhaseFlagsFrom(argv []string, knownFlags map[string]bool) (extraPhases []string, unknownFlag string) {
+	for _, arg := range argv {
+		if !strings.HasPrefix(arg, "--") {
 			continue
 		}
 		suffix := strings.TrimPrefix(arg, "--")
-		if knownFlags[suffix] {
+		name, _, hasValue := strings.Cut(suffix, "=")
+		if knownFlags[name] {
 			continue
 		}
-		if test.ValidPhases(suffix) {
-			extraPhases = append(extraPhases, suffix)
+		if hasValue {
+			return nil, arg
+		}
+		if test.ValidPhases(name) {
+			extraPhases = append(extraPhases, name)
 		} else {
 			return nil, arg
 		}

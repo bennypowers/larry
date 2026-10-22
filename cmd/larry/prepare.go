@@ -80,6 +80,9 @@ plain output when piped).`,
   larry prepare --dry-run --tui dev-util/cem`,
 	Args: cobra.MinimumNArgs(0),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validateProgressMode(prepareProgress); err != nil {
+			return err
+		}
 		// Resolve distdir through config.
 		distdir := cfg.ResolveDistdir(rootFlags.Distdir)
 

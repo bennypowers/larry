@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
@@ -486,13 +487,17 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 	var pipeWG sync.WaitGroup
 	var closePipe func()
 	if cfg.UseTUI {
-		pr, pw := io.Pipe()
+		pr, pw, err := os.Pipe()
+		if err != nil {
+			return fmt.Errorf("custom prepare pipe: %w", err)
+		}
 		cmd.Stdout = pw
 		cmd.Stderr = pw
 		pipeWG.Add(1)
 		go func() {
 			defer pipeWG.Done()
 			scanner := bufio.NewScanner(pr)
+			scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 			for scanner.Scan() {
 				cfg.report(ProgressEvent{
 					Kind:    ProgressLog,
@@ -500,10 +505,30 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 					Message: scanner.Text(),
 				})
 			}
+			if err := scanner.Err(); err != nil {
+				cfg.report(ProgressEvent{
+					Kind:    ProgressLog,
+					Package: pkgName,
+					Message: "output scanner: " + err.Error(),
+				})
+			}
+			_, _ = io.Copy(io.Discard, pr)
 		}()
 		closePipe = func() {
 			_ = pw.Close()
-			pipeWG.Wait()
+			done := make(chan struct{})
+			go func() {
+				pipeWG.Wait()
+				close(done)
+			}()
+			// A backgrounded grandchild inherits the write end and would keep
+			// the reader at EOF forever. Give it a moment, then force close.
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				_ = pr.Close()
+				<-done
+			}
 		}
 	} else {
 		cmd.Stdout = os.Stdout

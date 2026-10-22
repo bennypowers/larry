@@ -604,7 +604,7 @@ func deriveTagStatus(currentPV string, tag string, tagDate string) (Status, stri
 	return StatusCheckTag, latest
 }
 
-func buildResult(ei *ebuild.EbuildInfo, latestV, currentV *version.Version, ridType remoteid.RemoteIdType) *UpstreamResult {
+func buildResult(ei *ebuild.EbuildInfo, latestV, currentV *version.Version) *UpstreamResult {
 	cmp := latestV.Compare(currentV)
 	var status Status
 
@@ -729,7 +729,7 @@ func resolveOne(
 		if id.rid != nil {
 			rid := id.rid
 			logger.Tracef("upstream %s/%s: remote-id=%s", einfo.Category, einfo.Pkg, rid.String())
-			cacheKey := MakeKey(einfo.Category, einfo.Pkg, string(rid.Type), einfo.PVVal)
+			cacheKey := cachePolicyKey(einfo.Category, einfo.Pkg, string(rid.Type), einfo.PVVal, resOpts, allowPrereleases)
 			var latestV *version.Version
 
 			if cachedVer, ok := cache.Get(cacheKey); ok {
@@ -803,7 +803,7 @@ func resolveOne(
 	}
 	logger.Tracef("upstream %s/%s: remote-id=%s", einfo.Category, einfo.Pkg, rid.String())
 
-	cacheKey := MakeKey(einfo.Category, einfo.Pkg, string(rid.Type), einfo.PVVal)
+	cacheKey := cachePolicyKey(einfo.Category, einfo.Pkg, string(rid.Type), einfo.PVVal, resOpts, allowPrereleases)
 	var latestV *version.Version
 	var sourceURL, sourceLabel string
 
@@ -894,7 +894,8 @@ func resolveOne(
 		sourceURL = resolveSourceURL(rid)
 		sourceLabel = resolveSourceLabel(rid)
 	} else {
-		latestV, sourceURL = resolveVersionFromSRCURI(einfo, providerType, rid)
+		// No registry available: SRC_URI alone cannot produce a version.
+		latestV = nil
 		sourceLabel = resolveSourceLabel(rid)
 	}
 
@@ -910,24 +911,10 @@ func resolveOne(
 	}
 
 	currentV, _ := version.Parse(einfo.PVVal)
-	result := buildResult(einfo, latestV, currentV, rid.Type)
+	result := buildResult(einfo, latestV, currentV)
 	result.Source = SourceInfo{Label: sourceLabel, URL: sourceURL, Glyph: SourceGlyph(SourceInfo{Label: sourceLabel})}
 	result.Depth = depth
 	return *result
-}
-
-// resolveVersionFromSRCURI tries to resolve a version directly from SRC_URI
-// when no registry is available.
-func resolveVersionFromSRCURI(ei *ebuild.EbuildInfo, providerType string, rid *remoteid.RemoteId) (*version.Version, string) {
-	switch providerType {
-	case "pypi":
-		// Can't resolve version from SRC_URI alone without HTTP
-		return nil, ""
-	case "npm":
-		return nil, ""
-	default:
-		return nil, ""
-	}
 }
 
 // Progress reports root-package progress. Dependency rows are part of the
@@ -1088,6 +1075,33 @@ func planEntry(n checkNode) PlanEntry {
 	return entry
 }
 
+// cachePolicyKey partitions cached answers by the policy that produced them:
+// prerelease allowance and per-package upstream rules both change the result.
+func cachePolicyKey(category, pkg, providerName, version string,
+	opts *larryconfig.ResolveOptions, allowPrereleases bool) string {
+	return MakeKey(category, pkg, providerName, version) +
+		"|" + resolveOptionsSignature(opts) +
+		fmt.Sprintf("|pre=%t", allowPrereleases)
+}
+
+// resolveOptionsSignature identifies the effective per-package upstream rules
+// so results produced under different rules are never shared.
+func resolveOptionsSignature(opts *larryconfig.ResolveOptions) string {
+	if opts == nil {
+		return ""
+	}
+	ignore := make([]string, 0, len(opts.IgnoreTagRe))
+	for _, re := range opts.IgnoreTagRe {
+		ignore = append(ignore, re.String())
+	}
+	tagMatch := ""
+	if opts.TagMatchRe != nil {
+		tagMatch = opts.TagMatchRe.String()
+	}
+	return fmt.Sprintf("strategy=%s;tag=%s;tmpl=%s;strip=%v;ignore=%v;check=%v",
+		opts.Strategy, tagMatch, opts.VersionTemplate, opts.StripPrefixes, ignore, opts.Check)
+}
+
 // prefetchBatches asks batch-capable providers to resolve many repositories in
 // as few requests as possible. Results are hints: misses fall back to the
 // per-package path inside resolveOne.
@@ -1103,7 +1117,8 @@ func prefetchBatches(
 	}
 
 	groups := make(map[remoteid.RemoteIdType][]provider.BatchRequest)
-	seen := make(map[string]bool)
+	seen := make(map[string]string)
+	conflict := make(map[string]bool)
 	for _, n := range nodes {
 		if n.Deprecated != nil {
 			continue
@@ -1117,14 +1132,32 @@ func prefetchBatches(
 			continue
 		}
 		key := provider.BatchKey(*id.rid)
-		if seen[key] {
-			continue
+		sig := resolveOptionsSignature(id.resOpts)
+		if prev, ok := seen[key]; ok {
+			if prev != sig {
+				conflict[key] = true
+			}
+		} else {
+			seen[key] = sig
 		}
-		seen[key] = true
+		// Every package gets its own request: two packages can share a
+		// repository, and the provider needs both entries to answer both.
 		groups[id.rid.Type] = append(groups[id.rid.Type], provider.BatchRequest{
 			ID:      *id.rid,
 			Options: id.resOpts,
 		})
+	}
+
+	// Two packages can share a repository but carry different .larry rules.
+	// Their answers differ, so do not batch that repository at all.
+	for typ, reqs := range groups {
+		filtered := reqs[:0]
+		for _, req := range reqs {
+			if !conflict[provider.BatchKey(req.ID)] {
+				filtered = append(filtered, req)
+			}
+		}
+		groups[typ] = filtered
 	}
 
 	for typ, reqs := range groups {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -75,7 +76,7 @@ func runManage(cmd *cobra.Command, args []string) error {
 		Targets:          targets,
 		AllowPrereleases: managePrereleases,
 		Fresh:            manageFresh,
-		CacheDir:         cfg.ResolveCacheDir(rootFlags.CacheDir),
+		CacheDir:         upstream.VersionCacheDir(cfg.ResolveCacheDir(rootFlags.CacheDir)),
 		Jobs:             cfg.Jobs,
 	}
 
@@ -98,8 +99,9 @@ func runManage(cmd *cobra.Command, args []string) error {
 		}),
 		Overlay: overlayDir,
 		Cancel:  cancel,
-		Actions: buildUpstreamActions(overlayDir),
+		Actions: buildUpstreamActions(overlayDir, cfg.DryRun),
 		Animate: true,
+		DryRun:  cfg.DryRun,
 	})
 	_, runErr := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(cmd.OutOrStdout())).Run()
 	cancel()
@@ -112,15 +114,10 @@ func runManage(cmd *cobra.Command, args []string) error {
 // buildUpstreamActions exposes the CLI commands as in-session actions. Each
 // runs the larry binary as a child so flag parsing, logging, and exit codes
 // stay identical to the standalone command, with output streamed line by line.
-func buildUpstreamActions(overlay string) cli.UpstreamActions {
+func buildUpstreamActions(overlay string, dryRun bool) cli.UpstreamActions {
 	run := func(command string, withProgress bool, extra ...string) cli.ActionFunc {
 		return func(ctx context.Context, pkg string, onLine func(string), onProgress func(cli.ActionProgress)) error {
-			args := []string{command}
-			args = append(args, extra...)
-			if withProgress {
-				args = append(args, "--progress", "json")
-			}
-			args = append(args, "--overlay", overlay, "--color", "never", pkg)
+			args := childCommandArgs(command, overlay, pkg, dryRun, withProgress, extra)
 			lines := func(line string) { onLine(redactOverlayPath(line, overlay)) }
 			if withProgress {
 				return runLarryChildWithProgress(ctx, args, lines, onProgress)
@@ -130,21 +127,21 @@ func buildUpstreamActions(overlay string) cli.UpstreamActions {
 	}
 	testAction := func(ctx context.Context, pkg string, opts cli.TestOptions,
 		onLine func(string), onProgress func(cli.ActionProgress)) error {
-		args := []string{"test"}
+		var extra []string
 		switch opts.Mode {
 		case "compile":
-			args = append(args, "--compile")
+			extra = append(extra, "--compile")
 		case "merge":
-			args = append(args, "--merge")
+			extra = append(extra, "--merge")
 		case "phases":
 			for _, phase := range opts.Phases {
-				args = append(args, "--phase", phase)
+				extra = append(extra, "--phase", phase)
 			}
 		}
 		if opts.Use != "" {
-			args = append(args, "--use", opts.Use)
+			extra = append(extra, "--use", opts.Use)
 		}
-		args = append(args, "--progress", "json", "--overlay", overlay, "--color", "never", pkg)
+		args := childCommandArgs("test", overlay, pkg, dryRun, true, extra)
 		return runLarryChildWithProgress(ctx, args,
 			func(line string) { onLine(redactOverlayPath(line, overlay)) }, onProgress)
 	}
@@ -153,6 +150,21 @@ func buildUpstreamActions(overlay string) cli.UpstreamActions {
 		Prepare: run("prepare", true),
 		Test:    testAction,
 	}
+}
+
+// childCommandArgs builds the argv for one in-session action. Scenario flags
+// come first, then the progress channel and global options, then the package.
+func childCommandArgs(command, overlay, pkg string, dryRun, withProgress bool, extra []string) []string {
+	args := []string{command}
+	args = append(args, extra...)
+	if withProgress {
+		args = append(args, "--progress", "json")
+	}
+	args = append(args, "--overlay", overlay, "--color", "never")
+	if dryRun {
+		args = append(args, "--dry-run")
+	}
+	return append(args, pkg)
 }
 
 // redactOverlayPath strips the overlay's absolute root from child output so
@@ -262,7 +274,7 @@ func runLarryChildFunc(ctx context.Context, args []string, onLine func(string)) 
 		}
 		// A scanner error (for example an over-long line) stops reads; drain
 		// the pipe so the child's writer never blocks and cmd.Run can return.
-		if err := scanner.Err(); err != nil {
+		if err := scanner.Err(); err != nil && !errors.Is(err, os.ErrClosed) {
 			mu.Lock()
 			onLine("output scanner: " + err.Error())
 			mu.Unlock()

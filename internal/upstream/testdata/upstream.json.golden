@@ -36,7 +36,7 @@
     },
     {
       "package": "dev-util/zeta",
-      "current": "9999 (live)",
+      "current": "9999",
       "latest": "6.0.0",
       "status": "has_release",
       "source": {

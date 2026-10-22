@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"bennypowers.dev/larry/internal/provider"
+	"bennypowers.dev/larry/internal/remoteid"
 )
 
 func TestCache_Miss(t *testing.T) {
@@ -150,5 +153,42 @@ func TestMakeKey_IncludesSchemaVersion(t *testing.T) {
 	got := MakeKey("cat", "pkg", "github", "1.0")
 	if !strings.HasPrefix(got, "v2/") {
 		t.Errorf("MakeKey = %q, want v2/ schema prefix", got)
+	}
+}
+
+func TestVersionCacheDir_IsSubdirectoryOfRoot(t *testing.T) {
+	root := t.TempDir()
+	got := VersionCacheDir(root)
+	if want := filepath.Join(root, cacheSubdir); got != want {
+		t.Errorf("VersionCacheDir(%q) = %q, want %q", root, got, want)
+	}
+}
+
+func TestRunWithOptions_FreshPreservesSiblingCacheDirs(t *testing.T) {
+	overlay := progressOverlay(t)
+	reg := provider.NewProviderRegistry()
+	reg.Register(&mockProvider{mockType: remoteid.TypeGitHub, mockVersion: mustVersion("3.0.0")})
+
+	root := t.TempDir()
+	distfile := filepath.Join(root, "distfiles", "keep-me.tar.gz")
+	if err := os.MkdirAll(filepath.Dir(distfile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(distfile, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cacheDir := VersionCacheDir(root)
+	if _, err := RunWithTargets(RunOptions{
+		OverlayDir: overlay,
+		Registry:   reg,
+		CacheDir:   cacheDir,
+		Fresh:      true,
+	}); err != nil {
+		t.Fatalf("RunWithTargets: %v", err)
+	}
+
+	if _, err := os.Stat(distfile); err != nil {
+		t.Errorf("--fresh deleted the distfiles sibling: %v", err)
 	}
 }

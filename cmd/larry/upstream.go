@@ -101,7 +101,7 @@ func runUpstream(cmd *cobra.Command, args []string) error {
 		Targets:          targets,
 		AllowPrereleases: upstreamPrereleases,
 		Fresh:            upstreamFresh,
-		CacheDir:         cfg.ResolveCacheDir(rootFlags.CacheDir),
+		CacheDir:         upstream.VersionCacheDir(cfg.ResolveCacheDir(rootFlags.CacheDir)),
 		Jobs:             cfg.Jobs,
 	}
 
@@ -129,7 +129,7 @@ func runUpstream(cmd *cobra.Command, args []string) error {
 
 			if len(results) == 0 {
 				log.Msg("All packages are up-to-date.")
-				log.Msg("Check complete. Cache stored in: %s (expires after 6h)", upstream.DefaultCachePath())
+				log.Msg("Check complete. Cache stored in: %s (expires after 6h)", runOpts.CacheDir)
 				log.Msg("Use --fresh to force a refresh.")
 				return "", nil
 			}
@@ -141,7 +141,7 @@ func runUpstream(cmd *cobra.Command, args []string) error {
 			}); err != nil {
 				return "", fmt.Errorf("render table: %w", err)
 			}
-			buf.WriteString("\nCheck complete. Cache stored in: " + upstream.DefaultCachePath() + " (expires after 6h)\n")
+			buf.WriteString("\nCheck complete. Cache stored in: " + runOpts.CacheDir + " (expires after 6h)\n")
 			buf.WriteString("Use --fresh to force a refresh.\n")
 			return buf.String(), nil
 		})

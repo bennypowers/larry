@@ -104,6 +104,8 @@ type UpstreamModelOptions struct {
 	// Animate enables the elapsed-time ticker for running actions. Tests
 	// leave it off so they can drive commands synchronously.
 	Animate bool
+	// DryRun makes prune report intent without deleting ebuilds.
+	DryRun bool
 }
 
 type upstreamUIState int
@@ -127,6 +129,7 @@ type upstreamDoneMsg struct {
 }
 
 type actionEvent struct {
+	seq      uint64
 	line     string
 	progress *ActionProgress
 	done     bool
@@ -164,6 +167,7 @@ type UpstreamModel struct {
 	theme   *Theme
 	overlay string
 	animate bool
+	dryRun  bool
 
 	state    upstreamUIState
 	spinner  spinner.Model
@@ -188,6 +192,7 @@ type UpstreamModel struct {
 	mode         upstreamMode
 	pending      ActionKind
 	actionCh     chan actionEvent
+	actionSeq    uint64
 	actionCancel context.CancelFunc
 	actionLines  []string
 	actionErr    error
@@ -260,6 +265,7 @@ func NewUpstreamModel(opts UpstreamModelOptions) *UpstreamModel {
 		theme:       theme,
 		overlay:     opts.Overlay,
 		animate:     opts.Animate,
+		dryRun:      opts.DryRun,
 		state:       upstreamFetching,
 		spinner:     sp,
 		progress:    pr,
@@ -377,11 +383,17 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case actionEventMsg:
 		ev := actionEvent(msg)
+		if ev.seq != 0 && ev.seq != m.actionSeq {
+			// A cancelled action's reader can still deliver one buffered
+			// event. Never let it finish, refresh, or prune for the action
+			// that replaced it.
+			return m, nil
+		}
 		if ev.done {
 			m.actionErr = ev.err
 			m.mode = modeBrowse
 			if ev.err == nil {
-				if m.pending == ActionBump && m.autoprune {
+				if m.pending == ActionBump && m.autoprune && !m.dryRun {
 					if removed, err := m.pruneOlder(m.actionPkg); err == nil {
 						for _, name := range removed {
 							m.appendActionLine("autopruned " + name)
@@ -545,6 +557,9 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // phases or USE flags, then enter to run.
 func (m *UpstreamModel) updateTestOptions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
+	case tea.KeyCtrlC:
+		m.quitWithCancel()
+		return m, tea.Quit
 	case tea.KeyEsc:
 		m.mode = modeBrowse
 		m.testField = 0
@@ -584,6 +599,10 @@ func (m *UpstreamModel) updateTestOptions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.testField != 0 {
 		m.testInput += string(r)
 		return m, nil
+	}
+	if r == 'q' {
+		m.quitWithCancel()
+		return m, tea.Quit
 	}
 	switch r {
 	case 'c':
@@ -636,6 +655,16 @@ func (m *UpstreamModel) startAction() tea.Cmd {
 		m.actionPkg = pkg
 		m.actionLines = nil
 		m.actionErr = nil
+		if m.dryRun {
+			if names := m.prunableNames(pkg); len(names) > 0 {
+				m.appendActionLine("dry-run: would prune " + strings.Join(names, ", "))
+			} else {
+				m.appendActionLine("nothing to prune: only the newest ebuild remains")
+			}
+			m.mode = modeBrowse
+			m.updateDetail()
+			return nil
+		}
 		removed, err := m.pruneOlder(pkg)
 		for _, name := range removed {
 			m.appendActionLine("pruned " + name)
@@ -680,18 +709,20 @@ func (m *UpstreamModel) startAction() tea.Cmd {
 
 	ctx, cancel := context.WithCancel(m.ctx)
 	m.actionCancel = cancel
+	m.actionSeq++
+	seq := m.actionSeq
 	ch := make(chan actionEvent, 128)
 	m.actionCh = ch
 
 	line := func(line string) {
 		select {
-		case ch <- actionEvent{line: line}:
+		case ch <- actionEvent{seq: seq, line: line}:
 		case <-ctx.Done():
 		}
 	}
 	progress := func(p ActionProgress) {
 		select {
-		case ch <- actionEvent{progress: &p}:
+		case ch <- actionEvent{seq: seq, progress: &p}:
 		case <-ctx.Done():
 		}
 	}
@@ -705,7 +736,7 @@ func (m *UpstreamModel) startAction() tea.Cmd {
 			err = fn(ctx, pkg, line, progress)
 		}
 		select {
-		case ch <- actionEvent{done: true, err: err}:
+		case ch <- actionEvent{seq: seq, done: true, err: err}:
 		case <-ctx.Done():
 		}
 	}()
@@ -738,6 +769,11 @@ func (m *UpstreamModel) applyActionProgress(p ActionProgress) {
 		m.advancePending()
 	}
 	if p.Step != "" {
+		if p.State == ActionStepRunning {
+			// A new step starting proves the previous one finished; the child
+			// does not always send the done transition for it.
+			m.settleRunning(p.Step)
+		}
 		for i := range m.actionSteps {
 			if m.actionSteps[i].name == p.Step {
 				m.actionSteps[i].state = p.State
@@ -758,6 +794,16 @@ func (m *UpstreamModel) applyActionProgress(p ActionProgress) {
 			if m.actionSteps[i].state == ActionStepPending || m.actionSteps[i].state == ActionStepRunning {
 				m.actionSteps[i].state = state
 			}
+		}
+	}
+}
+
+// settleRunning marks every running step except name as done, so the
+// checklist never shows two spinners at once.
+func (m *UpstreamModel) settleRunning(name string) {
+	for i := range m.actionSteps {
+		if m.actionSteps[i].name != name && m.actionSteps[i].state == ActionStepRunning {
+			m.actionSteps[i].state = ActionStepDone
 		}
 	}
 }
@@ -789,6 +835,10 @@ func (m *UpstreamModel) waitAction(ch chan actionEvent) tea.Cmd {
 	}
 }
 
+// maxActionLogLines bounds the retained child output; older lines are dropped
+// so a verbose merge cannot make every Update quadratic.
+const maxActionLogLines = 2000
+
 func (m *UpstreamModel) appendActionLine(line string) {
 	m.lastActivity = time.Now()
 	if isActionErrorLine(line) {
@@ -810,6 +860,9 @@ func (m *UpstreamModel) appendActionLine(line string) {
 		return
 	}
 	m.actionLines = append(m.actionLines, line)
+	if len(m.actionLines) > maxActionLogLines {
+		m.actionLines = m.actionLines[len(m.actionLines)-maxActionLogLines:]
+	}
 	m.actionView.SetContent(strings.Join(m.actionLines, "\n"))
 	m.actionView.GotoBottom()
 }
@@ -969,6 +1022,9 @@ func (m *UpstreamModel) actionPaneHeight() int {
 }
 
 func (m *UpstreamModel) resize() {
+	// Widths depend on the terminal; a plan-time cache must not lock the
+	// table to the size it had when the plan arrived.
+	m.widthsCache = nil
 	m.viewport.Width = m.width
 	m.viewport.Height = 6
 	m.actionView.Width = m.width
@@ -1238,6 +1294,24 @@ func (m *UpstreamModel) prunableCount(ebuilds []*atom.ParsedEbuild) int {
 		}
 	}
 	return count
+}
+
+// prunableNames lists the ebuilds pruneOlder would delete, newest-first order.
+func (m *UpstreamModel) prunableNames(pkg string) []string {
+	ebuilds := m.overlayEbuilds(pkg)
+	newest := -1
+	for i, eb := range ebuilds {
+		if !eb.Live {
+			newest = i
+		}
+	}
+	var names []string
+	for i, eb := range ebuilds {
+		if !eb.Live && i != newest {
+			names = append(names, filepath.Base(eb.Path))
+		}
+	}
+	return names
 }
 
 // pruneOlder removes every non-live ebuild except the newest, returning the

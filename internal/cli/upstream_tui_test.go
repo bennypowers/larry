@@ -649,6 +649,41 @@ func TestUpstreamModel_RefreshKeepsTableAndPane(t *testing.T) {
 	}
 }
 
+func TestUpstreamModel_ResizeRecomputesColumnWidths(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.Update(upstreamProgressMsg(upstream.Progress{
+		Total: 1,
+		Plan: []upstream.PlanEntry{{
+			Package: "dev-util/some-rather-long-package-name", Current: "1.0.0",
+			Source: upstream.SourceInfo{Label: "GitHub:acme/some-repository"},
+		}},
+	}))
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 30})
+
+	widths := m.columnWidths()
+	total := 0
+	for _, w := range widths {
+		total += w
+	}
+	// Five cells, each with one space of padding per side.
+	if total+2*len(widths) > 40 {
+		t.Errorf("columns total %d cells at width 40: %v", total+2*len(widths), widths)
+	}
+}
+
+func TestUpstreamModel_TestOptionsCtrlCQuits(t *testing.T) {
+	m := actionModel(t, UpstreamActions{Test: func(context.Context, string, TestOptions,
+		func(string), func(ActionProgress)) error {
+		return nil
+	}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if !m.Quitting() {
+		t.Error("ctrl+c did not quit the test-options prompt")
+	}
+}
+
 func TestUpstreamModel_CompletedActionReusesPane(t *testing.T) {
 	m, _ := newModelForTest(t, true)
 	m.Update(upstreamDoneMsg{Results: sampleResults()})
@@ -698,5 +733,70 @@ func TestUpstreamModel_TestProgressChecklist(t *testing.T) {
 	}
 	if steps[1].state != ActionStepRunning || steps[2].state != ActionStepPending {
 		t.Errorf("after podman done, want image running and emerge pending: %+v", steps)
+	}
+}
+
+func TestUpstreamModel_DropsStaleActionEvent(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.mode = modeRunning
+	m.actionSeq = 7
+	m.actionPkg = "dev-util/alpha"
+
+	stale := errors.New("stale action failed")
+	m.Update(actionEventMsg(actionEvent{seq: 6, done: true, err: stale}))
+
+	if m.mode != modeRunning {
+		t.Errorf("mode = %v, want modeRunning; a stale event must not finish the action", m.mode)
+	}
+	if m.ActionErr() != nil {
+		t.Errorf("ActionErr = %v, want nil after dropping a stale event", m.ActionErr())
+	}
+}
+
+func TestUpstreamModel_AcceptsCurrentActionEvent(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.mode = modeRunning
+	m.actionSeq = 7
+	m.actionPkg = "dev-util/alpha"
+
+	want := errors.New("current action failed")
+	m.Update(actionEventMsg(actionEvent{seq: 7, done: true, err: want}))
+
+	if m.mode != modeBrowse {
+		t.Errorf("mode = %v, want modeBrowse", m.mode)
+	}
+	if !errors.Is(m.ActionErr(), want) {
+		t.Errorf("ActionErr = %v, want %v", m.ActionErr(), want)
+	}
+}
+
+func TestUpstreamModel_StartingStepFinishesPrevious(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.mode = modeRunning
+	m.actionSeq = 1
+	m.actionCh = make(chan actionEvent, 8)
+
+	m.Update(actionEventMsg(actionEvent{seq: 1, progress: &ActionProgress{
+		Steps: []string{"bump", "prepare", "commit"},
+	}}))
+	m.Update(actionEventMsg(actionEvent{seq: 1, progress: &ActionProgress{
+		Step: "bump", State: ActionStepRunning,
+	}}))
+	m.Update(actionEventMsg(actionEvent{seq: 1, progress: &ActionProgress{
+		Step: "prepare", State: ActionStepRunning,
+	}}))
+
+	states := map[string]ActionStepState{}
+	for _, step := range m.actionSteps {
+		states[step.name] = step.state
+	}
+	if states["bump"] != ActionStepDone {
+		t.Errorf("bump = %v, want done once prepare starts", states["bump"])
+	}
+	if states["prepare"] != ActionStepRunning {
+		t.Errorf("prepare = %v, want running", states["prepare"])
+	}
+	if states["commit"] != ActionStepPending {
+		t.Errorf("commit = %v, want pending", states["commit"])
 	}
 }

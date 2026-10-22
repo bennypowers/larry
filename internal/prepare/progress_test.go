@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"bennypowers.dev/larry/internal/ebuild"
 )
@@ -137,6 +138,52 @@ func TestPrepare_ContextCanceled(t *testing.T) {
 	}
 }
 
+func TestPrepare_TUILongScriptLineDoesNotHang(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script")
+	}
+	overlay := progressFixture(t, "dev-util/foo/foo-1.0.ebuild")
+	pkgDir := filepath.Join(overlay, "dev-util", "foo")
+	larryDir := filepath.Join(pkgDir, ".larry")
+	if err := os.MkdirAll(larryDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(larryDir, "prepare.sh")
+	body := "#!/bin/sh\nhead -c 200000 /dev/zero | tr '\\0' x\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := ManifestRunner
+	ManifestRunner = func(string, []string, string, []string) error { return nil }
+	t.Cleanup(func() { ManifestRunner = orig })
+
+	ei := &ebuild.EbuildInfo{
+		Path:     filepath.Join(pkgDir, "foo-1.0.ebuild"),
+		Category: "dev-util",
+		Pkg:      "foo",
+		PVVal:    "1.0",
+		Raw:      "EAPI=8\n",
+	}
+	cfg := &PrepareConfig{
+		Distdir:  t.TempDir(),
+		Overlay:  overlay,
+		UseTUI:   true,
+		Progress: func(ProgressEvent) {},
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- runCustomPrepare(ei, script, cfg) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runCustomPrepare: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runCustomPrepare hung on an over-long script line")
+	}
+}
+
 func TestPrepare_TUIPipesCustomScriptOutput(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script")
@@ -183,5 +230,54 @@ func TestPrepare_TUIPipesCustomScriptOutput(t *testing.T) {
 	}
 	if !sawLog {
 		t.Errorf("no ProgressLog for script output: %+v", *events)
+	}
+}
+
+func TestPrepare_TUIGrandchildHoldingPipeDoesNotHang(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script")
+	}
+	overlay := progressFixture(t, "dev-util/foo/foo-1.0.ebuild")
+	pkgDir := filepath.Join(overlay, "dev-util", "foo")
+	larryDir := filepath.Join(pkgDir, ".larry")
+	if err := os.MkdirAll(larryDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(larryDir, "prepare.sh")
+	// The background child inherits stdout and outlives the script. Reading
+	// until EOF would block forever; runCustomPrepare must force the pipe
+	// closed after a short drain.
+	body := "#!/bin/sh\n( sleep 30 ) &\necho done\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := ManifestRunner
+	ManifestRunner = func(string, []string, string, []string) error { return nil }
+	t.Cleanup(func() { ManifestRunner = orig })
+
+	ei := &ebuild.EbuildInfo{
+		Path:     filepath.Join(pkgDir, "foo-1.0.ebuild"),
+		Category: "dev-util",
+		Pkg:      "foo",
+		PVVal:    "1.0",
+		Raw:      "EAPI=8\n",
+	}
+	cfg := &PrepareConfig{
+		Distdir:  t.TempDir(),
+		Overlay:  overlay,
+		UseTUI:   true,
+		Progress: func(ProgressEvent) {},
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- runCustomPrepare(ei, script, cfg) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runCustomPrepare: %v", err)
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("runCustomPrepare hung on a grandchild holding the pipe")
 	}
 }

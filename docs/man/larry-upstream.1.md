@@ -31,7 +31,7 @@ its upstream source.
 : Git remote name for upstream resolution (default: origin)
 
 **--overlay** *path*
-: Overlay root path (default: $LARRY_OVERLAY or /var/db/repos/gentoo)
+: Overlay root path (default: $LARRY_OVERLAY, config file, or the git repository root)
 
 **--output** *format*
 : `text` (default) or `json`. JSON always contains every result, ignores
@@ -74,14 +74,14 @@ LATEST, STATUS, SOURCE.
 **Check all categories**
 : larry upstream
 
-**Check specific categories**
-: larry upstream dev-python dev-lisp
+**Check specific packages**
+: larry upstream dev-python/requests dev-lisp/sbcl
 
 **Include pre-releases**
 : larry upstream --prereleases
 
-**Interactive TUI**
-: larry upstream --tui
+**Interactive session**
+: larry manage
 
 ## SEE ALSO
 

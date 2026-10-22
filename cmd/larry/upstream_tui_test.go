@@ -61,7 +61,7 @@ func TestBuildUpstreamActionsArgs(t *testing.T) {
 	stubExecutable(t, "#!/bin/sh\necho \"$@\"\n")
 
 	var lines []string
-	actions := buildUpstreamActions("/tmp/overlay")
+	actions := buildUpstreamActions("/tmp/overlay", false)
 	if err := actions.Bump(context.Background(), "dev-util/foo", func(line string) {
 		lines = append(lines, line)
 	}, nil); err != nil {
@@ -78,7 +78,7 @@ func TestBuildUpstreamActionsArgs(t *testing.T) {
 func TestBuildUpstreamActionsTestUsesCompile(t *testing.T) {
 	stubExecutable(t, "#!/bin/sh\necho \"$@\"\n")
 	var lines []string
-	err := buildUpstreamActions("/tmp/overlay").Test(context.Background(), "dev-util/foo",
+	err := buildUpstreamActions("/tmp/overlay", false).Test(context.Background(), "dev-util/foo",
 		cli.TestOptions{Mode: "compile"},
 		func(line string) { lines = append(lines, line) }, nil)
 	if err != nil {
@@ -94,7 +94,7 @@ func TestBuildUpstreamActionsTestUsesCompile(t *testing.T) {
 
 func TestBuildUpstreamActionsTestModes(t *testing.T) {
 	stubExecutable(t, "#!/bin/sh\necho \"$@\"\n")
-	action := buildUpstreamActions("/tmp/overlay").Test
+	action := buildUpstreamActions("/tmp/overlay", false).Test
 
 	var lines []string
 	if err := action(context.Background(), "dev-util/foo",
@@ -235,7 +235,7 @@ sleep 1
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 
-	err := buildUpstreamActions("/tmp/overlay").Bump(ctx, "dev-util/foo",
+	err := buildUpstreamActions("/tmp/overlay", false).Bump(ctx, "dev-util/foo",
 		func(string) {}, func(p cli.ActionProgress) {
 			events = append(events, event{step: p.Step, state: p.State, message: p.Message})
 		})

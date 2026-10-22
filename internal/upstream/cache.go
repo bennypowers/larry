@@ -48,6 +48,12 @@ func DefaultCachePath() string {
 	return filepath.Join(u, ".cache", cacheDirName, cacheSubdir)
 }
 
+// VersionCacheDir returns the version-check cache directory under a larry
+// cache root. Callers must never pass the root itself to Clear.
+func VersionCacheDir(root string) string {
+	return filepath.Join(root, cacheSubdir)
+}
+
 // NewVersionCacheWithPath creates a new cache with disk persistence.
 // Entries are stored as files under dir/.
 func NewVersionCacheWithPath(dir string, ttl time.Duration) *VersionCache {

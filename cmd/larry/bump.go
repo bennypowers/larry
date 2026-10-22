@@ -76,6 +76,9 @@ func init() {
 }
 
 func runBump(cmd *cobra.Command, args []string) error {
+	if err := validateProgressMode(bumpProgress); err != nil {
+		return err
+	}
 	// Resolve overlay root and package path.
 	var overlayRoot, pkgPath string
 	var err error
@@ -108,6 +111,9 @@ func runBump(cmd *cobra.Command, args []string) error {
 
 	// For dry-run mode, just report what would happen.
 	if cfg.DryRun {
+		if cfg.Quiet {
+			return nil
+		}
 		return runBumpDryRun(cmd.OutOrStdout(), pkgPath, mode, bumpVersion)
 	}
 
@@ -139,8 +145,10 @@ func runBump(cmd *cobra.Command, args []string) error {
 	progress.step("bump", stepDone)
 
 	// Print result.
-	if err := printBumpResult(cmd.OutOrStdout(), result); err != nil {
-		return err
+	if !cfg.Quiet {
+		if err := printBumpResult(cmd.OutOrStdout(), result); err != nil {
+			return err
+		}
 	}
 
 	// Run prepare on the new ebuild (downloads distfiles, generates Manifest).
@@ -178,7 +186,9 @@ func runBump(cmd *cobra.Command, args []string) error {
 
 	log.Debug("prepare distdir=%s forceType=%s", distdir, string(forceType))
 	// Log output failures are unrecoverable and not meaningful in this context.
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nPreparing %s...\n", result.NewFile)
+	if !cfg.Quiet {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nPreparing %s...\n", result.NewFile)
+	}
 	progress.step("prepare", stepRunning)
 	progress.detail("prepare: " + filepath.Base(result.NewFile))
 	if err := prepare.PrepareFromFile(result.NewFile, pcfg); err != nil {
@@ -225,7 +235,9 @@ func runBump(cmd *cobra.Command, args []string) error {
 	}
 
 	// Log output failures are unrecoverable and not meaningful in this context.
-	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Done.")
+	if !cfg.Quiet {
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Done.")
+	}
 	progress.done()
 	return nil
 }

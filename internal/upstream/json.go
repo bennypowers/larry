@@ -3,6 +3,7 @@ package upstream
 import (
 	"encoding/json"
 	"io"
+	"strings"
 )
 
 // JSONSchemaVersion is bumped when the JSON result shape changes
@@ -70,7 +71,9 @@ func NewJSONOutput(results []UpstreamResult) JSONOutput {
 	for _, r := range results {
 		out.Results = append(out.Results, JSONResult{
 			Package: r.Package,
-			Current: r.Current,
+			// Text mode annotates live rows for humans; the machine field is a
+			// version string and status already carries "live".
+			Current: strings.TrimSuffix(r.Current, " (live)"),
 			Latest:  r.Latest,
 			Status:  r.Status.JSONName(),
 			Source: JSONSource{

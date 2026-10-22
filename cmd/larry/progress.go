@@ -2,15 +2,26 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 
 	"bennypowers.dev/larry/internal/prepare"
+	"bennypowers.dev/larry/internal/test"
 )
 
 // progressPrefix marks structured progress lines on stderr, shared by the
 // hidden --progress=json channel of commands that `larry manage` runs.
 const progressPrefix = "larry-progress:"
+
+// validateProgressMode rejects typos instead of silently disabling the
+// machine channel.
+func validateProgressMode(mode string) error {
+	if mode != "" && mode != "json" {
+		return fmt.Errorf("invalid --progress %q (must be json)", mode)
+	}
+	return nil
+}
 
 // actionProgressWire is the NDJSON shape consumed by `larry manage`.
 type actionProgressWire struct {
@@ -22,18 +33,19 @@ type actionProgressWire struct {
 	Error   string   `json:"error,omitempty"`
 }
 
+// Wire values are derived from the source enums so an enum insertion cannot
+// silently renumber the channel without a compile error here.
 const (
-	progressStart = iota
-	progressStep
-	progressDone
-	progressError
+	progressStart = int(test.ProgressStart)
+	progressStep  = int(test.ProgressStep)
+	progressDone  = int(test.ProgressDone)
+	progressError = int(test.ProgressError)
 )
 
 const (
-	_ = iota // pending
-	stepRunning
-	stepDone
-	stepFailed
+	stepRunning = int(test.StepRunning)
+	stepDone    = int(test.StepDone)
+	stepFailed  = int(test.StepFailed)
 )
 
 // progressEmitter writes structured events when the hidden channel is active

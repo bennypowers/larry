@@ -12,6 +12,7 @@ import (
 
 	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
+	"bennypowers.dev/larry/internal/larryconfig"
 	"bennypowers.dev/larry/internal/provider"
 	"bennypowers.dev/larry/internal/remoteid"
 	"bennypowers.dev/larry/internal/version"
@@ -1417,5 +1418,110 @@ func TestRunWithOptions_NilProgressSafe(t *testing.T) {
 	reg.Register(&mockProvider{mockType: remoteid.TypeGitHub, mockVersion: mustVersion("3.0.0")})
 	if _, err := RunWithTargets(RunOptions{OverlayDir: overlay, Registry: reg, Progress: nil}); err != nil {
 		t.Fatalf("RunWithTargets with nil Progress: %v", err)
+	}
+}
+
+// --- Cache policy isolation and batch conflict tests ---
+
+type batchRecorder struct {
+	calls int
+	reqs  []provider.BatchRequest
+}
+
+func (b *batchRecorder) Type() remoteid.RemoteIdType         { return remoteid.TypeGitHub }
+func (b *batchRecorder) Metadata() provider.ProviderMetadata { return provider.ProviderMetadata{} }
+func (b *batchRecorder) Name() string                        { return "batch-recorder" }
+func (b *batchRecorder) IsPrerelease(*version.Version) bool  { return false }
+func (b *batchRecorder) FetchLatestVersion(remoteid.RemoteId, bool) (*version.Version, error) {
+	return nil, nil
+}
+func (b *batchRecorder) BatchResolve(_ context.Context, reqs []provider.BatchRequest, _ bool) (map[string]*provider.Resolution, error) {
+	b.calls++
+	b.reqs = append(b.reqs, reqs...)
+	return map[string]*provider.Resolution{}, nil
+}
+
+// sharedRepoOverlay writes two packages that point at the same GitHub repo.
+func sharedRepoOverlay(t *testing.T) string {
+	t.Helper()
+	overlay := setupTestOverlay(t)
+	for _, pkg := range []string{"alpha", "beta"} {
+		writeEbuild(t, overlay, "app-shells/"+pkg+"/"+pkg+"-1.0.0.ebuild", `EAPI=8
+DESCRIPTION="`+pkg+`"
+SRC_URI="https://github.com/acme/shared/archive/v1.0.0.tar.gz"
+LICENSE="MIT"
+SLOT="0"
+`)
+		writeMetadata(t, overlay, "app-shells/"+pkg, "acme/shared")
+	}
+	return overlay
+}
+
+func sharedRepoNodes(t *testing.T, overlay string) []checkNode {
+	t.Helper()
+	var nodes []checkNode
+	for _, pkg := range []string{"alpha", "beta"} {
+		path := filepath.Join(overlay, "app-shells", pkg, pkg+"-1.0.0.ebuild")
+		eb, err := atom.ParseEbuildPath(path)
+		if err != nil {
+			t.Fatalf("ParseEbuildPath(%s): %v", path, err)
+		}
+		nodes = append(nodes, checkNode{Package: "app-shells/" + pkg, Ebuild: eb})
+	}
+	return nodes
+}
+
+func TestPrefetchBatches_SharedRepoBatched(t *testing.T) {
+	overlay := sharedRepoOverlay(t)
+	rec := &batchRecorder{}
+	reg := provider.NewProviderRegistry()
+	reg.Register(rec)
+
+	prefetchBatches(context.Background(), sharedRepoNodes(t, overlay), reg, false)
+
+	if rec.calls != 1 {
+		t.Fatalf("BatchResolve calls = %d, want 1", rec.calls)
+	}
+	if len(rec.reqs) != 2 {
+		t.Errorf("batched %d requests, want 2", len(rec.reqs))
+	}
+}
+
+func TestPrefetchBatches_DivergentRulesNotBatched(t *testing.T) {
+	overlay := sharedRepoOverlay(t)
+	cfgDir := filepath.Join(overlay, "app-shells", "beta", ".larry")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.yaml"),
+		[]byte("upstream:\n  strategy: tags\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := &batchRecorder{}
+	reg := provider.NewProviderRegistry()
+	reg.Register(rec)
+
+	prefetchBatches(context.Background(), sharedRepoNodes(t, overlay), reg, false)
+
+	if rec.calls != 0 {
+		t.Errorf("BatchResolve calls = %d, want 0 for divergent per-package rules", rec.calls)
+	}
+}
+
+func TestCachePolicyKey_SeparatesRules(t *testing.T) {
+	plain := cachePolicyKey("cat", "pkg", "github", "1.0", nil, false)
+	withTags := cachePolicyKey("cat", "pkg", "github", "1.0",
+		&larryconfig.ResolveOptions{Strategy: "tags", Check: true}, false)
+	prerelease := cachePolicyKey("cat", "pkg", "github", "1.0", nil, true)
+
+	if plain == withTags {
+		t.Error("cache keys collide for different upstream strategies")
+	}
+	if plain == prerelease {
+		t.Error("cache keys collide for different prerelease settings")
+	}
+	if plain != cachePolicyKey("cat", "pkg", "github", "1.0", nil, false) {
+		t.Error("cache key is not stable for identical inputs")
 	}
 }

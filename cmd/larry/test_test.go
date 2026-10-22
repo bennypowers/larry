@@ -464,3 +464,63 @@ func TestTestCmd_UseFlagReachesContainer(t *testing.T) {
 		t.Errorf("captured stdout = %q, want '-e USE=cuda rocm'", stdout)
 	}
 }
+
+func TestTestCmd_DryRunRejected(t *testing.T) {
+	runner := &cmdStubRunner{}
+	test.TestRunnerForTest = runner
+	tmpOverlay := fixtureOverlay(t, nil, map[string]string{
+		"dev-util/javy/javy-9.1.0.ebuild": "EAPI=8\n",
+	})
+	defer func() { test.TestRunnerForTest = nil }()
+
+	_, _, err := execCmd(t, "test", "--dry-run", "--overlay", tmpOverlay, "dev-util/javy")
+	if err == nil {
+		t.Fatal("expected --dry-run to be rejected")
+	}
+	if !strings.Contains(err.Error(), "--pretend") {
+		t.Errorf("error = %q, want a --pretend hint", err.Error())
+	}
+	if len(runner.RunWithEnvCalls) != 0 {
+		t.Errorf("expected 0 runner calls, got %d", len(runner.RunWithEnvCalls))
+	}
+}
+
+func TestTestCmd_InvalidProgressRejected(t *testing.T) {
+	runner := &cmdStubRunner{}
+	test.TestRunnerForTest = runner
+	tmpOverlay := fixtureOverlay(t, nil, map[string]string{
+		"dev-util/javy/javy-9.1.0.ebuild": "EAPI=8\n",
+	})
+	defer func() { test.TestRunnerForTest = nil }()
+
+	_, _, err := execCmd(t, "test", "--progress", "bogus", "--overlay", tmpOverlay, "dev-util/javy")
+	if err == nil {
+		t.Fatal("expected invalid --progress to be rejected")
+	}
+	if !strings.Contains(err.Error(), "invalid --progress") {
+		t.Errorf("error = %q, want invalid --progress", err.Error())
+	}
+	if len(runner.RunWithEnvCalls) != 0 {
+		t.Errorf("expected 0 runner calls, got %d", len(runner.RunWithEnvCalls))
+	}
+}
+
+func TestChildCommandArgs_DryRunForwarded(t *testing.T) {
+	got := childCommandArgs("bump", "/overlay", "app-admin/cockpit", true, true, nil)
+	joined := strings.Join(got, " ")
+	for _, want := range []string{"--dry-run", "--progress json", "--overlay /overlay", "--color never", "app-admin/cockpit"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("args = %q, missing %q", joined, want)
+		}
+	}
+	if got[len(got)-1] != "app-admin/cockpit" {
+		t.Errorf("package must be last, got %q", got)
+	}
+}
+
+func TestChildCommandArgs_NoDryRunByDefault(t *testing.T) {
+	got := childCommandArgs("prepare", "/overlay", "dev-util/foo", false, true, nil)
+	if strings.Contains(strings.Join(got, " "), "--dry-run") {
+		t.Errorf("args = %q, unexpected --dry-run", strings.Join(got, " "))
+	}
+}
