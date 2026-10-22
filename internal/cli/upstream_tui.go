@@ -406,10 +406,6 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case actionTickMsg:
 		if m.mode == modeRunning {
-			if time.Since(m.lastActivity) >= 15*time.Second {
-				m.appendActionLine(fmt.Sprintf(">>> still running (%s, no output)",
-					time.Since(m.lastActivity).Round(time.Second)))
-			}
 			return m, m.actionTick()
 		}
 		return m, nil
@@ -1353,11 +1349,11 @@ func (m *UpstreamModel) actionPaneView() string {
 	paneHeight := m.actionPaneHeight()
 
 	label := fmt.Sprintf("%s %s", m.pending, m.actionPkg)
-	if !m.actionStart.IsZero() {
+	switch {
+	case !m.lastActivity.IsZero() && time.Since(m.lastActivity) > 10*time.Second:
+		label += " · stalled " + time.Since(m.lastActivity).Round(time.Second).String()
+	case !m.actionStart.IsZero():
 		label += " · " + time.Since(m.actionStart).Round(time.Second).String()
-	}
-	if !m.lastActivity.IsZero() && time.Since(m.lastActivity) > 10*time.Second {
-		label += " · stalled"
 	}
 	label = truncateToWidth(label, max(m.width-4, 1))
 	lines := make([]string, 0, paneHeight)

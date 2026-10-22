@@ -123,7 +123,12 @@ func mapPrepareProgress(emitter progressEmitter, ev prepare.ProgressEvent) {
 // mapPrepareSubstep forwards prepare's named steps as detail text, for callers
 // (bump) that own the checklist and only need to show what prepare is doing.
 func mapPrepareSubstep(emitter progressEmitter, ev prepare.ProgressEvent) {
-	if ev.Kind == prepare.ProgressStep && ev.Step != "" {
-		emitter.detail(ev.Step)
+	switch ev.Kind {
+	case prepare.ProgressStart:
+		emitter.detail("prepare: start")
+	case prepare.ProgressStep:
+		if ev.Step != "" {
+			emitter.detail(ev.Step)
+		}
 	}
 }

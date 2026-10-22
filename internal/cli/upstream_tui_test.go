@@ -597,14 +597,16 @@ func TestUpstreamModel_BumpSummary(t *testing.T) {
 	}
 }
 
-func TestUpstreamModel_HeartbeatWhileSilent(t *testing.T) {
+func TestUpstreamModel_StalledHeader(t *testing.T) {
 	m, _ := newModelForTest(t, true)
 	m.mode = modeRunning
-	m.lastActivity = time.Now().Add(-20 * time.Second)
+	m.actionPkg = "app-admin/cockpit"
+	m.actionStart = time.Now().Add(-20 * time.Second)
+	m.lastActivity = time.Now().Add(-15 * time.Second)
 	m.Update(actionTickMsg(time.Now()))
-	joined := strings.Join(m.actionLines, "\n")
-	if !strings.Contains(joined, "still running") || !strings.Contains(joined, "no output") {
-		t.Errorf("heartbeat not appended: %v", m.actionLines)
+	view := m.View()
+	if !strings.Contains(view, "stalled 15s") {
+		t.Errorf("view missing a stalled indicator:\n%s", view)
 	}
 }
 
