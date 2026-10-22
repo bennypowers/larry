@@ -81,10 +81,10 @@ The package list appears before all checks finish: CURRENT and SOURCE render
 immediately, while LATEST and STATUS spin until each row resolves. Overall
 progress lives in the header and footer.
 
-Running actions keep the table on screen and use a pane below it for the
-checklist, elapsed time, and output tail. The pane surfaces the latest error
-line, shows a no-output timer when the child stalls, and redacts the overlay's
-absolute path from child output.
+Actions and details share one bordered pane below the table. It shows the
+running checklist and output, then keeps the completed action's result; Enter
+cycles result → details → closed. The pane pins the latest error, marks a
+stalled child, and redacts the overlay's absolute path from child output.
 
 ## EXAMPLES
 

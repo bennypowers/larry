@@ -452,8 +452,19 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.startAction()
 			case modeBrowse:
 				if m.state == upstreamResults && len(m.visible) > 0 {
-					m.showDetail = !m.showDetail
-					m.updateDetail()
+					if m.showDetail && (len(m.actionLines) > 0 || m.actionErr != nil) {
+						// Cycle: action result -> details -> closed.
+						m.showDetail = false
+						m.actionLines = nil
+						m.actionErr = nil
+						m.actionSteps = nil
+						m.actionError = ""
+						m.bumpOld = ""
+						m.bumpNew = ""
+					} else {
+						m.showDetail = !m.showDetail
+						m.updateDetail()
+					}
 				}
 			}
 			return m, nil
@@ -927,24 +938,11 @@ func (m *UpstreamModel) ensureCursorVisible() {
 // detail pane, action pane, and footer at the current terminal size.
 func (m *UpstreamModel) listHeight() int {
 	height := m.height - 3
-	if m.mode == modeRunning {
+	if m.paneVisible() {
 		height -= m.actionPaneHeight()
-	} else {
-		if m.showDetail {
-			height -= 7
-		}
-		if m.actionErr != nil {
-			height--
-		}
-		if len(m.actionLines) > 0 {
-			height -= 11
-			if m.bumpNew != "" {
-				height--
-			}
-		}
-		if m.mode == modeConfirm {
-			height--
-		}
+	}
+	if m.mode == modeConfirm {
+		height--
 	}
 	if height < 1 {
 		height = 1
@@ -952,8 +950,13 @@ func (m *UpstreamModel) listHeight() int {
 	return height
 }
 
-// actionPaneHeight is the fixed height of the running-action pane, which sits
-// below the table rather than replacing it.
+// paneVisible reports whether the lower pane is on screen.
+func (m *UpstreamModel) paneVisible() bool {
+	return m.mode == modeRunning || m.showDetail ||
+		len(m.actionLines) > 0 || m.actionErr != nil
+}
+
+// actionPaneHeight is the height of the shared details/action pane.
 func (m *UpstreamModel) actionPaneHeight() int {
 	height := m.height / 3
 	if height < 7 {
@@ -1269,9 +1272,6 @@ func (m *UpstreamModel) View() string {
 	if m.mode == modeTestOptions {
 		return m.testOptionsView()
 	}
-	if m.mode == modeRunning {
-		return m.actionRunningView()
-	}
 	switch m.state {
 	case upstreamFetching:
 		if len(m.plan) == 0 {
@@ -1293,6 +1293,10 @@ func (m *UpstreamModel) View() string {
 		b.WriteString("\n")
 		b.WriteString(m.renderTable())
 		b.WriteString("\n")
+		if m.paneVisible() {
+			b.WriteString(m.paneView())
+			b.WriteString("\n")
+		}
 		m.progress.Width = max(m.width-16, 10)
 		b.WriteString(m.progressView())
 		b.WriteString("  ")
@@ -1319,22 +1323,6 @@ func (m *UpstreamModel) resultsHeader() string {
 		fmt.Sprintf("  (%d shown, %d checked)", len(m.visible), len(m.results))
 }
 
-// actionRunningView keeps the table visible and puts the action in a pane
-// below it, rather than taking over the screen.
-func (m *UpstreamModel) actionRunningView() string {
-	var b strings.Builder
-	b.WriteString(m.resultsHeader())
-	b.WriteString("\n")
-	b.WriteString(m.renderTable())
-	b.WriteString("\n")
-	b.WriteString(m.actionPaneView())
-	b.WriteString("\n")
-	b.WriteString(m.theme.FooterStyle().Render("esc: cancel action  q: quit"))
-	return b.String()
-}
-
-// actionPaneView renders exactly actionPaneHeight lines: a title rule, the
-// checklist, and the tail of the child's output.
 // rule renders a full-width rule with a left label, used for the detail and
 // action panes.
 func (m *UpstreamModel) rule(label string) string {
@@ -1346,15 +1334,45 @@ func (m *UpstreamModel) rule(label string) string {
 	return m.theme.HeaderStyle().Render(plain + " " + strings.Repeat("─", fill))
 }
 
-func (m *UpstreamModel) actionPaneView() string {
-	paneHeight := m.actionPaneHeight()
-
-	label := fmt.Sprintf("%s %s", m.pending, m.actionPkg)
+// paneView renders the single lower pane: live action, completed action, or
+// the selected package's details.
+func (m *UpstreamModel) paneView() string {
+	height := m.actionPaneHeight()
 	switch {
-	case !m.lastActivity.IsZero() && time.Since(m.lastActivity) > 10*time.Second:
-		label += " · stalled " + time.Since(m.lastActivity).Round(time.Second).String()
-	case !m.actionStart.IsZero():
-		label += " · " + time.Since(m.actionStart).Round(time.Second).String()
+	case m.mode == modeRunning:
+		return m.actionPaneView(height)
+	case m.showDetail:
+		return m.detailsPaneView(height)
+	default:
+		return m.actionPaneView(height)
+	}
+}
+
+// detailsPaneView reuses the same bordered pane for package details.
+func (m *UpstreamModel) detailsPaneView(height int) string {
+	m.viewport.Width = max(m.width-2, 1)
+	m.viewport.Height = max(height-1, 1)
+	lines := make([]string, 0, height)
+	lines = append(lines, m.rule("details"))
+	lines = append(lines, strings.Split(m.theme.LogStyle().Render(m.viewport.View()), "\n")...)
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines[:height], "\n")
+}
+
+func (m *UpstreamModel) actionPaneView(paneHeight int) string {
+	running := m.mode == modeRunning
+	label := fmt.Sprintf("%s %s", m.pending, m.actionPkg)
+	if running {
+		switch {
+		case !m.lastActivity.IsZero() && time.Since(m.lastActivity) > 10*time.Second:
+			label += " · stalled " + time.Since(m.lastActivity).Round(time.Second).String()
+		case !m.actionStart.IsZero():
+			label += " · " + time.Since(m.actionStart).Round(time.Second).String()
+		}
+	} else {
+		label = "last " + label
 	}
 	label = truncateToWidth(label, max(m.width-4, 1))
 	lines := make([]string, 0, paneHeight)
@@ -1366,7 +1384,7 @@ func (m *UpstreamModel) actionPaneView() string {
 			steps.WriteString("   ")
 		}
 		glyph := stepGlyph(step.state)
-		if step.state == ActionStepRunning && m.animate {
+		if step.state == ActionStepRunning && running && m.animate {
 			glyph = m.spinnerGlyph()
 		}
 		fmt.Fprintf(&steps, "%s %s", glyph, step.name)
@@ -1375,9 +1393,13 @@ func (m *UpstreamModel) actionPaneView() string {
 
 	logHeight := paneHeight - 3
 	lines = append(lines, m.actionDetailStrip())
-	if m.actionError != "" {
+	errLine := m.actionError
+	if errLine == "" && !running && m.actionErr != nil {
+		errLine = "failed: " + m.actionErr.Error()
+	}
+	if errLine != "" {
 		lines = append(lines, m.theme.ErrorStyle().Render(
-			truncateToWidth(m.actionError, max(m.width-1, 1))))
+			truncateToWidth(errLine, max(m.width-1, 1))))
 		logHeight--
 	}
 	if logHeight < 1 {
@@ -1386,12 +1408,13 @@ func (m *UpstreamModel) actionPaneView() string {
 
 	m.actionView.Width = max(m.width-2, 1)
 	m.actionView.Height = logHeight
-	if len(m.actionLines) == 0 {
-		lines = append(lines, m.spinner.View()+" running")
-	} else {
+	switch {
+	case len(m.actionLines) > 0:
 		for _, line := range strings.Split(m.actionView.View(), "\n") {
 			lines = append(lines, m.theme.LogStyle().Render(line))
 		}
+	case running:
+		lines = append(lines, m.spinner.View()+" running")
 	}
 	for len(lines) < paneHeight {
 		lines = append(lines, "")
@@ -1559,25 +1582,9 @@ func (m *UpstreamModel) resultsView() string {
 	} else {
 		b.WriteString(m.renderTable())
 		b.WriteString("\n")
-		if m.showDetail {
-			b.WriteString(m.rule("details"))
-			b.WriteString("\n")
-			b.WriteString(m.theme.LogStyle().Render(m.viewport.View()))
-			b.WriteString("\n")
-		}
 	}
-	if m.actionErr != nil {
-		b.WriteString(m.theme.ErrorStyle().Render("last action failed: " + m.actionErr.Error()))
-		b.WriteString("\n")
-	}
-	if len(m.actionLines) > 0 {
-		if m.bumpNew != "" {
-			b.WriteString(m.bumpSummary())
-			b.WriteString("\n")
-		}
-		b.WriteString(m.theme.FooterStyle().Render("last action output:"))
-		b.WriteString("\n")
-		b.WriteString(m.theme.LogStyle().Render(m.actionView.View()))
+	if m.paneVisible() {
+		b.WriteString(m.paneView())
 		b.WriteString("\n")
 	}
 	if m.mode == modeConfirm {
@@ -1589,19 +1596,6 @@ func (m *UpstreamModel) resultsView() string {
 	return b.String()
 }
 
-// bumpSummary renders the package's version transition.
-func (m *UpstreamModel) bumpSummary() string {
-	if !m.theme.Color {
-		return fmt.Sprintf("%s  %s → %s", m.actionPkg, m.bumpOld, m.bumpNew)
-	}
-	renderer := m.theme.Renderer
-	oldStyle := renderer.NewStyle().Foreground(lipgloss.Color("208"))
-	newStyle := renderer.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
-	arrow := renderer.NewStyle().Foreground(lipgloss.Color("240")).Render("→")
-	return fmt.Sprintf("%s  %s %s %s", m.actionPkg,
-		oldStyle.Render(m.bumpOld), arrow, newStyle.Render(m.bumpNew))
-}
-
 func (m *UpstreamModel) selectedPackage() string {
 	if len(m.visible) == 0 {
 		return ""
@@ -1610,6 +1604,9 @@ func (m *UpstreamModel) selectedPackage() string {
 }
 
 func (m *UpstreamModel) footer() string {
+	if m.mode == modeRunning {
+		return m.theme.FooterStyle().Render("esc: cancel action  q: quit")
+	}
 	short := "↑/↓: move  enter: details  b: bump  p: prepare  t: test  R: refresh  q: quit"
 	if m.showHelp {
 		short = "↑/↓ or j/k: move  pgup/pgdn or b/f: page  g/G: first/last  enter: details  " +

@@ -591,14 +591,15 @@ func TestUpstreamModel_BumpSummary(t *testing.T) {
 	if m.bumpOld != "369" || m.bumpNew != "370" {
 		t.Errorf("parsed bump = %q -> %q", m.bumpOld, m.bumpNew)
 	}
-	summary := m.bumpSummary()
-	if !strings.Contains(summary, "369") || !strings.Contains(summary, "370") || !strings.Contains(summary, "→") {
-		t.Errorf("summary = %q", summary)
+	strip := m.actionDetailStrip()
+	if !strings.Contains(strip, "369") || !strings.Contains(strip, "370") || !strings.Contains(strip, "→") {
+		t.Errorf("detail strip = %q", strip)
 	}
 }
 
 func TestUpstreamModel_StalledHeader(t *testing.T) {
 	m, _ := newModelForTest(t, true)
+	m.Update(upstreamDoneMsg{Results: sampleResults()})
 	m.mode = modeRunning
 	m.actionPkg = "app-admin/cockpit"
 	m.actionStart = time.Now().Add(-20 * time.Second)
@@ -626,6 +627,34 @@ func TestUpstreamModel_BlankOutputLineDoesNotStallAction(t *testing.T) {
 	}
 	if !strings.Contains(m.View(), "Checking upstream") {
 		t.Errorf("successful action did not refresh:\n%s", m.View())
+	}
+}
+
+func TestUpstreamModel_CompletedActionReusesPane(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.Update(upstreamDoneMsg{Results: sampleResults()})
+	m.pending = ActionBump
+	m.actionPkg = "dev-util/alpha"
+	m.actionSteps = []actionStep{{name: "bump", state: ActionStepDone}}
+	m.appendActionLine("Preparing foo...")
+
+	view := m.View()
+	for _, want := range []string{"─ last bump dev-util/alpha", "✓ bump", "Preparing foo..."} {
+		if !strings.Contains(view, want) {
+			t.Errorf("completed action pane missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "last action output") {
+		t.Errorf("borderless action block still present:\n%s", view)
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(m.View(), "─ details") {
+		t.Errorf("enter did not switch the pane to details:\n%s", m.View())
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if strings.Contains(m.View(), "─ details") || strings.Contains(m.View(), "─ last bump") {
+		t.Errorf("second enter did not close the pane:\n%s", m.View())
 	}
 }
 
