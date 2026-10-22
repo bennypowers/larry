@@ -665,15 +665,18 @@ func (m *UpstreamModel) applyActionProgress(p ActionProgress) {
 		for _, name := range p.Steps {
 			m.actionSteps = append(m.actionSteps, actionStep{name: name})
 		}
+		m.advancePending()
 	}
 	if p.Step != "" {
 		for i := range m.actionSteps {
 			if m.actionSteps[i].name == p.Step {
 				m.actionSteps[i].state = p.State
+				m.advancePending()
 				return
 			}
 		}
 		m.actionSteps = append(m.actionSteps, actionStep{name: p.Step, state: p.State})
+		m.advancePending()
 		return
 	}
 	if p.Done || p.Failed {
@@ -685,6 +688,23 @@ func (m *UpstreamModel) applyActionProgress(p ActionProgress) {
 			if m.actionSteps[i].state == ActionStepPending || m.actionSteps[i].state == ActionStepRunning {
 				m.actionSteps[i].state = state
 			}
+		}
+	}
+}
+
+// advancePending marks the next pending step running when the current one
+// finishes. The child may be slow to announce the next step (or the event may
+// be lost), so the checklist must never imply that nothing is happening.
+func (m *UpstreamModel) advancePending() {
+	for _, step := range m.actionSteps {
+		if step.state == ActionStepRunning {
+			return
+		}
+	}
+	for i := range m.actionSteps {
+		if m.actionSteps[i].state == ActionStepPending {
+			m.actionSteps[i].state = ActionStepRunning
+			return
 		}
 	}
 }

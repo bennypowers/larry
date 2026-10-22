@@ -473,7 +473,7 @@ func TestUpstreamModel_RunningActionKeepsTableVisible(t *testing.T) {
 	m.applyActionProgress(ActionProgress{Message: "manifest"})
 
 	view := m.View()
-	for _, want := range []string{"PACKAGE", "dev-util/alpha", "✓ bump", "○ prepare", "manifest", "────", "esc: cancel action"} {
+	for _, want := range []string{"PACKAGE", "dev-util/alpha", "✓ bump", "▸ prepare", "manifest", "────", "esc: cancel action"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("running view missing %q:\n%s", want, view)
 		}
@@ -502,7 +502,7 @@ func TestUpstreamModel_TestProgressChecklist(t *testing.T) {
 	if steps[0].name != "podman" || steps[0].state != ActionStepDone {
 		t.Errorf("first step = %+v, want podman done", steps[0])
 	}
-	if steps[1].state != ActionStepPending || steps[2].state != ActionStepPending {
-		t.Errorf("unreported steps should stay pending: %+v", steps)
+	if steps[1].state != ActionStepRunning || steps[2].state != ActionStepPending {
+		t.Errorf("after podman done, want image running and emerge pending: %+v", steps)
 	}
 }

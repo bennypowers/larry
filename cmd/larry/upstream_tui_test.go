@@ -201,6 +201,52 @@ func TestProgressDetailCarriesNoStep(t *testing.T) {
 	}
 }
 
+func TestBumpProgressPlumbing(t *testing.T) {
+	stubExecutable(t, `#!/bin/sh
+echo 'larry-progress:{"kind":0,"steps":["bump","prepare","commit"]}'
+echo 'larry-progress:{"kind":1,"step":"bump","state":1}'
+echo 'larry-progress:{"kind":1,"step":"bump","state":2}'
+echo 'Bumped: something'
+echo 'larry-progress:{"kind":1,"step":"prepare","state":1}'
+echo 'larry-progress:{"kind":1,"state":1,"message":"manifest"}'
+sleep 1
+`)
+
+	type event struct {
+		step    string
+		state   cli.ActionStepState
+		message string
+	}
+	var events []event
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	err := buildUpstreamActions("/tmp/overlay").Bump(ctx, "dev-util/foo",
+		func(string) {}, func(p cli.ActionProgress) {
+			events = append(events, event{step: p.Step, state: p.State, message: p.Message})
+		})
+	if err != nil && ctx.Err() == nil {
+		t.Fatalf("Bump: %v", err)
+	}
+
+	sawPrepareRunning := false
+	sawDetail := false
+	for _, ev := range events {
+		if ev.step == "prepare" && ev.state == cli.ActionStepRunning {
+			sawPrepareRunning = true
+		}
+		if ev.message == "manifest" {
+			sawDetail = true
+		}
+	}
+	if !sawPrepareRunning {
+		t.Errorf("prepare running event did not reach the pane: %+v", events)
+	}
+	if !sawDetail {
+		t.Errorf("prepare detail did not reach the pane: %+v", events)
+	}
+}
+
 func TestParseTestProgress(t *testing.T) {
 	line := `larry-progress:{"kind":1,"step":"image","state":1}`
 	got, ok := parseTestProgress(line)
