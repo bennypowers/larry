@@ -246,7 +246,7 @@ func TestGitHub_Tier3_LsRemoteFallback(t *testing.T) {
 
 	client := github.NewClientWithRunner(stub)
 	p := &GitHubProvider{
-		Client:  client,
+		Client: client,
 		TagLister: func(url string) ([]string, error) {
 			return []string{"v1.0", "v10.0", "v9.0"}, nil
 		},
@@ -317,7 +317,7 @@ func TestGitHub_Tier4_ReturnsTagAndDate(t *testing.T) {
 
 	client := github.NewClientWithRunner(stub)
 	p := &GitHubProvider{
-		Client:  client,
+		Client: client,
 		TagLister: func(url string) ([]string, error) {
 			return nil, fmt.Errorf("no tags")
 		},
@@ -373,7 +373,7 @@ func TestGitHub_Tier4_SkipsPrereleaseTagNames(t *testing.T) {
 
 	client := github.NewClientWithRunner(stub)
 	p := &GitHubProvider{
-		Client:  client,
+		Client: client,
 		TagLister: func(url string) ([]string, error) {
 			return nil, fmt.Errorf("no tags")
 		},
@@ -417,7 +417,7 @@ func TestGitHub_Tier4_DatePrefersTagName(t *testing.T) {
 
 	client := github.NewClientWithRunner(stub)
 	p := &GitHubProvider{
-		Client:  client,
+		Client: client,
 		TagLister: func(url string) ([]string, error) {
 			return nil, fmt.Errorf("no tags")
 		},
@@ -452,7 +452,7 @@ func TestGitHub_PrereleaseErrorMessage(t *testing.T) {
 
 	client := github.NewClientWithRunner(stub)
 	p := &GitHubProvider{
-		Client:  client,
+		Client: client,
 		TagLister: func(url string) ([]string, error) {
 			return []string{"v1.0.0-rc1"}, nil
 		},
@@ -476,8 +476,8 @@ func TestGitHub_PrereleaseErrorMessage(t *testing.T) {
 
 func TestStripTagPrefix_PeeledTag(t *testing.T) {
 	tests := []struct {
-		input  string
-		want   string
+		input string
+		want  string
 	}{
 		{"v1.0^{}", "1.0"},
 		{"1.0^{abc}", "1.0"},
@@ -546,7 +546,7 @@ func TestFetchLatestVersion_ByDate(t *testing.T) {
 
 	client := github.NewClientWithRunner(stub)
 	p := &GitHubProvider{
-		Client:  client,
+		Client: client,
 		TagLister: func(url string) ([]string, error) {
 			return nil, fmt.Errorf("no tags")
 		},
@@ -907,7 +907,7 @@ func TestGitHub_Tier3_TagMatchFilter(t *testing.T) {
 
 	client := github.NewClientWithRunner(stub)
 	p := &GitHubProvider{
-		Client:  client,
+		Client: client,
 		TagLister: func(url string) ([]string, error) {
 			return []string{"stable_20260911", "oldstable_20260824", "stable_20260901"}, nil
 		},
@@ -964,7 +964,7 @@ func TestGitHub_Tier4_TagMatchFilter(t *testing.T) {
 
 	client := github.NewClientWithRunner(stub)
 	p := &GitHubProvider{
-		Client:  client,
+		Client:    client,
 		TagLister: func(url string) ([]string, error) { return nil, fmt.Errorf("no tags") },
 		ResolveOptions: &larryconfig.ResolveOptions{
 			TagMatchRe: regexp.MustCompile(`^stable_`),
@@ -976,5 +976,213 @@ func TestGitHub_Tier4_TagMatchFilter(t *testing.T) {
 	}
 	if res.Tag != "stable_20260911" {
 		t.Errorf("Tag = %q, want stable_20260911 (oldstable filtered)", res.Tag)
+	}
+}
+
+// ---- strategy: tags (opt-in per-package) ----
+
+func TestGitHub_StrategyTags_PrefersTagsOverReleases(t *testing.T) {
+	stub := github.NewStubRunner()
+	kRel := key("api", "repos/o/r/releases/latest")
+	kPre := key("release", "list", "-R", "o/r", "--limit", "100", "--json", "tagName,isPrerelease")
+	relJSON, _ := json.Marshal(map[string]interface{}{
+		"tag_name":   "3.50.2",
+		"prerelease": false,
+		"draft":      false,
+	})
+	stub.Outputs[kRel] = relJSON
+	stub.Outputs[kPre] = []byte(`[]`)
+
+	rec := &recordingRunner{inner: stub}
+	p := &GitHubProvider{
+		Client: github.NewClientWithRunner(rec),
+		TagLister: func(string) ([]string, error) {
+			return []string{"3.50.2", "3.50.11"}, nil
+		},
+		ResolveOptions: &larryconfig.ResolveOptions{Strategy: "tags"},
+	}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.Version != "3.50.11" {
+		t.Errorf("Version = %q, want 3.50.11 (tags strategy)", res.Version)
+	}
+	for _, k := range rec.keys {
+		if k == kRel {
+			t.Errorf("tags strategy must not call /releases/latest; recorded %v", rec.keys)
+		}
+	}
+}
+
+func TestGitHub_DefaultStrategy_ReleasesWin(t *testing.T) {
+	stub := github.NewStubRunner()
+	kRel := key("api", "repos/o/r/releases/latest")
+	relJSON, _ := json.Marshal(map[string]interface{}{
+		"tag_name":   "3.50.2",
+		"prerelease": false,
+		"draft":      false,
+	})
+	stub.Outputs[kRel] = relJSON
+
+	tagListerCalled := false
+	p := &GitHubProvider{
+		Client: github.NewClientWithRunner(stub),
+		TagLister: func(string) ([]string, error) {
+			tagListerCalled = true
+			return []string{"3.50.2", "3.50.11"}, nil
+		},
+	}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.Version != "3.50.2" {
+		t.Errorf("Version = %q, want 3.50.2 (default release-first)", res.Version)
+	}
+	if tagListerCalled {
+		t.Error("default strategy should not list tags when a release resolved")
+	}
+}
+
+func TestGitHub_StrategyTags_FiltersPrereleaseNames(t *testing.T) {
+	kPre := key("release", "list", "-R", "o/r", "--limit", "100", "--json", "tagName,isPrerelease")
+	tags := []string{"3.51.0-rc1", "3.50.11"}
+
+	t.Run("excluded", func(t *testing.T) {
+		stub := github.NewStubRunner()
+		stub.Outputs[kPre] = []byte(`[]`)
+		p := &GitHubProvider{
+			Client:         github.NewClientWithRunner(stub),
+			TagLister:      func(string) ([]string, error) { return tags, nil },
+			ResolveOptions: &larryconfig.ResolveOptions{Strategy: "tags"},
+		}
+		res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+		if err != nil {
+			t.Fatalf("FetchResolution(): %v", err)
+		}
+		if res.Version != "3.50.11" {
+			t.Errorf("Version = %q, want 3.50.11", res.Version)
+		}
+	})
+
+	t.Run("allowed", func(t *testing.T) {
+		stub := github.NewStubRunner()
+		p := &GitHubProvider{
+			Client:         github.NewClientWithRunner(stub),
+			TagLister:      func(string) ([]string, error) { return tags, nil },
+			ResolveOptions: &larryconfig.ResolveOptions{Strategy: "tags"},
+		}
+		res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, true)
+		if err != nil {
+			t.Fatalf("FetchResolution(): %v", err)
+		}
+		if res.Version != "3.51.0_rc1" {
+			t.Errorf("Version = %q, want 3.51.0_rc1", res.Version)
+		}
+	})
+}
+
+func TestGitHub_StrategyTags_FiltersPrereleaseReleaseFlags(t *testing.T) {
+	stub := github.NewStubRunner()
+	kPre := key("release", "list", "-R", "o/r", "--limit", "100", "--json", "tagName,isPrerelease")
+	stub.Outputs[kPre] = []byte(`[{"tagName":"9.9.9","isPrerelease":true}]`)
+
+	p := &GitHubProvider{
+		Client: github.NewClientWithRunner(stub),
+		TagLister: func(string) ([]string, error) {
+			return []string{"9.9.9", "3.50.11"}, nil
+		},
+		ResolveOptions: &larryconfig.ResolveOptions{Strategy: "tags"},
+	}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.Version != "3.50.11" {
+		t.Errorf("Version = %q, want 3.50.11 (9.9.9 is a prerelease release)", res.Version)
+	}
+}
+
+func TestGitHub_StrategyTags_FallsBackToDate(t *testing.T) {
+	stub := github.NewStubRunner()
+	kPre := key("release", "list", "-R", "o/r", "--limit", "100", "--json", "tagName,isPrerelease")
+	stub.Outputs[kPre] = []byte(`[]`)
+	kGQL := key("api", "graphql", "-f", "query="+graphqlTagsQuery, "-f", "owner=o", "-f", "name=r")
+	gqlOutput, _ := json.Marshal(map[string]interface{}{
+		"data": map[string]interface{}{
+			"repository": map[string]interface{}{
+				"refs": map[string]interface{}{
+					"nodes": []map[string]interface{}{
+						{"name": "firmware-20260824", "target": map[string]interface{}{
+							"committedDate": "2020-01-01T00:00:00Z",
+						}},
+					},
+				},
+			},
+		},
+	})
+	stub.Outputs[kGQL] = gqlOutput
+
+	p := &GitHubProvider{
+		Client:         github.NewClientWithRunner(stub),
+		TagLister:      func(string) ([]string, error) { return nil, fmt.Errorf("no tags") },
+		ResolveOptions: &larryconfig.ResolveOptions{Strategy: "tags"},
+	}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if !res.ByDate {
+		t.Error("ByDate should be true when tags strategy falls back to tier 4")
+	}
+	if res.TagDate != "20260824" {
+		t.Errorf("TagDate = %q, want 20260824", res.TagDate)
+	}
+}
+
+func TestGitHub_TagMatchVersionTemplate_SixDigitDate(t *testing.T) {
+	stub := github.NewStubRunner()
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100", "--exclude-pre-releases", "--json", "tagName")
+	stub.Errors[kRel] = fmt.Errorf("no releases")
+	stub.Errors[kList] = fmt.Errorf("no releases")
+
+	p := &GitHubProvider{
+		Client: github.NewClientWithRunner(stub),
+		TagLister: func(string) ([]string, error) {
+			return []string{
+				"pios/1%20241210-1+rpt3",
+				"pios/1%20250410-2+rpt1",
+				"pios/1%20260519-1_bpo13+1+rpt1",
+			}, nil
+		},
+		ResolveOptions: &larryconfig.ResolveOptions{
+			TagMatchRe:      regexp.MustCompile(`^pios/1%20(?P<DATE>\d{6})-.+$`),
+			VersionTemplate: "20${DATE}",
+		},
+	}
+	res, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false)
+	if err != nil {
+		t.Fatalf("FetchResolution(): %v", err)
+	}
+	if res.Version != "20260519" {
+		t.Errorf("Version = %q, want 20260519", res.Version)
+	}
+}
+
+func TestGitHub_Tier3_FiltersPrereleaseTags(t *testing.T) {
+	stub := github.NewStubRunner()
+	kRel := key("api", "repos/o/r/releases/latest")
+	kList := key("release", "list", "-R", "o/r", "--limit", "100", "--exclude-pre-releases", "--json", "tagName")
+	stub.Errors[kRel] = fmt.Errorf("no releases")
+	stub.Errors[kList] = fmt.Errorf("no releases")
+
+	p := &GitHubProvider{
+		Client:    github.NewClientWithRunner(stub),
+		TagLister: func(string) ([]string, error) { return []string{"v2.0.0-rc1"}, nil },
+	}
+	if _, err := p.FetchResolution(remoteid.RemoteId{Owner: "o", Repo: "r"}, false); err == nil {
+		t.Error("FetchResolution should not resolve a prerelease from tier 3 without --prereleases")
 	}
 }

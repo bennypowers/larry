@@ -35,10 +35,10 @@ const (
 
 // Config represents the full .larry/config.yaml schema.
 type Config struct {
-	TypeOverride          string            `yaml:"type_override,omitempty"`
+	TypeOverride          string              `yaml:"type_override,omitempty"`
 	VendorDirs            map[string][]string `yaml:"vendor_dirs,omitempty"`
-	CleanupOrphanedAssets bool              `yaml:"cleanup_orphaned_assets,omitempty"`
-	Upstream              *UpstreamConfig   `yaml:"upstream,omitempty"`
+	CleanupOrphanedAssets bool                `yaml:"cleanup_orphaned_assets,omitempty"`
+	Upstream              *UpstreamConfig     `yaml:"upstream,omitempty"`
 	// CustomPrepareScript is an optional override for the relative path
 	// (from the package dir) of the custom prepare script.  Empty means
 	// use the default <pkg>/.larry/prepare.sh.
@@ -47,12 +47,20 @@ type Config struct {
 
 // UpstreamConfig holds per-package upstream resolution rules.
 type UpstreamConfig struct {
-	IgnoreTags      []string `yaml:"ignore_tags,omitempty"`
-	StripPrefixes   []string `yaml:"strip_prefixes,omitempty"`
-	Strategy        string   `yaml:"strategy,omitempty"`
-	PVMatch         string   `yaml:"pv_match,omitempty"`
-	TagMatch        string   `yaml:"tag_match,omitempty"`
-	VersionTemplate string   `yaml:"version_template,omitempty"`
+	IgnoreTags    []string `yaml:"ignore_tags,omitempty"`
+	StripPrefixes []string `yaml:"strip_prefixes,omitempty"`
+	// Strategy selects the GitHub resolution channel. Empty, "releases", and
+	// "semver" mean the default release-first cascade; "tags" resolves from
+	// remote tags only. Ignored by non-GitHub providers.
+	Strategy string `yaml:"strategy,omitempty"`
+	// Check controls whether larry attempts an upstream version lookup.
+	// nil (the default when the key is absent) means enabled. Set
+	// `check: false` for vendor-only packages with no machine-readable source;
+	// they are reported as MANUAL instead of UNKNOWN.
+	Check           *bool  `yaml:"check,omitempty"`
+	PVMatch         string `yaml:"pv_match,omitempty"`
+	TagMatch        string `yaml:"tag_match,omitempty"`
+	VersionTemplate string `yaml:"version_template,omitempty"`
 }
 
 // ResolveOptions is the compiled, runtime form of UpstreamConfig.
@@ -62,6 +70,13 @@ type ResolveOptions struct {
 	TagMatchRe      *regexp.Regexp
 	VersionTemplate string
 	PVCaptures      map[string]string
+	// Strategy controls GitHub resolution order:
+	//   "" / "releases" / "semver" — releases first, remote tags only as fallback
+	//   "tags"                     — skip releases entirely, resolve from remote tags
+	Strategy string
+	// Check is false when the package opts out of upstream checks
+	// (`upstream.check: false`); absent means true.
+	Check bool
 }
 
 // PackageDir returns the absolute path to the .larry/ directory for the
@@ -185,6 +200,15 @@ func (uc *UpstreamConfig) Compile(pv string) (*ResolveOptions, error) {
 		StripPrefixes:   uc.StripPrefixes,
 		VersionTemplate: uc.VersionTemplate,
 		PVCaptures:      make(map[string]string),
+		Check:           uc.Check == nil || *uc.Check,
+	}
+
+	// 0. Validate strategy (GitHub-only; other providers ignore it).
+	switch uc.Strategy {
+	case "", "releases", "semver", "tags":
+		opts.Strategy = uc.Strategy
+	default:
+		return nil, fmt.Errorf("strategy: invalid value %q (want \"\", \"releases\", \"semver\", or \"tags\")", uc.Strategy)
 	}
 
 	// 1. Compile ignore_tags

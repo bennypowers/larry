@@ -6,12 +6,12 @@ import (
 	"regexp"
 	"strings"
 
-	"bennypowers.dev/larry/internal/github"
 	"bennypowers.dev/larry/internal/git"
+	"bennypowers.dev/larry/internal/github"
 	"bennypowers.dev/larry/internal/larryconfig"
-	"bennypowers.dev/larry/internal/remoteid"
 	"bennypowers.dev/larry/internal/provider"
 	"bennypowers.dev/larry/internal/ratelimit"
+	"bennypowers.dev/larry/internal/remoteid"
 	"bennypowers.dev/larry/internal/version"
 )
 
@@ -103,41 +103,59 @@ func (p *GitHubProvider) FetchResolution(rid remoteid.RemoteId, allowPrereleases
 		p.Client = github.NewClient()
 	}
 
-	// Tier 1 — official latest release via /releases/latest (D1).
-	relTag, prerelease, draft, _ := p.Client.LatestRelease(rid.Owner, rid.Repo)
-	var relV *version.Version
-	if relTag != "" && !draft && (!prerelease || allowPrereleases) {
-		if v, err := p.tryParseVersion(relTag); err == nil {
-			relV = v
-		}
+	strategy := ""
+	if p.ResolveOptions != nil {
+		strategy = p.ResolveOptions.Strategy
 	}
+	tagsOnly := strategy == "tags"
 
-	// Tier 2 — newest release from the release list (D2).
-	tagTag, _ := p.Client.LatestReleaseTag(rid.Owner, rid.Repo, allowPrereleases)
-	var tagV *version.Version
-	if tagTag != "" {
-		if v, err := p.tryParseVersion(tagTag); err == nil {
-			tagV = v
+	if !tagsOnly {
+		// Tier 1 — official latest release via /releases/latest (D1).
+		relTag, prerelease, draft, _ := p.Client.LatestRelease(rid.Owner, rid.Repo)
+		var relV *version.Version
+		if relTag != "" && !draft && (!prerelease || allowPrereleases) {
+			if v, err := p.tryParseVersion(relTag); err == nil {
+				relV = v
+			}
 		}
-	}
 
-	// Reconcile tiers 1 and 2: if both are version-like, return the newer;
-	// else whichever is version-like; else fall through to tier 3.
-	if relV != nil && tagV != nil {
-		if relV.Compare(tagV) > 0 {
+		// Tier 2 — newest release from the release list (D2).
+		tagTag, _ := p.Client.LatestReleaseTag(rid.Owner, rid.Repo, allowPrereleases)
+		var tagV *version.Version
+		if tagTag != "" {
+			if v, err := p.tryParseVersion(tagTag); err == nil {
+				tagV = v
+			}
+		}
+
+		// Reconcile tiers 1 and 2: if both are version-like, return the newer;
+		// else whichever is version-like; else fall through to tier 3.
+		if relV != nil && tagV != nil {
+			if relV.Compare(tagV) > 0 {
+				return &provider.Resolution{Version: relV.Format()}, nil
+			}
+			return &provider.Resolution{Version: tagV.Format()}, nil
+		}
+		if relV != nil {
 			return &provider.Resolution{Version: relV.Format()}, nil
 		}
-		return &provider.Resolution{Version: tagV.Format()}, nil
+		if tagV != nil {
+			return &provider.Resolution{Version: tagV.Format()}, nil
+		}
 	}
-	if relV != nil {
-		return &provider.Resolution{Version: relV.Format()}, nil
-	}
-	if tagV != nil {
-		return &provider.Resolution{Version: tagV.Format()}, nil
+
+	// Prerelease-flagged releases are authoritative: in tags mode, collect the
+	// tags GitHub marks as prereleases so tier 3/4 can skip them even when the
+	// tag name carries no marker. Best-effort — fall back to name filtering.
+	var exclude map[string]bool
+	if tagsOnly && !allowPrereleases {
+		if set, err := p.Client.PrereleaseReleaseTags(rid.Owner, rid.Repo); err == nil {
+			exclude = set
+		}
 	}
 
 	// Tier 3 — remote tags via go-git.
-	tag, err := p.fetchLatestTagByRemote(rid.Owner, rid.Repo)
+	tag, err := p.fetchLatestTagByRemote(rid.Owner, rid.Repo, allowPrereleases, exclude)
 	if err == nil && tag != "" {
 		if v, err := p.tryParseVersion(tag); err == nil {
 			return &provider.Resolution{Version: v.Format()}, nil
@@ -145,7 +163,7 @@ func (p *GitHubProvider) FetchResolution(rid remoteid.RemoteId, allowPrereleases
 	}
 
 	// Tier 4 — tag by commit date (D3, D6).
-	tag, date, err := p.fetchLatestTagByDate(rid.Owner, rid.Repo)
+	tag, date, err := p.fetchLatestTagByDate(rid.Owner, rid.Repo, exclude)
 	if err == nil && tag != "" {
 		return &provider.Resolution{Tag: tag, TagDate: date, ByDate: true}, nil
 	}
@@ -287,9 +305,13 @@ func stripTagPrefix(tag string) string {
 }
 
 // fetchLatestTagByRemote lists remote tags via go-git and returns the latest
-// version-like tag. Applies TagMatchRe filter, custom prefix stripping,
-// and ignore rules.
-func (p *GitHubProvider) fetchLatestTagByRemote(owner, repo string) (string, error) {
+// version-like tag. Applies excluded tags, TagMatchRe, custom prefix stripping,
+// ignore rules, and (unless allowPrereleases) prerelease filtering.
+func (p *GitHubProvider) fetchLatestTagByRemote(
+	owner, repo string,
+	allowPrereleases bool,
+	exclude map[string]bool,
+) (string, error) {
 	if p.TagLister == nil {
 		p.TagLister = git.ListRemoteTags
 	}
@@ -300,9 +322,13 @@ func (p *GitHubProvider) fetchLatestTagByRemote(owner, repo string) (string, err
 		return "", fmt.Errorf("list remote tags for %s/%s: %w", owner, repo, err)
 	}
 
-	// Filter candidates: apply tag_match, custom prefixes and ignore rules.
+	// Filter candidates: apply exclude, tag_match, custom prefixes and ignore rules.
 	var candidates []candidate
 	for _, tag := range rawTags {
+		// Authoritative prerelease-release exclusion (tags strategy only).
+		if exclude[tag] {
+			continue
+		}
 		// TagMatchRe: reject tags that don't match before any other processing.
 		if p.ResolveOptions != nil && p.ResolveOptions.TagMatchRe != nil {
 			if !p.ResolveOptions.TagMatchRe.MatchString(tag) {
@@ -313,9 +339,16 @@ func (p *GitHubProvider) fetchLatestTagByRemote(owner, repo string) (string, err
 		if p.isIgnored(tag, stripped) {
 			continue
 		}
-		if stripped != "" && versionStartsWithDigit(stripped) {
-			candidates = append(candidates, candidate{raw: tag, stripped: stripped})
+		if stripped == "" || !versionStartsWithDigit(stripped) {
+			continue
 		}
+		if !allowPrereleases {
+			v, err := version.Parse(version.Normalize(stripped))
+			if err != nil || v.IsPrerelease() {
+				continue
+			}
+		}
+		candidates = append(candidates, candidate{raw: tag, stripped: stripped})
 	}
 
 	if len(candidates) == 0 {
@@ -365,7 +398,7 @@ func extractVersionFromDate(tag string) (*version.Version, error) {
 // tagged commit. Returns (tag, date, nil) or an error.
 // Skips tags matching the pre-release name filter (D6).
 // Prefers a date extracted from the tag name itself (D3).
-func (p *GitHubProvider) fetchLatestTagByDate(owner, repo string) (tag, date string, err error) {
+func (p *GitHubProvider) fetchLatestTagByDate(owner, repo string, exclude map[string]bool) (tag, date string, err error) {
 	prereleaseTagRe := regexp.MustCompile(`(?i)alpha|beta|rc|dev|nightly|canary`)
 
 	output, err := p.Client.Gh("api", "graphql", "-f", "query="+graphqlTagsQuery, "-f", "owner="+owner, "-f", "name="+repo)
@@ -395,6 +428,10 @@ func (p *GitHubProvider) fetchLatestTagByDate(owner, repo string) (tag, date str
 	// Find the first node that produces a non-empty date.
 	for _, node := range result.Data.Repository.Refs.Nodes {
 		rawName := strings.TrimSpace(node.Name)
+		// Authoritative prerelease-release exclusion (tags strategy only).
+		if exclude[rawName] {
+			continue
+		}
 		// D6: Skip pre-release tag names
 		if prereleaseTagRe.MatchString(rawName) {
 			continue

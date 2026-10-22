@@ -167,6 +167,37 @@ func TestCompile_Valid(t *testing.T) {
 	}
 }
 
+func TestCompile_Strategy(t *testing.T) {
+	tests := []struct {
+		strategy string
+		wantErr  bool
+	}{
+		{"", false},
+		{"releases", false},
+		{"semver", false},
+		{"tags", false},
+		{"bogus", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.strategy, func(t *testing.T) {
+			uc := &UpstreamConfig{Strategy: tt.strategy}
+			opts, err := uc.Compile("1.0")
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("Compile should error on invalid strategy")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Compile(): %v", err)
+			}
+			if opts.Strategy != tt.strategy {
+				t.Errorf("Strategy = %q, want %q", opts.Strategy, tt.strategy)
+			}
+		})
+	}
+}
+
 func TestCompile_InvalidRegex(t *testing.T) {
 	uc := &UpstreamConfig{
 		IgnoreTags: []string{`[invalid(regex`},
@@ -313,14 +344,14 @@ func TestExtractCaptures(t *testing.T) {
 
 func TestExpandTemplate(t *testing.T) {
 	vars := map[string]string{
-		"BASE": "6.18.46",
-		"DATE": "20260911",
+		"BASE":  "6.18.46",
+		"DATE":  "20260911",
 		"PATCH": "2",
 	}
 
 	tests := []struct {
-		tmpl   string
-		want   string
+		tmpl string
+		want string
 	}{
 		{"${BASE}_p${DATE}", "6.18.46_p20260911"},
 		{"${DATE}", "20260911"},
@@ -339,3 +370,29 @@ func TestExpandTemplate(t *testing.T) {
 		})
 	}
 }
+
+func TestCompile_Check(t *testing.T) {
+	yes := false
+	tests := []struct {
+		name  string
+		check *bool
+		want  bool
+	}{
+		{"default", nil, true},
+		{"enabled", boolPtr(true), true},
+		{"disabled", &yes, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts, err := (&UpstreamConfig{Check: tt.check}).Compile("1.0")
+			if err != nil {
+				t.Fatalf("Compile(): %v", err)
+			}
+			if opts.Check != tt.want {
+				t.Errorf("Check = %v, want %v", opts.Check, tt.want)
+			}
+		})
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }

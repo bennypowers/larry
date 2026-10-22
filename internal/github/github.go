@@ -7,9 +7,9 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/go-git/go-git/v5/plumbing"
 	"bennypowers.dev/larry/internal/git"
 	"bennypowers.dev/larry/internal/version"
+	"github.com/go-git/go-git/v5/plumbing"
 )
 
 // CmdRunner abstracts exec.Command for testing.
@@ -200,6 +200,41 @@ func (c *Client) LatestReleaseTag(owner, repo string, allowPrereleases bool) (st
 		return "", fmt.Errorf("no version-like releases found for %s/%s", owner, repo)
 	}
 	return best, nil
+}
+
+// PrereleaseReleaseTags returns the set of tag names whose GitHub release is
+// marked as a prerelease. It is consulted only by the opt-in GitHub
+// `strategy: tags` path so that prerelease-marked releases are ignored even
+// when the tag name itself carries no prerelease marker.
+//
+// This deliberately requests isPrerelease via the valid comma-separated
+// --json syntax (the bracket form rejected by plan 17b is still not used).
+func (c *Client) PrereleaseReleaseTags(owner, repo string) (map[string]bool, error) {
+	output, err := c.gh(
+		"release", "list", "-R", owner+"/"+repo,
+		"--limit", "100",
+		"--json", "tagName,isPrerelease",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("gh release list (prerelease tags): %w", err)
+	}
+
+	var releases []struct {
+		TagName      string `json:"tagName"`
+		IsPrerelease bool   `json:"isPrerelease"`
+	}
+	if err := json.Unmarshal(output, &releases); err != nil {
+		return nil, fmt.Errorf("parse release list (prerelease tags): %w", err)
+	}
+
+	set := make(map[string]bool)
+	for _, r := range releases {
+		tag := strings.TrimSpace(r.TagName)
+		if tag != "" && r.IsPrerelease {
+			set[tag] = true
+		}
+	}
+	return set, nil
 }
 
 // EnsureRelease ensures a GitHub release exists for the given tag.

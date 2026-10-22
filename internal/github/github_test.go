@@ -100,6 +100,52 @@ func TestLatestRelease_MalformedJSON(t *testing.T) {
 	}
 }
 
+func TestPrereleaseReleaseTags_ParsesFlags(t *testing.T) {
+	stub := NewStubRunner()
+	key := "gh release list -R o/r --limit 100 --json tagName,isPrerelease"
+	stub.Outputs[key] = []byte(`[
+		{"tagName":"1.0.0","isPrerelease":false},
+		{"tagName":"2.0.0-rc1","isPrerelease":true},
+		{"tagName":"9.9.9","isPrerelease":true}
+	]`)
+
+	c := NewClientWithRunner(stub)
+	got, err := c.PrereleaseReleaseTags("o", "r")
+	if err != nil {
+		t.Fatalf("PrereleaseReleaseTags(): %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(set) = %d, want 2 (%v)", len(got), got)
+	}
+	if !got["2.0.0-rc1"] || !got["9.9.9"] {
+		t.Errorf("set = %v, want 2.0.0-rc1 and 9.9.9", got)
+	}
+	if got["1.0.0"] {
+		t.Error("1.0.0 should not be in the prerelease set")
+	}
+}
+
+func TestPrereleaseReleaseTags_EmptyAndError(t *testing.T) {
+	stub := NewStubRunner()
+	key := "gh release list -R o/r --limit 100 --json tagName,isPrerelease"
+	stub.Outputs[key] = []byte(`[]`)
+
+	c := NewClientWithRunner(stub)
+	got, err := c.PrereleaseReleaseTags("o", "r")
+	if err != nil {
+		t.Fatalf("PrereleaseReleaseTags() on empty: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("set = %v, want empty", got)
+	}
+
+	stubErr := NewStubRunner()
+	stubErr.Errors[key] = &exec.ExitError{}
+	if _, err := NewClientWithRunner(stubErr).PrereleaseReleaseTags("o", "r"); err == nil {
+		t.Error("PrereleaseReleaseTags() should error when gh fails")
+	}
+}
+
 func TestLatestReleaseTag_ExcludesPrereleases(t *testing.T) {
 	// Plan 17b test: assert --exclude-pre-releases is in argv when allowPrereleases == false.
 	stub := NewStubRunner()

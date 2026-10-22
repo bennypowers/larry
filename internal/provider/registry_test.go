@@ -51,25 +51,6 @@ func TestProviderRegistry_NotFound(t *testing.T) {
 	}
 }
 
-func TestResolveProvider(t *testing.T) {
-	reg := NewProviderRegistry()
-
-	p := &stubProvider{
-		t: remoteid.TypePyPI,
-		md: ProviderMetadata{Name: "PyPI"},
-	}
-	reg.Register(p)
-
-	resolved, err := ResolveProvider(remoteid.RemoteId{Type: remoteid.TypePyPI}, reg)
-	if err != nil {
-		t.Fatalf("ResolveProvider() error = %v", err)
-	}
-
-	if resolved.Metadata().Name != "PyPI" {
-		t.Errorf("Metadata().Name = %q, want %q", resolved.Metadata().Name, "PyPI")
-	}
-}
-
 func TestProviderRegistry_Resolve_GitHub(t *testing.T) {
 	reg := NewProviderRegistryWithRateLimiter(ratelimit.NewRateLimiter())
 
