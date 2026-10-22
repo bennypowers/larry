@@ -22,6 +22,7 @@ var (
 	bumpVersion     string
 	bumpPrereleases bool
 	bumpForceType   string
+	bumpProgress    string
 )
 
 var bumpCmd = cobra.Command{
@@ -67,6 +68,9 @@ func init() {
 		"include pre-release versions in auto-version lookup")
 	bumpCmd.Flags().StringVarP(&bumpForceType, "type", "t", "",
 		"force package type (npm, cargo, go, vendored, generic)")
+	bumpCmd.Flags().StringVar(&bumpProgress, "progress", "",
+		"internal: emit NDJSON progress on stderr (json)")
+	_ = bumpCmd.Flags().MarkHidden("progress")
 
 	bumpCmd.RunE = runBump
 }
@@ -117,6 +121,9 @@ func runBump(cmd *cobra.Command, args []string) error {
 	}
 
 	// Run bump.
+	progress := newProgressEmitter(bumpProgress)
+	progress.start("bump", "prepare", "commit")
+	progress.step("bump", stepRunning)
 	result, err := bump.Bump(bump.BumpConfig{
 		Dir:             pkgPath,
 		Mode:            mode,
@@ -125,8 +132,11 @@ func runBump(cmd *cobra.Command, args []string) error {
 		AllowPrerelease: bumpPrereleases,
 	})
 	if err != nil {
+		progress.step("bump", stepFailed)
+		progress.fail(err)
 		return fmt.Errorf("bump failed: %w", err)
 	}
+	progress.step("bump", stepDone)
 
 	// Print result.
 	if err := printBumpResult(cmd.OutOrStdout(), result); err != nil {
@@ -163,12 +173,16 @@ func runBump(cmd *cobra.Command, args []string) error {
 	log.Debug("prepare distdir=%s forceType=%s", distdir, string(forceType))
 	// Log output failures are unrecoverable and not meaningful in this context.
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nPreparing %s...\n", result.NewFile)
+	progress.step("prepare", stepRunning)
 	if err := prepare.PrepareFromFile(result.NewFile, pcfg); err != nil {
 		// Delete the stale new ebuild — prepare rollback restores from backup
 		// but the backup was of the new file itself, so it persists on disk.
 		_ = os.Remove(result.NewFile) // best-effort cleanup on prepare failure
+		progress.step("prepare", stepFailed)
+		progress.fail(err)
 		return fmt.Errorf("prepare failed: %w", err)
 	}
+	progress.step("prepare", stepDone)
 
 	// Commit the bump (only files in the package directory).
 	var pkgName string
@@ -184,21 +198,28 @@ func runBump(cmd *cobra.Command, args []string) error {
 		} else {
 			msg = fmt.Sprintf("bump(%s): %s", pkgName, result.NewVersion)
 		}
+		progress.step("commit", stepRunning)
 		repo, err := git.Open(overlayRoot)
 		if err != nil {
+			progress.step("commit", stepFailed)
+			progress.fail(err)
 			return fmt.Errorf("commit: %w", err)
 		}
 		// Stage only files in the package directory to avoid picking up
 		// stale files from previous failed bumps in other packages.
 		commitHash, err := repo.CommitWithDir(msg, pkgName)
 		if err != nil {
+			progress.step("commit", stepFailed)
+			progress.fail(err)
 			return fmt.Errorf("commit: %w", err)
 		}
+		progress.step("commit", stepDone)
 		log.Debug("committed %s: %s", commitHash[:7], msg)
 	}
 
 	// Log output failures are unrecoverable and not meaningful in this context.
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Done.")
+	progress.done()
 	return nil
 }
 

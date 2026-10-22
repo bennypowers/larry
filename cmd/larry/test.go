@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,10 +23,6 @@ var (
 	testUse           string
 	testProgress      string
 )
-
-// testProgressPrefix marks structured progress lines on stderr so the manage
-// session can tell them apart from ebuild and podman output.
-const testProgressPrefix = "larry-progress:"
 
 func init() {
 	rootCmd.AddCommand(&testCmd)
@@ -171,22 +166,13 @@ Modes:
 	},
 }
 
-// testProgressWire is the NDJSON shape consumed by `larry manage`.
-type testProgressWire struct {
-	Kind    int      `json:"kind"`
-	Steps   []string `json:"steps,omitempty"`
-	Step    string   `json:"step,omitempty"`
-	State   int      `json:"state,omitempty"`
-	Message string   `json:"message,omitempty"`
-	Error   string   `json:"error,omitempty"`
-}
-
 func testProgressReporter(mode string) test.ProgressFunc {
-	if mode != "json" {
+	emitter := newProgressEmitter(mode)
+	if !emitter.enabled {
 		return nil
 	}
 	return func(ev test.ProgressEvent) {
-		wire := testProgressWire{
+		wire := actionProgressWire{
 			Kind:    int(ev.Kind),
 			Steps:   ev.Steps,
 			Step:    ev.Step,
@@ -196,14 +182,7 @@ func testProgressReporter(mode string) test.ProgressFunc {
 		if ev.Err != nil {
 			wire.Error = ev.Err.Error()
 		}
-		data, err := json.Marshal(wire)
-		if err != nil {
-			return
-		}
-		// Deliberately raw stderr: this is a machine channel, not user output.
-		line := append([]byte(testProgressPrefix), data...)
-		line = append(line, '\n')
-		_, _ = os.Stderr.Write(line)
+		emitter.emit(wire)
 	}
 }
 

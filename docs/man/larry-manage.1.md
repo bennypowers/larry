@@ -38,7 +38,7 @@ Requires a terminal; use **larry-upstream**(1) for piped or scripted use.
 ## KEYS
 
 **b**
-: Bump the selected package (`larry bump`).
+: Bump the selected package (`larry bump`), with a bump/prepare/commit checklist.
 
 **p**
 : Prepare the selected package (`larry prepare`).
@@ -65,10 +65,11 @@ the view. A successful action refreshes the table; a failure stays visible.
 Actions execute the larry binary as a child, so flags, logging, and exit
 codes match the standalone commands.
 
-The test action opens a prompt: **c** compile, **m** merge, **d** default,
-**p** custom phases, **u** USE flags, **tab** next field, **enter** run. The
-choice is remembered. While it runs, a checklist shows podman, image, and
-emerge steps (or the planned phase list locally) plus elapsed time.
+The bump action shows a checkpoint list for bump, prepare, and commit. The test
+action opens a prompt: **c** compile, **m** merge, **d** default, **p** custom
+phases, **u** USE flags, **tab** next field, **enter** run. The choice is
+remembered. While either runs, the pane shows the checklist, elapsed time, and
+streamed output.
 
 ## EXAMPLES
 

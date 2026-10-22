@@ -12,7 +12,6 @@ import (
 	"sync"
 
 	"bennypowers.dev/larry/internal/cli"
-	"bennypowers.dev/larry/internal/test"
 	"bennypowers.dev/larry/internal/upstream"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -99,6 +98,7 @@ func runManage(cmd *cobra.Command, args []string) error {
 		Overlay: overlayDir,
 		Cancel:  cancel,
 		Actions: buildUpstreamActions(overlayDir),
+		Animate: true,
 	})
 	_, runErr := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(cmd.OutOrStdout())).Run()
 	cancel()
@@ -112,11 +112,17 @@ func runManage(cmd *cobra.Command, args []string) error {
 // runs the larry binary as a child so flag parsing, logging, and exit codes
 // stay identical to the standalone command, with output streamed line by line.
 func buildUpstreamActions(overlay string) cli.UpstreamActions {
-	run := func(command string, extra ...string) cli.ActionFunc {
-		return func(ctx context.Context, pkg string, onLine func(string)) error {
+	run := func(command string, withProgress bool, extra ...string) cli.ActionFunc {
+		return func(ctx context.Context, pkg string, onLine func(string), onProgress func(cli.ActionProgress)) error {
 			args := []string{command}
 			args = append(args, extra...)
+			if withProgress {
+				args = append(args, "--progress", "json")
+			}
 			args = append(args, "--overlay", overlay, "--color", "never", pkg)
+			if withProgress {
+				return runLarryChildWithProgress(ctx, args, onLine, onProgress)
+			}
 			return runLarryChild(ctx, args, onLine)
 		}
 	}
@@ -140,8 +146,8 @@ func buildUpstreamActions(overlay string) cli.UpstreamActions {
 		return runLarryChildWithProgress(ctx, args, onLine, onProgress)
 	}
 	return cli.UpstreamActions{
-		Bump:    run("bump"),
-		Prepare: run("prepare"),
+		Bump:    run("bump", true),
+		Prepare: run("prepare", false),
 		Test:    testAction,
 	}
 }
@@ -168,28 +174,28 @@ func runLarryChildWithProgress(ctx context.Context, args []string,
 
 // parseTestProgress decodes a hidden --progress=json line from the test child.
 func parseTestProgress(line string) (cli.ActionProgress, bool) {
-	if !strings.HasPrefix(line, testProgressPrefix) {
+	if !strings.HasPrefix(line, progressPrefix) {
 		return cli.ActionProgress{}, false
 	}
-	var wire testProgressWire
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(line, testProgressPrefix)), &wire); err != nil {
+	var wire actionProgressWire
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(line, progressPrefix)), &wire); err != nil {
 		return cli.ActionProgress{}, false
 	}
 	progress := cli.ActionProgress{Steps: wire.Steps, Step: wire.Step, Message: wire.Message}
-	switch test.StepState(wire.State) {
-	case test.StepRunning:
+	switch wire.State {
+	case stepRunning:
 		progress.State = cli.ActionStepRunning
-	case test.StepDone:
+	case stepDone:
 		progress.State = cli.ActionStepDone
-	case test.StepFailed:
+	case stepFailed:
 		progress.State = cli.ActionStepFailed
 	default:
 		progress.State = cli.ActionStepPending
 	}
-	switch test.ProgressKind(wire.Kind) {
-	case test.ProgressDone:
+	switch wire.Kind {
+	case progressDone:
 		progress.Done = true
-	case test.ProgressError:
+	case progressError:
 		progress.Failed = true
 		if wire.Error != "" {
 			progress.Err = fmt.Errorf("%s", wire.Error)
@@ -218,6 +224,12 @@ func runLarryChildFunc(ctx context.Context, args []string, onLine func(string)) 
 		for scanner.Scan() {
 			onLine(scanner.Text())
 		}
+		// A scanner error (for example an over-long line) stops reads; drain
+		// the pipe so the child's writer never blocks and cmd.Run can return.
+		if err := scanner.Err(); err != nil {
+			onLine("output scanner: " + err.Error())
+		}
+		_, _ = io.Copy(io.Discard, pr)
 	}()
 
 	runErr := cmd.Run()

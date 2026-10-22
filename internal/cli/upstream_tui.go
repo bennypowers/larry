@@ -25,8 +25,9 @@ const (
 	ActionTest    ActionKind = "test"
 )
 
-// ActionFunc runs one action for a package, streaming its output line by line.
-type ActionFunc func(ctx context.Context, pkg string, onLine func(string)) error
+// ActionFunc runs one action for a package, streaming its output line by line
+// and, when the child reports it, structured progress.
+type ActionFunc func(ctx context.Context, pkg string, onLine func(string), onProgress func(ActionProgress)) error
 
 // TestOptions selects how the test action invokes `larry test`.
 type TestOptions struct {
@@ -95,6 +96,9 @@ type UpstreamModelOptions struct {
 	Overlay string
 	Cancel  context.CancelFunc
 	Actions UpstreamActions
+	// Animate enables the elapsed-time ticker for running actions. Tests
+	// leave it off so they can drive commands synchronously.
+	Animate bool
 }
 
 type upstreamUIState int
@@ -127,6 +131,9 @@ type actionEvent struct {
 type actionEventMsg actionEvent
 type actionClosedMsg struct{}
 
+// actionTickMsg refreshes the elapsed clock and spinner while an action runs.
+type actionTickMsg time.Time
+
 type upstreamMode int
 
 // actionStep is one checklist entry in the running-action view.
@@ -151,6 +158,7 @@ type UpstreamModel struct {
 	showAll bool
 	theme   *Theme
 	overlay string
+	animate bool
 
 	state    upstreamUIState
 	spinner  spinner.Model
@@ -235,6 +243,7 @@ func NewUpstreamModel(opts UpstreamModelOptions) *UpstreamModel {
 		showAll:     opts.ShowAll,
 		theme:       theme,
 		overlay:     opts.Overlay,
+		animate:     opts.Animate,
 		state:       upstreamFetching,
 		spinner:     sp,
 		progress:    pr,
@@ -339,6 +348,12 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case actionClosedMsg:
+		return m, nil
+
+	case actionTickMsg:
+		if m.mode == modeRunning {
+			return m, m.actionTick()
+		}
 		return m, nil
 
 	case upstreamDoneMsg:
@@ -579,14 +594,24 @@ func (m *UpstreamModel) startAction() tea.Cmd {
 		if m.pending == ActionTest {
 			err = testFn(ctx, pkg, m.testOptions, line, progress)
 		} else {
-			err = fn(ctx, pkg, line)
+			err = fn(ctx, pkg, line, progress)
 		}
 		select {
 		case ch <- actionEvent{done: true, err: err}:
 		case <-ctx.Done():
 		}
 	}()
+	if m.animate {
+		return tea.Batch(m.waitAction(ch), m.actionTick())
+	}
 	return m.waitAction(ch)
+}
+
+// actionTick schedules the next elapsed-time refresh.
+func (m *UpstreamModel) actionTick() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+		return actionTickMsg(t)
+	})
 }
 
 // applyActionProgress folds one structured event into the checklist.

@@ -312,7 +312,7 @@ func drainCmd(t *testing.T, m *UpstreamModel, cmd tea.Cmd) {
 
 func TestUpstreamModel_ActionConfirmation(t *testing.T) {
 	called := false
-	m := actionModel(t, UpstreamActions{Bump: func(context.Context, string, func(string)) error {
+	m := actionModel(t, UpstreamActions{Bump: func(context.Context, string, func(string), func(ActionProgress)) error {
 		called = true
 		return nil
 	}})
@@ -332,7 +332,7 @@ func TestUpstreamModel_ActionConfirmation(t *testing.T) {
 func TestUpstreamModel_RunsAction(t *testing.T) {
 	var calledPkg string
 	var lines []string
-	m := actionModel(t, UpstreamActions{Bump: func(_ context.Context, pkg string, onLine func(string)) error {
+	m := actionModel(t, UpstreamActions{Bump: func(_ context.Context, pkg string, onLine func(string), _ func(ActionProgress)) error {
 		calledPkg = pkg
 		onLine("bumped " + pkg)
 		onLine("committed")

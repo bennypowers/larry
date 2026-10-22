@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"bennypowers.dev/larry/internal/cli"
 	"bennypowers.dev/larry/internal/upstream"
@@ -60,7 +63,7 @@ func TestBuildUpstreamActionsArgs(t *testing.T) {
 	actions := buildUpstreamActions("/tmp/overlay")
 	if err := actions.Bump(context.Background(), "dev-util/foo", func(line string) {
 		lines = append(lines, line)
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("Bump: %v", err)
 	}
 	got := strings.Join(lines, " ")
@@ -112,6 +115,53 @@ func TestBuildUpstreamActionsTestModes(t *testing.T) {
 	got = strings.Join(lines, " ")
 	if !strings.Contains(got, "--phase fetch --phase unpack") {
 		t.Errorf("phase args = %q", got)
+	}
+}
+
+func TestRunLarryChild_LongLineDoesNotHang(t *testing.T) {
+	// A single 2 MB line exceeds the scanner's token limit. The reader must
+	// drain the pipe afterwards or the child blocks forever writing.
+	stubExecutable(t, "#!/bin/sh\nhead -c 2000000 /dev/zero | tr '\\0' x\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runLarryChild(ctx, []string{"x"}, func(string) {})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("runLarryChild: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("runLarryChild hung after an over-long output line")
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		t.Fatal("runLarryChild did not finish before the deadline")
+	}
+}
+
+func TestProgressEmitterWritesWire(t *testing.T) {
+	var buf bytes.Buffer
+	emitter := progressEmitter{enabled: true, w: &buf}
+	emitter.start("bump", "prepare")
+	emitter.step("bump", stepDone)
+	emitter.done()
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("wrote %d lines, want 3:\n%s", len(lines), buf.String())
+	}
+	progress, ok := parseTestProgress(lines[0])
+	if !ok {
+		t.Fatalf("start line did not parse: %q", lines[0])
+	}
+	if strings.Join(progress.Steps, ",") != "bump,prepare" {
+		t.Errorf("steps = %v", progress.Steps)
+	}
+	if last, ok := parseTestProgress(lines[2]); !ok || !last.Done {
+		t.Errorf("done line = %+v ok=%v", last, ok)
 	}
 }
 
