@@ -19,20 +19,30 @@ func TestContainerArgs_EmergeCommandLine(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	overlay := tmpDir
 	cacheDir := filepath.Join(tmpDir, "cache")
 	repo := "bennypowers"
-	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
-	if err := os.MkdirAll(cacheDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 
 	stub := newRecRunner()
 	stub.fail["podman image exists larry-test"] = os.ErrNotExist
 
 	cf := filepath.Join(tmpDir, "Containerfile.larry-test")
-	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	cfg := &ContainerConfig{
 		Overlay:   overlay,
@@ -40,7 +50,7 @@ func TestContainerArgs_EmergeCommandLine(t *testing.T) {
 		ImageName: "larry-test",
 	}
 
-	err := TestContainer(ebuildPath, cfg, stub, false, false)
+	err := TestContainer(ebuildPath, cfg, stub, false)
 	if err != nil {
 		t.Fatalf("TestContainer failed: %v", err)
 	}
@@ -92,20 +102,30 @@ func TestContainer_AtomForBareCategoryPackage(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	overlay := tmpDir
 	cacheDir := filepath.Join(tmpDir, "cache")
 	repo := "bennypowers"
-	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
-	if err := os.MkdirAll(cacheDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 
 	stub := newRecRunner()
 	stub.fail["podman image exists larry-test"] = os.ErrNotExist
 
 	cf := filepath.Join(tmpDir, "Containerfile.larry-test")
-	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	cfg := &ContainerConfig{
 		Overlay:   overlay,
@@ -113,7 +133,7 @@ func TestContainer_AtomForBareCategoryPackage(t *testing.T) {
 		ImageName: "larry-test",
 	}
 
-	err := TestContainer(ebuildPath, cfg, stub, false, false)
+	err := TestContainer(ebuildPath, cfg, stub, false)
 	if err != nil {
 		t.Fatalf("TestContainer failed: %v", err)
 	}
@@ -157,18 +177,26 @@ func TestContainerArgs_PretendAddsFlag(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	overlay := tmpDir
 	cacheDir := filepath.Join(tmpDir, "cache")
 	repo := "bennypowers"
-	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	stub := newRecRunner()
 
 	cf := filepath.Join(tmpDir, "Containerfile.larry-test")
-	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	cfg := &ContainerConfig{
 		Overlay:   overlay,
@@ -181,7 +209,7 @@ func TestContainerArgs_PretendAddsFlag(t *testing.T) {
 	_, w, _ := os.Pipe()
 	os.Stdout = w
 
-	err := TestContainer(ebuildPath, cfg, stub, true, false)
+	err := TestContainer(ebuildPath, cfg, stub, true)
 	// httptest writer; a close error cannot occur here.
 	_ = w.Close()
 	os.Stdout = origStdout
@@ -204,18 +232,26 @@ func TestContainer_PretendSkipsBuild(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	overlay := tmpDir
 	cacheDir := filepath.Join(tmpDir, "cache")
 	repo := "bennypowers"
-	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	stub := newRecRunner()
 
 	cf := filepath.Join(tmpDir, "Containerfile.larry-test")
-	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	cfg := &ContainerConfig{
 		Overlay:   overlay,
@@ -228,7 +264,7 @@ func TestContainer_PretendSkipsBuild(t *testing.T) {
 	_, w, _ := os.Pipe()
 	os.Stdout = w
 
-	err := TestContainer(ebuildPath, cfg, stub, true, false)
+	err := TestContainer(ebuildPath, cfg, stub, true)
 	// httptest writer; a close error cannot occur here.
 	_ = w.Close()
 	os.Stdout = origStdout
@@ -252,21 +288,31 @@ func TestContainer_UsesImageExists(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	overlay := tmpDir
 	cacheDir := filepath.Join(tmpDir, "cache")
 	repo := "bennypowers"
-	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
-	if err := os.MkdirAll(cacheDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 
 	stub := newRecRunner()
 	// Stub says image exists (nil = present)
 	stub.fail["podman image exists larry-test"] = nil
 
 	cf := filepath.Join(tmpDir, "Containerfile.larry-test")
-	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	cfg := &ContainerConfig{
 		Overlay:   overlay,
@@ -274,7 +320,7 @@ func TestContainer_UsesImageExists(t *testing.T) {
 		ImageName: "larry-test",
 	}
 
-	err := TestContainer(ebuildPath, cfg, stub, false, false)
+	err := TestContainer(ebuildPath, cfg, stub, false)
 	if err != nil {
 		t.Fatalf("TestContainer failed: %v", err)
 	}
@@ -304,14 +350,22 @@ func TestContainer_RebuildsWhenImageAbsentDespiteStaleSentinel(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	overlay := tmpDir
 	cacheDir := filepath.Join(tmpDir, "cache")
 	repo := "bennypowers"
-	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
-	if err := os.MkdirAll(cacheDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 
 	// Pre-create a stale sentinel file
 	sentinelFile := filepath.Join(cacheDir, "larry-test")
@@ -324,7 +378,9 @@ func TestContainer_RebuildsWhenImageAbsentDespiteStaleSentinel(t *testing.T) {
 	stub.fail["podman image exists larry-test"] = fmt.Errorf("no such image")
 
 	cf := filepath.Join(tmpDir, "Containerfile.larry-test")
-	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	cfg := &ContainerConfig{
 		Overlay:   overlay,
@@ -332,7 +388,7 @@ func TestContainer_RebuildsWhenImageAbsentDespiteStaleSentinel(t *testing.T) {
 		ImageName: "larry-test",
 	}
 
-	err := TestContainer(ebuildPath, cfg, stub, false, false)
+	err := TestContainer(ebuildPath, cfg, stub, false)
 	if err != nil {
 		t.Fatalf("TestContainer failed: %v", err)
 	}
@@ -360,20 +416,30 @@ func TestContainer_BuildContextIsOverlay(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	overlay := tmpDir
 	cacheDir := filepath.Join(tmpDir, "cache")
 	repo := "bennypowers"
-	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
-	if err := os.MkdirAll(cacheDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 
 	stub := newRecRunner()
 	stub.fail["podman image exists larry-test"] = os.ErrNotExist
 
 	cf := filepath.Join(tmpDir, "Containerfile.larry-test")
-	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	cfg := &ContainerConfig{
 		Overlay:   overlay,
@@ -381,7 +447,7 @@ func TestContainer_BuildContextIsOverlay(t *testing.T) {
 		ImageName: "larry-test",
 	}
 
-	err := TestContainer(ebuildPath, cfg, stub, false, false)
+	err := TestContainer(ebuildPath, cfg, stub, false)
 	if err != nil {
 		t.Fatalf("TestContainer failed: %v", err)
 	}
@@ -433,8 +499,12 @@ func TestContainerArgs_Mounts(t *testing.T) {
 
 	// We need a real overlay dir for resolveRepoName to work
 	tmpDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(tmpDir, "profiles"), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(filepath.Join(tmpDir, "profiles", "repo_name"), []byte(repo), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.MkdirAll(filepath.Join(tmpDir, "profiles"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "profiles", "repo_name"), []byte(repo), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	cfg := &ContainerConfig{
 		Overlay:   tmpDir,
@@ -470,20 +540,30 @@ func TestContainerArgs_NoDistdirPkgdirEnv(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	overlay := tmpDir
 	cacheDir := filepath.Join(tmpDir, "cache")
 	repo := "bennypowers"
-	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
-	if err := os.MkdirAll(cacheDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 
 	stub := newRecRunner()
 	stub.fail["podman image exists larry-test"] = nil
 
 	cf := filepath.Join(tmpDir, "Containerfile.larry-test")
-	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	cfg := &ContainerConfig{
 		Overlay:   overlay,
@@ -491,7 +571,7 @@ func TestContainerArgs_NoDistdirPkgdirEnv(t *testing.T) {
 		ImageName: "larry-test",
 	}
 
-	err := TestContainer(ebuildPath, cfg, stub, false, false)
+	err := TestContainer(ebuildPath, cfg, stub, false)
 	if err != nil {
 		t.Fatalf("TestContainer failed: %v", err)
 	}
@@ -546,7 +626,9 @@ func TestContainer_NilConfigNoPanic(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	stub := newRecRunner()
 
@@ -558,7 +640,7 @@ func TestContainer_NilConfigNoPanic(t *testing.T) {
 				panicked = true
 			}
 		}()
-		_ = TestContainer(ebuildPath, nil, stub, false, false)
+		_ = TestContainer(ebuildPath, nil, stub, false)
 	}()
 
 	if panicked {
@@ -596,14 +678,22 @@ func TestContainer_PodmanCheckUsesRunner(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	overlay := tmpDir
 	cacheDir := filepath.Join(tmpDir, "cache")
 	repo := "bennypowers"
-	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
-	if err := os.MkdirAll(cacheDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte(repo), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 
 	stub := newRecRunner()
 	// Stub runner fails for podman --version
@@ -612,7 +702,9 @@ func TestContainer_PodmanCheckUsesRunner(t *testing.T) {
 	stub.fail["podman image exists larry-test"] = nil
 
 	cf := filepath.Join(tmpDir, "Containerfile.larry-test")
-	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	cfg := &ContainerConfig{
 		Overlay:   overlay,
@@ -620,7 +712,7 @@ func TestContainer_PodmanCheckUsesRunner(t *testing.T) {
 		ImageName: "larry-test",
 	}
 
-	err := TestContainer(ebuildPath, cfg, stub, false, false)
+	err := TestContainer(ebuildPath, cfg, stub, false)
 	if err == nil {
 		t.Fatal("expected error from failed podman check")
 	}
@@ -653,15 +745,25 @@ func TestContainer_RunEmergeNonTUIErrorIncludesCommand(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
-	if err := os.MkdirAll(filepath.Join(tmpDir, "profiles"), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(filepath.Join(tmpDir, "profiles", "repo_name"), []byte("bennypowers"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "profiles"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "profiles", "repo_name"), []byte("bennypowers"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	// Stub podman on PATH that fails loudly.
 	binDir := filepath.Join(tmpDir, "bin")
-	if err := os.MkdirAll(binDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	stubScript := "#!/bin/sh\necho stub podman failure >&2\nexit 1\n"
-	if err := os.WriteFile(filepath.Join(binDir, "podman"), []byte(stubScript), 0755); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(filepath.Join(binDir, "podman"), []byte(stubScript), 0755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 	t.Setenv("PATH", binDir)
 
 	cfg := &ContainerConfig{
@@ -738,7 +840,7 @@ func TestContainer_EbuildNotFound(t *testing.T) {
 	}
 
 	stub := newRecRunner()
-	err := TestContainer("/nonexistent/foo-1.0.0.ebuild", cfg, stub, false, false)
+	err := TestContainer("/nonexistent/foo-1.0.0.ebuild", cfg, stub, false)
 	if err == nil {
 		t.Fatal("expected error for missing ebuild")
 	}
@@ -791,19 +893,29 @@ func (r *recRunner) RunWithEnv(env []string, name string, args ...string) error 
 func TestContainerArgs_UseFlags(t *testing.T) {
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "dev-util", "javy", "javy-9.1.0.ebuild")
-	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	overlay := tmpDir
 	cacheDir := filepath.Join(tmpDir, "cache")
-	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte("bennypowers"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte("bennypowers"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	stub := newRecRunner()
 	stub.fail["podman image exists larry-test"] = os.ErrNotExist
 
 	cf := filepath.Join(tmpDir, "Containerfile.larry-test")
-	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	cfg := &ContainerConfig{
 		Overlay:   overlay,
@@ -812,7 +924,7 @@ func TestContainerArgs_UseFlags(t *testing.T) {
 		UseFlags:  "cuda,rocm",
 	}
 
-	if err := TestContainer(ebuildPath, cfg, stub, false, false); err != nil {
+	if err := TestContainer(ebuildPath, cfg, stub, false); err != nil {
 		t.Fatalf("TestContainer failed: %v", err)
 	}
 
@@ -844,19 +956,29 @@ func TestContainerArgs_UseFlags(t *testing.T) {
 func TestContainerArgs_NoUseFlagsNoEnv(t *testing.T) {
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "dev-util", "javy", "javy-9.1.0.ebuild")
-	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.MkdirAll(filepath.Dir(ebuildPath), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	overlay := tmpDir
 	cacheDir := filepath.Join(tmpDir, "cache")
-	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte("bennypowers"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.MkdirAll(filepath.Join(overlay, "profiles"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlay, "profiles", "repo_name"), []byte("bennypowers"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	stub := newRecRunner()
 	stub.fail["podman image exists larry-test"] = os.ErrNotExist
 
 	cf := filepath.Join(tmpDir, "Containerfile.larry-test")
-	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(cf, []byte("FROM ubuntu\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	cfg := &ContainerConfig{
 		Overlay:   overlay,
@@ -864,7 +986,7 @@ func TestContainerArgs_NoUseFlagsNoEnv(t *testing.T) {
 		ImageName: "larry-test",
 	}
 
-	if err := TestContainer(ebuildPath, cfg, stub, false, false); err != nil {
+	if err := TestContainer(ebuildPath, cfg, stub, false); err != nil {
 		t.Fatalf("TestContainer failed: %v", err)
 	}
 

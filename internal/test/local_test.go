@@ -78,7 +78,9 @@ func (w *captureWriter) Write(p []byte) (n int, err error) {
 func TestResolveEbuild_ExistingFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "foo-1.0.0.ebuild")
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	path, err := resolveEbuild(ebuildPath)
 	if err != nil {
@@ -101,7 +103,9 @@ func TestResolveEbuild_Relative(t *testing.T) {
 	}
 	defer func() { _ = os.Chdir(origWd) }()
 
-	if err := os.WriteFile("foo-1.0.0.ebuild", []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile("foo-1.0.0.ebuild", []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	path, err := resolveEbuild("foo-1.0.0.ebuild")
 	if err != nil {
@@ -120,9 +124,15 @@ func TestResolveEbuild_CatPkg(t *testing.T) {
 	// When given a category/package string, find the latest ebuild
 	tmpDir := t.TempDir()
 	catDir := filepath.Join(tmpDir, "app-misc", "foo")
-	if err := os.MkdirAll(catDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(filepath.Join(catDir, "foo-1.0.0.ebuild"), []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
-	if err := os.WriteFile(filepath.Join(catDir, "foo-2.0.0.ebuild"), []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.MkdirAll(catDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(catDir, "foo-1.0.0.ebuild"), []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(catDir, "foo-2.0.0.ebuild"), []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	path, err := resolveEbuildFromCatPkg("app-misc/foo", tmpDir)
 	if err != nil {
@@ -289,13 +299,15 @@ func TestTestLocal_SingleInvocation(t *testing.T) {
 	// D7: exactly one invocation with all phases in one call.
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "foo-1.0.0.ebuild")
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	runner := &localStubRunner{}
 	cfg := &TestLocalConfig{
 		Phases: []string{"clean", "fetch", "unpack"},
 	}
-	err := TestLocalWithConfig(ebuildPath, nil, runner, false, false, cfg)
+	err := TestLocalWithConfig(ebuildPath, nil, runner, false, cfg)
 	if err != nil {
 		t.Fatalf("TestLocal failed: %v", err)
 	}
@@ -325,7 +337,9 @@ func TestTestLocal_SetsSandboxEnv(t *testing.T) {
 	// D5: env must contain the full sandbox FEATURES.
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "foo-1.0.0.ebuild")
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	distdir := filepath.Join(tmpDir, "dist")
 	ptmpdir := filepath.Join(tmpDir, "portage-tmp")
@@ -336,7 +350,7 @@ func TestTestLocal_SetsSandboxEnv(t *testing.T) {
 		PortageTmpdir: ptmpdir,
 		Distdir:       distdir,
 	}
-	err := TestLocalWithConfig(ebuildPath, nil, runner, false, false, cfg)
+	err := TestLocalWithConfig(ebuildPath, nil, runner, false, cfg)
 	if err != nil {
 		t.Fatalf("TestLocal failed: %v", err)
 	}
@@ -409,7 +423,9 @@ func TestTestLocal_CreatesDirs(t *testing.T) {
 	// D5: distdir and portage tmpdir are created via os.MkdirAll.
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "foo-1.0.0.ebuild")
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	distdir := filepath.Join(tmpDir, "nonexistent-dist")
 	ptmpdir := filepath.Join(tmpDir, "nonexistent-portage")
@@ -423,7 +439,7 @@ func TestTestLocal_CreatesDirs(t *testing.T) {
 	cfg.Cfg = &config.Config{}
 	cfg.Cfg.Distdir = distdir
 
-	err := TestLocalWithConfig(ebuildPath, nil, runner, false, false, cfg)
+	err := TestLocalWithConfig(ebuildPath, nil, runner, false, cfg)
 	if err != nil {
 		t.Fatalf("TestLocal failed: %v", err)
 	}
@@ -444,13 +460,15 @@ func TestTestLocal_PropagatesExitCode(t *testing.T) {
 	// D8: runner error wrapped in ExitError.
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "foo-1.0.0.ebuild")
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	// Use the real ExitError type so errors.As can find it.
 	runner := &localStubRunner{
 		Err: &ExitError{Code: 7, Err: nil},
 	}
-	err := TestLocalWithConfig(ebuildPath, nil, runner, false, false, nil)
+	err := TestLocalWithConfig(ebuildPath, nil, runner, false, nil)
 	if err == nil {
 		t.Fatal("expected error from failed runner")
 	}
@@ -477,7 +495,9 @@ func TestTestLocal_RelativePath(t *testing.T) {
 	}
 	defer func() { _ = os.Chdir(origWd) }()
 
-	if err := os.WriteFile("foo-1.0.0.ebuild", []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile("foo-1.0.0.ebuild", []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 	absPath, err := filepath.Abs("foo-1.0.0.ebuild")
 	if err != nil {
 		t.Fatalf("Abs: %v", err)
@@ -487,7 +507,7 @@ func TestTestLocal_RelativePath(t *testing.T) {
 	cfg := &TestLocalConfig{
 		Phases: []string{"clean", "fetch", "unpack"},
 	}
-	if err := TestLocalWithConfig("foo-1.0.0.ebuild", nil, runner, false, false, cfg); err != nil {
+	if err := TestLocalWithConfig("foo-1.0.0.ebuild", nil, runner, false, cfg); err != nil {
 		t.Fatalf("TestLocal failed: %v", err)
 	}
 
@@ -504,7 +524,9 @@ func TestTestLocal_Banner(t *testing.T) {
 	// D8: banner output is correct.
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "javy-9.1.0.ebuild")
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	var outBuf, errBuf []byte
 	log := newTestLogger(t, &outBuf, &errBuf)
@@ -520,8 +542,12 @@ func TestTestLocal_Banner(t *testing.T) {
 
 	// We need to create a proper overlay structure for the banner to work.
 	catDir := filepath.Join(tmpDir, "dev-util", "javy")
-	if err := os.MkdirAll(catDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
-	if err := os.WriteFile(filepath.Join(catDir, "javy-9.1.0.ebuild"), []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.MkdirAll(catDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(catDir, "javy-9.1.0.ebuild"), []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	// Use the overlay path.
 	cfg.Cfg.Overlay = tmpDir
@@ -529,7 +555,7 @@ func TestTestLocal_Banner(t *testing.T) {
 	// Manually set the ebuild path to use the overlay-based one.
 	ebuildPath = filepath.Join(catDir, "javy-9.1.0.ebuild")
 
-	err := TestLocalWithConfig(ebuildPath, nil, runner, false, false, cfg)
+	err := TestLocalWithConfig(ebuildPath, nil, runner, false, cfg)
 	if err != nil {
 		t.Fatalf("TestLocal failed: %v", err)
 	}
@@ -550,7 +576,9 @@ func TestTestLocal_SuccessSummary(t *testing.T) {
 	// D8: success message printed on runner success.
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "javy-9.1.0.ebuild")
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	var outBuf, errBuf []byte
 	log := newTestLogger(t, &outBuf, &errBuf)
@@ -565,12 +593,16 @@ func TestTestLocal_SuccessSummary(t *testing.T) {
 	}
 
 	catDir := filepath.Join(tmpDir, "dev-util", "javy")
-	if err := os.MkdirAll(catDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.MkdirAll(catDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	ebuildPath = filepath.Join(catDir, "javy-9.1.0.ebuild")
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 	cfg.Cfg.Overlay = tmpDir
 
-	err := TestLocalWithConfig(ebuildPath, nil, runner, false, false, cfg)
+	err := TestLocalWithConfig(ebuildPath, nil, runner, false, cfg)
 	if err != nil {
 		t.Fatalf("TestLocal failed: %v", err)
 	}
@@ -585,7 +617,9 @@ func TestTestLocal_FailureSummary(t *testing.T) {
 	// D8: failure messages on stderr.
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "javy-9.1.0.ebuild")
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	var outBuf, errBuf []byte
 	log := newTestLogger(t, &outBuf, &errBuf)
@@ -603,12 +637,16 @@ func TestTestLocal_FailureSummary(t *testing.T) {
 	}
 
 	catDir := filepath.Join(tmpDir, "dev-util", "javy")
-	if err := os.MkdirAll(catDir, 0755); err != nil { t.Fatalf("MkdirAll: %v", err) }
+	if err := os.MkdirAll(catDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	ebuildPath = filepath.Join(catDir, "javy-9.1.0.ebuild")
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 	cfg.Cfg.Overlay = tmpDir
 
-	err := TestLocalWithConfig(ebuildPath, nil, runner, false, false, cfg)
+	err := TestLocalWithConfig(ebuildPath, nil, runner, false, cfg)
 	if err == nil {
 		t.Fatal("expected error from failed runner")
 	}
@@ -626,7 +664,9 @@ func TestTestLocal_PretendPrintsCommand(t *testing.T) {
 	// D7: pretend mode prints but does not run.
 	tmpDir := t.TempDir()
 	ebuildPath := filepath.Join(tmpDir, "javy-9.1.0.ebuild")
-	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil { t.Fatalf("WriteFile: %v", err) }
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	var outBuf, errBuf []byte
 	log := newTestLogger(t, &outBuf, &errBuf)
@@ -638,7 +678,7 @@ func TestTestLocal_PretendPrintsCommand(t *testing.T) {
 		Cfg:    &config.Config{},
 	}
 
-	err := TestLocalWithConfig(ebuildPath, nil, runner, true, false, cfg)
+	err := TestLocalWithConfig(ebuildPath, nil, runner, true, cfg)
 	if err != nil {
 		t.Fatalf("TestLocal failed: %v", err)
 	}
@@ -660,4 +700,3 @@ func TestTestLocal_PretendPrintsCommand(t *testing.T) {
 		t.Errorf("missing ebuild command line in stdout. Output:\n%s", outOutput)
 	}
 }
-

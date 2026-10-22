@@ -17,7 +17,6 @@ type ContainerConfig struct {
 	Distdir   string // --distdir flag
 	CacheDir  string // --cache-dir flag
 	ImageName string // --image flag (empty = default "larry-test")
-	UseTUI    bool   // when true, pipe subprocess output instead of inheriting
 	UseFlags  string // --use flag (comma or space separated; passed to the container as USE)
 }
 
@@ -120,11 +119,6 @@ func runContainerEmerge(ebuildPath string, cfg *ContainerConfig, runner CmdRunne
 	// Add USE flags for the build (--use).
 	args = append(args, getUseEnvArgs(cfg)...)
 
-	// TUI stream isolation
-	if cfg != nil && cfg.UseTUI {
-		args = append(args, "--tty=false")
-	}
-
 	// Image and command.
 	// No -e DISTDIR=/distfiles or -e PKGDIR=/binpkgs — image's make.conf sets both.
 	args = append(args, imageName)
@@ -148,28 +142,13 @@ func runContainerEmerge(ebuildPath string, cfg *ContainerConfig, runner CmdRunne
 		return runner.Run("podman", args...)
 	}
 
-	// Determine command based on TUI mode
-	if cfg != nil && cfg.UseTUI {
-		// Pipe output for TUI
-		cmd := exec.Command("podman", args...)
-		var stdout strings.Builder
-		var stderr strings.Builder
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
+	// Inherit output so the user sees emerge's progress.
+	cmd := exec.Command("podman", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("podman run failed: %s\nstderr: %s\n%w", cmdStr, stderr.String(), err)
-		}
-		_ = stdout
-	} else {
-		// Inherit output
-		cmd := exec.Command("podman", args...)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("podman run failed: %s\n%w", cmdStr, err)
-		}
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("podman run failed: %s\n%w", cmdStr, err)
 	}
 
 	return nil
@@ -260,12 +239,11 @@ var TestRunnerForContainer CmdRunner
 // TestContainer runs ebuild tests inside a container.
 // D4: pretend returns before any podman operations.
 // D8: nil guard is the first statement.
-func TestContainer(ebuildPath string, cfg *ContainerConfig, runner CmdRunner, pretend, useTUI bool) error {
+func TestContainer(ebuildPath string, cfg *ContainerConfig, runner CmdRunner, pretend bool) error {
 	// D8: nil guard must be first statement.
 	if cfg == nil {
 		cfg = &ContainerConfig{}
 	}
-	cfg.UseTUI = useTUI
 
 	if runner == nil {
 		if TestRunnerForContainer != nil {

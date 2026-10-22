@@ -30,7 +30,7 @@ func init() {
 		"run clean + fetch + unpack + compile phases")
 	testCmd.Flags().BoolVarP(&testMerge, "merge", "m", false,
 		"run clean + fetch + unpack + compile + install phases")
-	testCmd.Flags().BoolVarP(&testPretend, "pretend", "", false,
+	testCmd.Flags().BoolVar(&testPretend, "pretend", false,
 		"show what would be done without executing")
 	testCmd.Flags().BoolVarP(&testEmerge, "emerge", "e", false,
 		"run in podman container with GPU passthrough (requires Containerfile.larry-test)")
@@ -122,10 +122,9 @@ Examples:
 				Overlay:   overlayDir,
 				CacheDir:  cacheDir,
 				ImageName: testImageName,
-				UseTUI:    false,
 				UseFlags:  testUse,
 			}
-			err := test.TestContainer(ebuildPath, cfg, nil, testPretend, true)
+			err := test.TestContainer(ebuildPath, cfg, nil, testPretend)
 			if err != nil {
 				return fmt.Errorf("container test failed: %w", err)
 			}
@@ -146,7 +145,7 @@ Examples:
 				Cfg:           cfg,
 				Log:           log,
 			}
-			err := test.TestLocalWithConfig(ebuildPath, nil, runner, testPretend, true, testCfg)
+			err := test.TestLocalWithConfig(ebuildPath, nil, runner, testPretend, testCfg)
 			if err != nil {
 				// Return as-is: TestLocalWithConfig already wraps the
 				// subprocess exit code in an ExitError — re-wrapping with a

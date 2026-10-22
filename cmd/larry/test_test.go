@@ -40,6 +40,33 @@ func (s *cmdStubRunner) RunWithEnv(env []string, name string, args ...string) er
 // Integration tests — use execCmd + fixtureOverlay
 // ---------------------------------------------------------------------------
 
+func TestTestCmd_EmergeDoesNotPassTTYFalse(t *testing.T) {
+	runner := &cmdStubRunner{}
+	test.TestRunnerForContainer = runner
+	defer func() { test.TestRunnerForContainer = nil }()
+
+	ov := fixtureOverlay(t, nil, map[string]string{
+		"dev-util/javy/javy-9.1.0.ebuild": "EAPI=8\n",
+	})
+	_, stderr, err := execCmd(t, "test", "--emerge", "--overlay", ov, "dev-util/javy")
+	if err != nil {
+		t.Fatalf("execCmd: %v (stderr %q)", err, stderr)
+	}
+
+	sawEmerge := false
+	for _, call := range runner.RunCalls {
+		if strings.Contains(call, "--tty=false") {
+			t.Errorf("container run isolated the TTY with no TUI: %q", call)
+		}
+		if strings.Contains(call, "emerge") {
+			sawEmerge = true
+		}
+	}
+	if !sawEmerge {
+		t.Errorf("no emerge run recorded; calls = %v", runner.RunCalls)
+	}
+}
+
 func TestTestCmd_CompileFlagReachesRunner(t *testing.T) {
 	// D1: --compile must produce clean fetch unpack compile.
 	runner := &cmdStubRunner{}

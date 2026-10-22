@@ -178,12 +178,12 @@ type TestLocalConfig struct {
 // ---------------------------------------------------------------------------
 
 // TestLocal runs ebuild phases for a given ebuild path.
-func TestLocal(ebuildPath string, phases []string, runner CmdRunner, pretend bool, useTUI bool) error {
-	return TestLocalWithConfig(ebuildPath, phases, runner, pretend, useTUI, nil)
+func TestLocal(ebuildPath string, phases []string, runner CmdRunner, pretend bool) error {
+	return TestLocalWithConfig(ebuildPath, phases, runner, pretend, nil)
 }
 
 // TestLocalWithConfig runs ebuild phases with full configuration.
-func TestLocalWithConfig(ebuildPath string, phases []string, runner CmdRunner, pretend bool, useTUI bool, cfg *TestLocalConfig) error {
+func TestLocalWithConfig(ebuildPath string, phases []string, runner CmdRunner, pretend bool, cfg *TestLocalConfig) error {
 	if TestRunnerForTest != nil {
 		runner = TestRunnerForTest
 	} else if runner == nil {
