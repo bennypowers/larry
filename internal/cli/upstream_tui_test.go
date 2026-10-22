@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"bennypowers.dev/larry/internal/upstream"
 
@@ -593,6 +594,17 @@ func TestUpstreamModel_BumpSummary(t *testing.T) {
 	summary := m.bumpSummary()
 	if !strings.Contains(summary, "369") || !strings.Contains(summary, "370") || !strings.Contains(summary, "→") {
 		t.Errorf("summary = %q", summary)
+	}
+}
+
+func TestUpstreamModel_HeartbeatWhileSilent(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.mode = modeRunning
+	m.lastActivity = time.Now().Add(-20 * time.Second)
+	m.Update(actionTickMsg(time.Now()))
+	joined := strings.Join(m.actionLines, "\n")
+	if !strings.Contains(joined, "still running") || !strings.Contains(joined, "no output") {
+		t.Errorf("heartbeat not appended: %v", m.actionLines)
 	}
 }
 

@@ -180,6 +180,7 @@ func runBump(cmd *cobra.Command, args []string) error {
 	// Log output failures are unrecoverable and not meaningful in this context.
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nPreparing %s...\n", result.NewFile)
 	progress.step("prepare", stepRunning)
+	progress.detail("prepare: " + filepath.Base(result.NewFile))
 	if err := prepare.PrepareFromFile(result.NewFile, pcfg); err != nil {
 		// Delete the stale new ebuild — prepare rollback restores from backup
 		// but the backup was of the new file itself, so it persists on disk.

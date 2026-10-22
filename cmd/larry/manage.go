@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"bennypowers.dev/larry/internal/cli"
 	"bennypowers.dev/larry/internal/upstream"
@@ -231,18 +232,25 @@ func runLarryChildFunc(ctx context.Context, args []string, onLine func(string)) 
 	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Env = os.Environ()
 
-	// Keep stdout and stderr apart. Merging both into one pipe lets their
-	// copy goroutines interleave writes mid-line, which corrupts the prefixed
-	// progress channel carried on stderr.
-	stdoutR, stdoutW := io.Pipe()
-	stderrR, stderrW := io.Pipe()
+	// Keep stdout and stderr apart. os.Pipe (not io.Pipe) matters: os/exec
+	// does not spawn copy goroutines for *os.File writers, so cmd.Run returns
+	// when the child exits even if a grandchild still holds a pipe fd.
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("stdout pipe: %w", err)
+	}
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		_ = stdoutR.Close()
+		return fmt.Errorf("stderr pipe: %w", err)
+	}
 	cmd.Stdout = stdoutW
 	cmd.Stderr = stderrW
 
 	var wg sync.WaitGroup
 	wg.Add(2)
 	var mu sync.Mutex
-	read := func(r *io.PipeReader) {
+	read := func(r *os.File) {
 		defer wg.Done()
 		scanner := bufio.NewScanner(r)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -267,6 +275,22 @@ func runLarryChildFunc(ctx context.Context, args []string, onLine func(string)) 
 	runErr := cmd.Run()
 	_ = stdoutW.Close()
 	_ = stderrW.Close()
-	wg.Wait()
+
+	// cmd.Run returns when the child exits, but grandchildren inherit the pipe
+	// write ends. If one outlives the child (an orphaned pkgdev, for example),
+	// waiting for EOF would leave the action stuck forever. Close the read ends
+	// after a short drain so the session always regains control.
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		_ = stdoutR.Close()
+		_ = stderrR.Close()
+		<-done
+	}
 	return runErr
 }

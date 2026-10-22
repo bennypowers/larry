@@ -187,6 +187,20 @@ func TestPrepareProgressMapping(t *testing.T) {
 	}
 }
 
+func TestRunLarryChild_OrphanDoesNotBlockExit(t *testing.T) {
+	// The shell exits but leaves a background sleep holding the inherited
+	// pipe. The reader must give up on EOF so the action can finish.
+	stubExecutable(t, "#!/bin/sh\nsleep 4 &\nexit 0\n")
+
+	start := time.Now()
+	if err := runLarryChild(context.Background(), []string{"x"}, func(string) {}); err != nil {
+		t.Fatalf("runLarryChild: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 3500*time.Millisecond {
+		t.Errorf("runLarryChild waited %s for an orphaned grandchild", elapsed)
+	}
+}
+
 func TestProgressDetailCarriesNoStep(t *testing.T) {
 	var buf bytes.Buffer
 	emitter := progressEmitter{enabled: true, w: &buf}

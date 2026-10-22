@@ -406,6 +406,10 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case actionTickMsg:
 		if m.mode == modeRunning {
+			if time.Since(m.lastActivity) >= 15*time.Second {
+				m.appendActionLine(fmt.Sprintf(">>> still running (%s, no output)",
+					time.Since(m.lastActivity).Round(time.Second)))
+			}
 			return m, m.actionTick()
 		}
 		return m, nil
@@ -1352,13 +1356,8 @@ func (m *UpstreamModel) actionPaneView() string {
 	if !m.actionStart.IsZero() {
 		label += " · " + time.Since(m.actionStart).Round(time.Second).String()
 	}
-	if m.actionDetail != "" {
-		label += " · " + m.actionDetail
-	}
-	if !m.lastActivity.IsZero() {
-		if quiet := time.Since(m.lastActivity); quiet > 10*time.Second {
-			label += " · no output " + quiet.Round(time.Second).String()
-		}
+	if !m.lastActivity.IsZero() && time.Since(m.lastActivity) > 10*time.Second {
+		label += " · stalled"
 	}
 	label = truncateToWidth(label, max(m.width-4, 1))
 	lines := make([]string, 0, paneHeight)
@@ -1427,6 +1426,9 @@ func (m *UpstreamModel) actionDetailStrip() string {
 		out = renderer.NewStyle().Foreground(lipgloss.Color("208")).Render(m.bumpOld) +
 			renderer.NewStyle().Foreground(lipgloss.Color("240")).Render(" → ") +
 			renderer.NewStyle().Foreground(lipgloss.Color("42")).Bold(true).Render(m.bumpNew)
+	}
+	if m.bumpNew == "" && m.actionDetail != "" {
+		out += "   " + m.actionDetail
 	}
 
 	pkg := m.actionPkg
