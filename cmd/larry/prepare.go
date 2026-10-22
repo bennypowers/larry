@@ -21,6 +21,7 @@ var (
 	prepareAll            bool
 	prepareCleanupOrphans bool
 	prepareTUI            bool
+	prepareProgress       string
 )
 
 func init() {
@@ -34,6 +35,9 @@ func init() {
 		"remove orphaned GitHub release assets on prepare failure")
 	prepareCmd.Flags().BoolVar(&prepareTUI, "tui", false,
 		"interactive progress UI (requires a TTY; falls back to plain output)")
+	prepareCmd.Flags().StringVar(&prepareProgress, "progress", "",
+		"internal: emit NDJSON progress on stderr (json)")
+	_ = prepareCmd.Flags().MarkHidden("progress")
 }
 
 var prepareCmd = cobra.Command{
@@ -98,6 +102,7 @@ plain output when piped).`,
 			UseTUI:                false,
 			CleanupOrphanedAssets: prepareCleanupOrphans,
 			Log:                   log,
+			Progress:              prepareProgressReporter(prepareProgress),
 		}
 
 		// Resolve GitHub repo from overlay git remote (for release uploads).

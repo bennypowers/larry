@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"bennypowers.dev/larry/internal/cli"
+	"bennypowers.dev/larry/internal/prepare"
 	"bennypowers.dev/larry/internal/upstream"
 )
 
@@ -162,6 +163,27 @@ func TestProgressEmitterWritesWire(t *testing.T) {
 	}
 	if last, ok := parseTestProgress(lines[2]); !ok || !last.Done {
 		t.Errorf("done line = %+v ok=%v", last, ok)
+	}
+}
+
+func TestPrepareProgressMapping(t *testing.T) {
+	var buf bytes.Buffer
+	emitter := progressEmitter{enabled: true, w: &buf}
+	mapPrepareProgress(emitter, prepare.ProgressEvent{Kind: prepare.ProgressStep, Step: "prepare"})
+	mapPrepareProgress(emitter, prepare.ProgressEvent{Kind: prepare.ProgressStep, Step: "manifest"})
+	mapPrepareProgress(emitter, prepare.ProgressEvent{Kind: prepare.ProgressDone})
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("wrote %d lines, want 3:\n%s", len(lines), buf.String())
+	}
+	first, ok := parseTestProgress(lines[0])
+	if !ok || first.Step != "prepare" || first.State != cli.ActionStepRunning {
+		t.Errorf("first = %+v ok=%v, want prepare running", first, ok)
+	}
+	last, ok := parseTestProgress(lines[2])
+	if !ok || !last.Done {
+		t.Errorf("last = %+v ok=%v, want done", last, ok)
 	}
 }
 

@@ -614,23 +614,25 @@ func (m *UpstreamModel) actionTick() tea.Cmd {
 	})
 }
 
-// applyActionProgress folds one structured event into the checklist.
+// applyActionProgress folds one structured event into the checklist. Steps
+// named by the child are appended on first sight, so commands that discover
+// their steps as they go do not need an up-front list.
 func (m *UpstreamModel) applyActionProgress(p ActionProgress) {
 	if len(p.Steps) > 0 {
 		m.actionSteps = make([]actionStep, 0, len(p.Steps))
 		for _, name := range p.Steps {
 			m.actionSteps = append(m.actionSteps, actionStep{name: name})
 		}
-		return
 	}
-	for i := range m.actionSteps {
-		if m.actionSteps[i].name != p.Step {
-			continue
+	if p.Step != "" {
+		for i := range m.actionSteps {
+			if m.actionSteps[i].name == p.Step {
+				m.actionSteps[i].state = p.State
+				return
+			}
 		}
-		m.actionSteps[i].state = p.State
-		if p.Step != "" {
-			return
-		}
+		m.actionSteps = append(m.actionSteps, actionStep{name: p.Step, state: p.State})
+		return
 	}
 	if p.Done || p.Failed {
 		state := ActionStepDone
@@ -772,23 +774,40 @@ func (m *UpstreamModel) ensureCursorVisible() {
 }
 
 // listHeight is the number of table rows that fit between the title, header,
-// detail pane, and footer at the current terminal size.
+// detail pane, action pane, and footer at the current terminal size.
 func (m *UpstreamModel) listHeight() int {
 	height := m.height - 3
-	if m.showDetail {
-		height -= 6
-	}
-	if m.actionErr != nil {
-		height--
-	}
-	if len(m.actionLines) > 0 {
-		height -= 11
-	}
-	if m.mode == modeConfirm {
-		height--
+	if m.mode == modeRunning {
+		height -= m.actionPaneHeight()
+	} else {
+		if m.showDetail {
+			height -= 6
+		}
+		if m.actionErr != nil {
+			height--
+		}
+		if len(m.actionLines) > 0 {
+			height -= 11
+		}
+		if m.mode == modeConfirm {
+			height--
+		}
 	}
 	if height < 1 {
 		height = 1
+	}
+	return height
+}
+
+// actionPaneHeight is the fixed height of the running-action pane, which sits
+// below the table rather than replacing it.
+func (m *UpstreamModel) actionPaneHeight() int {
+	height := m.height / 3
+	if height < 7 {
+		height = 7
+	}
+	if height > 14 {
+		height = 14
 	}
 	return height
 }
@@ -1012,36 +1031,67 @@ func (m *UpstreamModel) View() string {
 	}
 }
 
+// resultsHeader is the title line shared by the results view and the running
+// action view.
+func (m *UpstreamModel) resultsHeader() string {
+	title := "Upstream"
+	if m.overlay != "" {
+		title += " — " + m.overlay
+	}
+	return m.theme.HeaderStyle().Render(title) +
+		fmt.Sprintf("  (%d shown, %d checked)", len(m.visible), len(m.results))
+}
+
+// actionRunningView keeps the table visible and puts the action in a pane
+// below it, rather than taking over the screen.
 func (m *UpstreamModel) actionRunningView() string {
 	var b strings.Builder
-	b.WriteString(m.theme.HeaderStyle().Render(
-		fmt.Sprintf("%s %s", m.pending, m.actionPkg)))
-	if !m.actionStart.IsZero() {
-		fmt.Fprintf(&b, "  %s", time.Since(m.actionStart).Round(time.Second))
-	}
-	b.WriteString("\n\n")
-
-	for _, step := range m.actionSteps {
-		fmt.Fprintf(&b, " %s %s\n", stepGlyph(step.state), step.name)
-	}
-	if len(m.actionSteps) > 0 {
-		b.WriteString("\n")
-	}
-
-	height := m.height - 4 - len(m.actionSteps)
-	if height < 3 {
-		height = 3
-	}
-	m.actionView.Height = height
-	if len(m.actionLines) == 0 {
-		b.WriteString(m.spinner.View())
-		b.WriteString(" running")
-	} else {
-		b.WriteString(m.theme.LogStyle().Render(m.actionView.View()))
-	}
+	b.WriteString(m.resultsHeader())
+	b.WriteString("\n")
+	b.WriteString(m.renderTable())
+	b.WriteString("\n")
+	b.WriteString(m.actionPaneView())
 	b.WriteString("\n")
 	b.WriteString(m.theme.FooterStyle().Render("esc: cancel action  q: quit"))
 	return b.String()
+}
+
+// actionPaneView renders exactly actionPaneHeight lines: a title rule, the
+// checklist, and the tail of the child's output.
+func (m *UpstreamModel) actionPaneView() string {
+	paneHeight := m.actionPaneHeight()
+	logHeight := paneHeight - 2
+	if logHeight < 1 {
+		logHeight = 1
+	}
+
+	label := fmt.Sprintf("── %s %s", m.pending, m.actionPkg)
+	if !m.actionStart.IsZero() {
+		label += " · " + time.Since(m.actionStart).Round(time.Second).String()
+	}
+	lines := make([]string, 0, paneHeight)
+	lines = append(lines, m.theme.FooterStyle().Render(truncateToWidth(label, m.width-1)))
+
+	var steps strings.Builder
+	for i, step := range m.actionSteps {
+		if i > 0 {
+			steps.WriteString("   ")
+		}
+		fmt.Fprintf(&steps, "%s %s", stepGlyph(step.state), step.name)
+	}
+	lines = append(lines, truncateToWidth(steps.String(), m.width-1))
+
+	m.actionView.Width = m.width
+	m.actionView.Height = logHeight
+	if len(m.actionLines) == 0 {
+		lines = append(lines, m.spinner.View()+" running")
+	} else {
+		lines = append(lines, strings.Split(m.actionView.View(), "\n")...)
+	}
+	for len(lines) < paneHeight {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines[:paneHeight], "\n")
 }
 
 // stepGlyph is the checklist marker for one step state.
@@ -1131,12 +1181,7 @@ func (m *UpstreamModel) progressView() string {
 
 func (m *UpstreamModel) resultsView() string {
 	var b strings.Builder
-	title := "Upstream"
-	if m.overlay != "" {
-		title += " — " + m.overlay
-	}
-	b.WriteString(m.theme.HeaderStyle().Render(title))
-	fmt.Fprintf(&b, "  (%d shown, %d checked)", len(m.visible), len(m.results))
+	b.WriteString(m.resultsHeader())
 	b.WriteString("\n")
 
 	if len(m.visible) == 0 {

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+
+	"bennypowers.dev/larry/internal/prepare"
 )
 
 // progressPrefix marks structured progress lines on stderr, shared by the
@@ -81,4 +83,33 @@ func (e progressEmitter) fail(err error) {
 		wire.Error = err.Error()
 	}
 	e.emit(wire)
+}
+
+// prepareProgressReporter maps pipeline events onto the action checklist.
+// Prepare names steps as it reaches them ("prepare", "manifest", "custom
+// script"), so the consumer appends unknown names on first sight.
+func prepareProgressReporter(mode string) prepare.ProgressFunc {
+	emitter := newProgressEmitter(mode)
+	if !emitter.enabled {
+		return nil
+	}
+	return func(ev prepare.ProgressEvent) {
+		mapPrepareProgress(emitter, ev)
+	}
+}
+
+// mapPrepareProgress is the testable core of prepareProgressReporter.
+func mapPrepareProgress(emitter progressEmitter, ev prepare.ProgressEvent) {
+	switch ev.Kind {
+	case prepare.ProgressStep:
+		if ev.Step != "" {
+			emitter.step(ev.Step, stepRunning)
+		}
+	case prepare.ProgressDone:
+		emitter.done()
+	case prepare.ProgressError:
+		emitter.fail(ev.Err)
+	case prepare.ProgressStart, prepare.ProgressLog:
+		// Start carries no step list; logs already stream to the pane.
+	}
 }

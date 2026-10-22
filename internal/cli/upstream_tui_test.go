@@ -400,6 +400,51 @@ func TestUpstreamModel_TestOptionsPrompt(t *testing.T) {
 	}
 }
 
+func TestUpstreamModel_ProgressAppendsUnknownSteps(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.applyActionProgress(ActionProgress{Step: "prepare", State: ActionStepRunning})
+	m.applyActionProgress(ActionProgress{Step: "manifest", State: ActionStepRunning})
+	m.applyActionProgress(ActionProgress{Done: true})
+
+	steps := m.ActionSteps()
+	if len(steps) != 2 {
+		t.Fatalf("steps = %+v, want prepare and manifest", steps)
+	}
+	for _, step := range steps {
+		if step.state != ActionStepDone {
+			t.Errorf("%s state = %v, want done on overall completion", step.name, step.state)
+		}
+	}
+}
+
+func TestUpstreamModel_RunningActionKeepsTableVisible(t *testing.T) {
+	release := make(chan struct{})
+	m := actionModel(t, UpstreamActions{Bump: func(_ context.Context, _ string,
+		_ func(string), _ func(ActionProgress)) error {
+		<-release
+		return nil
+	}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	defer func() {
+		close(release)
+		_ = cmd
+	}()
+
+	m.applyActionProgress(ActionProgress{Steps: []string{"bump", "prepare", "commit"}})
+	m.applyActionProgress(ActionProgress{Step: "bump", State: ActionStepDone})
+
+	view := m.View()
+	for _, want := range []string{"PACKAGE", "dev-util/alpha", "✓ bump", "○ prepare", "esc: cancel action"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("running view missing %q:\n%s", want, view)
+		}
+	}
+	if lines := strings.Split(view, "\n"); len(lines) != 30 {
+		t.Errorf("running view has %d lines, want 30", len(lines))
+	}
+}
+
 func TestUpstreamModel_TestProgressChecklist(t *testing.T) {
 	m := actionModel(t, UpstreamActions{Test: func(_ context.Context, _ string, _ TestOptions,
 		_ func(string), onProgress func(ActionProgress)) error {

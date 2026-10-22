@@ -147,7 +147,7 @@ func buildUpstreamActions(overlay string) cli.UpstreamActions {
 	}
 	return cli.UpstreamActions{
 		Bump:    run("bump", true),
-		Prepare: run("prepare", false),
+		Prepare: run("prepare", true),
 		Test:    testAction,
 	}
 }
