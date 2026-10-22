@@ -59,8 +59,11 @@ func (t *Theme) TableStyles() table.Styles {
 	styles := table.Styles{
 		Header: t.Renderer.NewStyle().Bold(true).Padding(0, 1),
 		Cell:   t.Renderer.NewStyle().Padding(0, 1),
-		// Selection uses a background so it is visible in every theme.
-		Selected: t.Renderer.NewStyle().Bold(true).Padding(0, 1),
+		// Selection uses a background so it is visible in every theme. It must
+		// not add padding: bubbles renders it around the joined row, whose
+		// cells already carry their own padding, and extra padding shifts the
+		// selected row relative to its neighbours.
+		Selected: t.Renderer.NewStyle().Bold(true),
 	}
 	if t.Color {
 		styles.Header = styles.Header.Foreground(lipgloss.Color("240"))

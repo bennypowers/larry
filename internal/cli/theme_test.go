@@ -7,8 +7,46 @@ import (
 
 	"bennypowers.dev/larry/internal/upstream"
 
+	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// TestTheme_SelectedRowDoesNotShiftColumns guards the bubbles table quirk
+// where Selected is rendered around the joined row: padding on that style
+// indents the cursor row relative to every other row.
+func TestTheme_SelectedRowDoesNotShiftColumns(t *testing.T) {
+	theme, _ := themeForTest(false, false)
+	tbl := table.New()
+	tbl.SetStyles(theme.TableStyles())
+	tbl.SetColumns([]table.Column{
+		{Title: "PACKAGE", Width: 20},
+		{Title: "STATUS", Width: 10},
+	})
+	tbl.SetRows([]table.Row{
+		{"dev-util/alpha", "OUTDATED"},
+		{"dev-util/beta", "UP-TO-DATE"},
+	})
+	tbl.SetCursor(1)
+
+	var alphaLine, betaLine string
+	for _, line := range strings.Split(tbl.View(), "\n") {
+		switch {
+		case strings.Contains(line, "dev-util/alpha"):
+			alphaLine = line
+		case strings.Contains(line, "dev-util/beta"):
+			betaLine = line
+		}
+	}
+	if alphaLine == "" || betaLine == "" {
+		t.Fatalf("table view missing rows:\n%s", tbl.View())
+	}
+	alphaPad := len(alphaLine) - len(strings.TrimLeft(alphaLine, " "))
+	betaPad := len(betaLine) - len(strings.TrimLeft(betaLine, " "))
+	if alphaPad != betaPad {
+		t.Errorf("selected row indented by %d, unselected by %d:\n%q\n%q",
+			betaPad, alphaPad, alphaLine, betaLine)
+	}
+}
 
 func themeForTest(color, hyperlinks bool) (*Theme, *bytes.Buffer) {
 	var buf bytes.Buffer
