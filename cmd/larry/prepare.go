@@ -118,6 +118,9 @@ plain output when piped).`,
 
 		// Determine what to prepare.
 		log.Info("Preparing %d target(s) in %s (dry-run=%v)", len(args), overlay, cfg.DryRun)
+		if len(args) == 0 && !prepareAll {
+			return cmd.Help()
+		}
 
 		if prepareTUI {
 			if cli.IsTTY(cmd.OutOrStdout()) {
