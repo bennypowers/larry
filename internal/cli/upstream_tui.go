@@ -191,7 +191,9 @@ type UpstreamModel struct {
 	actionView   viewport.Model
 	actionSteps  []actionStep
 	actionDetail string
+	actionError  string
 	actionStart  time.Time
+	lastActivity time.Time
 
 	// Test options are remembered between runs. testInput edits one field of
 	// testDraft while modeTestOptions is active.
@@ -606,7 +608,9 @@ func (m *UpstreamModel) startAction() tea.Cmd {
 	m.actionErr = nil
 	m.actionSteps = nil
 	m.actionDetail = ""
+	m.actionError = ""
 	m.actionStart = time.Now()
+	m.lastActivity = m.actionStart
 	m.actionView.SetContent("")
 
 	ctx, cancel := context.WithCancel(m.ctx)
@@ -657,6 +661,7 @@ func (m *UpstreamModel) actionTick() tea.Cmd {
 // named by the child are appended on first sight, so commands that discover
 // their steps as they go do not need an up-front list.
 func (m *UpstreamModel) applyActionProgress(p ActionProgress) {
+	m.lastActivity = time.Now()
 	if p.Message != "" && p.Step == "" {
 		m.actionDetail = p.Message
 	}
@@ -720,9 +725,23 @@ func (m *UpstreamModel) waitAction(ch chan actionEvent) tea.Cmd {
 }
 
 func (m *UpstreamModel) appendActionLine(line string) {
+	m.lastActivity = time.Now()
+	if isActionErrorLine(line) {
+		m.actionError = line
+	}
 	m.actionLines = append(m.actionLines, line)
 	m.actionView.SetContent(strings.Join(m.actionLines, "\n"))
 	m.actionView.GotoBottom()
+}
+
+// isActionErrorLine recognises the logger and CLI error prefixes used by
+// child commands.
+func isActionErrorLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(trimmed, "!!!") ||
+		strings.HasPrefix(trimmed, "larry:") ||
+		strings.HasPrefix(lower, "error:")
 }
 
 // ActionLines returns output captured from the last action.
@@ -1175,12 +1194,7 @@ func (m *UpstreamModel) actionRunningView() string {
 // checklist, and the tail of the child's output.
 func (m *UpstreamModel) actionPaneView() string {
 	paneHeight := m.actionPaneHeight()
-	logHeight := paneHeight - 3
-	if logHeight < 1 {
-		logHeight = 1
-	}
 
-	border := strings.Repeat("─", max(m.width, 1))
 	label := fmt.Sprintf("%s %s", m.pending, m.actionPkg)
 	if !m.actionStart.IsZero() {
 		label += " · " + time.Since(m.actionStart).Round(time.Second).String()
@@ -1188,9 +1202,18 @@ func (m *UpstreamModel) actionPaneView() string {
 	if m.actionDetail != "" {
 		label += " · " + m.actionDetail
 	}
+	if !m.lastActivity.IsZero() {
+		if quiet := time.Since(m.lastActivity); quiet > 10*time.Second {
+			label += " · no output " + quiet.Round(time.Second).String()
+		}
+	}
+	label = truncateToWidth(label, max(m.width-4, 1))
+	fill := m.width - 2 - runewidth.StringWidth(label)
+	if fill < 0 {
+		fill = 0
+	}
 	lines := make([]string, 0, paneHeight)
-	lines = append(lines, m.theme.FooterStyle().Render(border))
-	lines = append(lines, truncateToWidth(label, m.width-1))
+	lines = append(lines, m.theme.HeaderStyle().Render("─ "+label+" "+strings.Repeat("─", fill)))
 
 	var steps strings.Builder
 	for i, step := range m.actionSteps {
@@ -1199,23 +1222,50 @@ func (m *UpstreamModel) actionPaneView() string {
 		}
 		glyph := stepGlyph(step.state)
 		if step.state == ActionStepRunning && m.animate {
-			glyph = m.spinner.View()
+			glyph = m.spinnerGlyph()
 		}
 		fmt.Fprintf(&steps, "%s %s", glyph, step.name)
 	}
-	lines = append(lines, truncateToWidth(steps.String(), m.width-1))
+	lines = append(lines, m.colorizeStepGlyphs(truncateToWidth(steps.String(), max(m.width-1, 1))))
 
-	m.actionView.Width = m.width
+	logHeight := paneHeight - 2
+	if m.actionError != "" {
+		lines = append(lines, m.theme.ErrorStyle().Render(
+			truncateToWidth(m.actionError, max(m.width-1, 1))))
+		logHeight--
+	}
+	if logHeight < 1 {
+		logHeight = 1
+	}
+
+	m.actionView.Width = max(m.width-2, 1)
 	m.actionView.Height = logHeight
 	if len(m.actionLines) == 0 {
 		lines = append(lines, m.spinner.View()+" running")
 	} else {
-		lines = append(lines, strings.Split(m.actionView.View(), "\n")...)
+		for _, line := range strings.Split(m.actionView.View(), "\n") {
+			lines = append(lines, m.theme.LogStyle().Render(line))
+		}
 	}
 	for len(lines) < paneHeight {
 		lines = append(lines, "")
 	}
 	return strings.Join(lines[:paneHeight], "\n")
+}
+
+// colorizeStepGlyphs tints checklist markers after the line has been measured
+// and truncated, so ANSI never affects column width.
+func (m *UpstreamModel) colorizeStepGlyphs(s string) string {
+	if !m.theme.Color {
+		return s
+	}
+	renderer := m.theme.Renderer
+	replacer := strings.NewReplacer(
+		stepGlyph(ActionStepDone), renderer.NewStyle().Foreground(lipgloss.Color("42")).Render(stepGlyph(ActionStepDone)),
+		stepGlyph(ActionStepFailed), renderer.NewStyle().Foreground(lipgloss.Color("196")).Render(stepGlyph(ActionStepFailed)),
+		stepGlyph(ActionStepPending), renderer.NewStyle().Foreground(lipgloss.Color("240")).Render(stepGlyph(ActionStepPending)),
+	)
+	return replacer.Replace(s)
 }
 
 // stepGlyph is the checklist marker for one step state.

@@ -120,10 +120,11 @@ func buildUpstreamActions(overlay string) cli.UpstreamActions {
 				args = append(args, "--progress", "json")
 			}
 			args = append(args, "--overlay", overlay, "--color", "never", pkg)
+			lines := func(line string) { onLine(redactOverlayPath(line, overlay)) }
 			if withProgress {
-				return runLarryChildWithProgress(ctx, args, onLine, onProgress)
+				return runLarryChildWithProgress(ctx, args, lines, onProgress)
 			}
-			return runLarryChild(ctx, args, onLine)
+			return runLarryChild(ctx, args, lines)
 		}
 	}
 	testAction := func(ctx context.Context, pkg string, opts cli.TestOptions,
@@ -143,13 +144,31 @@ func buildUpstreamActions(overlay string) cli.UpstreamActions {
 			args = append(args, "--use", opts.Use)
 		}
 		args = append(args, "--progress", "json", "--overlay", overlay, "--color", "never", pkg)
-		return runLarryChildWithProgress(ctx, args, onLine, onProgress)
+		return runLarryChildWithProgress(ctx, args,
+			func(line string) { onLine(redactOverlayPath(line, overlay)) }, onProgress)
 	}
 	return cli.UpstreamActions{
 		Bump:    run("bump", true),
 		Prepare: run("prepare", true),
 		Test:    testAction,
 	}
+}
+
+// redactOverlayPath strips the overlay's absolute root from child output so
+// the pane shows repository-relative paths instead of the caller's home dir.
+func redactOverlayPath(line, overlay string) string {
+	if overlay == "" {
+		return line
+	}
+	cleaned := strings.TrimSuffix(overlay, "/")
+	if cleaned == "" {
+		return line
+	}
+	line = strings.ReplaceAll(line, cleaned+"/", "")
+	if line == cleaned {
+		return "."
+	}
+	return line
 }
 
 // runLarryChild executes larry with args, forwarding stdout and stderr lines.

@@ -481,6 +481,16 @@ func TestUpstreamModel_RunningActionKeepsTableVisible(t *testing.T) {
 	if lines := strings.Split(view, "\n"); len(lines) != 30 {
 		t.Errorf("running view has %d lines, want 30", len(lines))
 	}
+
+	m.appendActionLine("working")
+	m.appendActionLine("!!! prepare failed: network unreachable")
+	view = m.View()
+	if !strings.Contains(view, "!!! prepare failed: network unreachable") {
+		t.Errorf("error line not surfaced in the pane:\n%s", view)
+	}
+	if lines := strings.Split(view, "\n"); len(lines) != 30 {
+		t.Errorf("view with error has %d lines, want 30", len(lines))
+	}
 }
 
 func TestUpstreamModel_TestProgressChecklist(t *testing.T) {

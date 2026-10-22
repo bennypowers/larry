@@ -75,7 +75,9 @@ immediately, while LATEST and STATUS spin until each row resolves. Overall
 progress lives in the header and footer.
 
 Running actions keep the table on screen and use a pane below it for the
-checklist, elapsed time, and output tail.
+checklist, elapsed time, and output tail. The pane surfaces the latest error
+line, shows a no-output timer when the child stalls, and redacts the overlay's
+absolute path from child output.
 
 ## EXAMPLES
 

@@ -247,6 +247,21 @@ sleep 1
 	}
 }
 
+func TestRedactOverlayPath(t *testing.T) {
+	overlay := "/home/someone/Developer/gentoo-overlay"
+	tests := map[string]string{
+		overlay + "/app-admin/cockpit/cockpit-370.ebuild":     "app-admin/cockpit/cockpit-370.ebuild",
+		"Bumped: " + overlay + "/dev-util/foo/foo-2.0.ebuild": "Bumped: dev-util/foo/foo-2.0.ebuild",
+		"no path here": "no path here",
+		overlay:        ".",
+	}
+	for in, want := range tests {
+		if got := redactOverlayPath(in, overlay); got != want {
+			t.Errorf("redactOverlayPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestParseTestProgress(t *testing.T) {
 	line := `larry-progress:{"kind":1,"step":"image","state":1}`
 	got, ok := parseTestProgress(line)

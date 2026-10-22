@@ -69,7 +69,10 @@ resolves. Overall progress sits in the header and footer, and the layout and
 column widths stay fixed while results arrive.
 
 Running actions keep the table on screen and use a pane below it for the
-checklist, elapsed time, and the tail of the streamed output. `esc` cancels.
+checklist, elapsed time, and the tail of the streamed output. The pane shows
+the most recent error line in red and adds a `no output` timer when a child
+goes quiet for more than ten seconds. Absolute paths under the overlay root
+are redacted to repository-relative paths. `esc` cancels.
 
 ### Examples
 
