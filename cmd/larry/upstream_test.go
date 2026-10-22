@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"bennypowers.dev/larry/internal/atom"
-	"bennypowers.dev/larry/internal/provider"
 	"bennypowers.dev/larry/internal/upstream"
 )
 
@@ -35,7 +33,7 @@ SLOT="0"
 	})
 
 	orig := runUpstreamWithTargets
-	runUpstreamWithTargets = func(overlayDir string, registry *provider.ProviderRegistry, targets []*atom.Atom, allowPrereleases bool, fresh bool) ([]upstream.UpstreamResult, error) {
+	runUpstreamWithTargets = func(upstream.RunOptions) ([]upstream.UpstreamResult, error) {
 		return nil, errors.New("walk exploded")
 	}
 	defer func() { runUpstreamWithTargets = orig }()

@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -293,7 +294,7 @@ SLOT="0"
 	registry := provider.NewProviderRegistry()
 	mockV, _ := version.Parse("1.2.3")
 	registry.Register(&mockProvider{mockType: remoteid.TypeGitHub, mockVersion: mockV})
-	results, err := RunWithTargets(overlay, registry, nil, false, false)
+	results, err := RunWithTargets(RunOptions{OverlayDir: overlay, Registry: registry})
 	if err != nil {
 		t.Fatalf("RunWithTargets: %v", err)
 	}
@@ -326,7 +327,7 @@ SLOT="0"
 		mockVersion: nil,
 		mockErr:     fmt.Errorf("no releases"),
 	})
-	results, err := RunWithTargets(overlay, registry, nil, false, false)
+	results, err := RunWithTargets(RunOptions{OverlayDir: overlay, Registry: registry})
 	if err != nil {
 		t.Fatalf("RunWithTargets: %v", err)
 	}
@@ -1030,7 +1031,7 @@ SLOT="0"
 		res: &provider.Resolution{Tag: "6.18.47", TagDate: "20270101", ByDate: true},
 	})
 
-	results, err := RunWithTargets(overlay, reg, nil, false, true)
+	results, err := RunWithTargets(RunOptions{OverlayDir: overlay, Registry: reg, Fresh: true})
 	if err != nil {
 		t.Fatalf("RunWithTargets: %v", err)
 	}
@@ -1062,7 +1063,7 @@ SLOT="0"
 		ver: nil, // should not be reached
 	})
 
-	results, err := RunWithTargets(overlay, reg, nil, false, true)
+	results, err := RunWithTargets(RunOptions{OverlayDir: overlay, Registry: reg, Fresh: true})
 	if err != nil {
 		t.Fatalf("RunWithTargets: %v", err)
 	}
@@ -1095,7 +1096,7 @@ SLOT="0"
 		mockVersion: mustVersion("7.0"),
 	})
 
-	results, err := RunWithTargets(overlay, reg, nil, false, true)
+	results, err := RunWithTargets(RunOptions{OverlayDir: overlay, Registry: reg, Fresh: true})
 	if err != nil {
 		t.Fatalf("RunWithTargets: %v", err)
 	}
@@ -1184,7 +1185,7 @@ SLOT="0"
 		err: fmt.Errorf("gh api releases/latest: 404 Not Found"),
 	})
 
-	results, err := RunWithTargets(overlay, reg, nil, false, true)
+	results, err := RunWithTargets(RunOptions{OverlayDir: overlay, Registry: reg, Fresh: true})
 	if err != nil {
 		t.Fatalf("RunWithTargets: %v", err)
 	}
@@ -1226,7 +1227,7 @@ SLOT="0"
 	}
 
 	reg := provider.NewProviderRegistry()
-	results, err := RunWithTargets(overlay, reg, nil, false, true)
+	results, err := RunWithTargets(RunOptions{OverlayDir: overlay, Registry: reg, Fresh: true})
 	if err != nil {
 		t.Fatalf("RunWithTargets: %v", err)
 	}
@@ -1262,7 +1263,7 @@ SLOT="0"
 	// Empty registry: if the manual branch did not short-circuit, this would
 	// produce a "no provider" error instead.
 	reg := provider.NewProviderRegistry()
-	results, err := RunWithTargets(overlay, reg, nil, false, true)
+	results, err := RunWithTargets(RunOptions{OverlayDir: overlay, Registry: reg, Fresh: true})
 	if err != nil {
 		t.Fatalf("RunWithTargets: %v", err)
 	}
@@ -1278,5 +1279,136 @@ SLOT="0"
 	}
 	if r.Source.URL != "https://vendor.example/downloads" {
 		t.Errorf("Source.URL = %q, want HOMEPAGE", r.Source.URL)
+	}
+}
+
+func progressOverlay(t *testing.T) string {
+	t.Helper()
+	overlay := setupTestOverlay(t)
+	writeEbuild(t, overlay, "app-shells/alpha/alpha-1.0.0.ebuild", `EAPI=8
+DESCRIPTION="Alpha"
+SRC_URI="https://github.com/acme/alpha/archive/v1.0.0.tar.gz"
+LICENSE="MIT"
+SLOT="0"
+`)
+	writeEbuild(t, overlay, "app-shells/beta/beta-2.0.0.ebuild", `EAPI=8
+DESCRIPTION="Beta"
+SRC_URI="https://github.com/acme/beta/archive/v2.0.0.tar.gz"
+LICENSE="MIT"
+SLOT="0"
+`)
+	writeMetadata(t, overlay, "app-shells/alpha", "acme/alpha")
+	writeMetadata(t, overlay, "app-shells/beta", "acme/beta")
+	return overlay
+}
+
+func writeMetadata(t *testing.T, overlay, relDir, remote string) {
+	t.Helper()
+	dir := filepath.Join(overlay, relDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	meta := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+<upstream>
+<remote-id type="github">` + remote + `</remote-id>
+</upstream>
+</pkgmetadata>
+`
+	if err := os.WriteFile(filepath.Join(dir, "metadata.xml"), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunWithOptions_Progress(t *testing.T) {
+	overlay := progressOverlay(t)
+	reg := provider.NewProviderRegistry()
+	reg.Register(&mockProvider{mockType: remoteid.TypeGitHub, mockVersion: mustVersion("3.0.0")})
+
+	var events []Progress
+	results, err := RunWithTargets(RunOptions{
+		OverlayDir: overlay,
+		Registry:   reg,
+		Progress:   func(p Progress) { events = append(events, p) },
+	})
+	if err != nil {
+		t.Fatalf("RunWithTargets: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("got %d results, want 2", len(results))
+	}
+	if len(events) == 0 {
+		t.Fatal("Progress was never called")
+	}
+	last := events[len(events)-1]
+	if last.Done != last.Total || last.Total != 2 {
+		t.Errorf("final progress = %+v, want Done=Total=2", last)
+	}
+	prev := -1
+	for _, ev := range events {
+		if ev.Done < prev {
+			t.Errorf("Done went backwards: %+v", events)
+		}
+		prev = ev.Done
+	}
+	if events[0].Package == "" {
+		t.Errorf("first progress event has no package: %+v", events[0])
+	}
+}
+
+func TestRunWithOptions_CacheDirHonored(t *testing.T) {
+	overlay := progressOverlay(t)
+	reg := provider.NewProviderRegistry()
+	reg.Register(&mockProvider{mockType: remoteid.TypeGitHub, mockVersion: mustVersion("3.0.0")})
+	cacheDir := t.TempDir()
+
+	if _, err := RunWithTargets(RunOptions{
+		OverlayDir: overlay,
+		Registry:   reg,
+		CacheDir:   cacheDir,
+	}); err != nil {
+		t.Fatalf("RunWithTargets: %v", err)
+	}
+
+	var files int
+	err := filepath.WalkDir(cacheDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			files++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files == 0 {
+		t.Errorf("no cache files written under %s", cacheDir)
+	}
+}
+
+func TestRunWithOptions_ContextCanceled(t *testing.T) {
+	overlay := progressOverlay(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := RunWithTargets(RunOptions{
+		Context:    ctx,
+		OverlayDir: overlay,
+		Registry:   provider.NewProviderRegistry(),
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestRunWithOptions_NilProgressSafe(t *testing.T) {
+	overlay := progressOverlay(t)
+	reg := provider.NewProviderRegistry()
+	reg.Register(&mockProvider{mockType: remoteid.TypeGitHub, mockVersion: mustVersion("3.0.0")})
+	if _, err := RunWithTargets(RunOptions{OverlayDir: overlay, Registry: reg, Progress: nil}); err != nil {
+		t.Fatalf("RunWithTargets with nil Progress: %v", err)
 	}
 }

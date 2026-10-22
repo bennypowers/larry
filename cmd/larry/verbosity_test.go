@@ -6,15 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"bennypowers.dev/larry/internal/atom"
-	"bennypowers.dev/larry/internal/provider"
 	"bennypowers.dev/larry/internal/upstream"
 )
 
 func stubUpstreamResults(t *testing.T, results []upstream.UpstreamResult, err error) {
 	t.Helper()
 	orig := runUpstreamWithTargets
-	runUpstreamWithTargets = func(string, *provider.ProviderRegistry, []*atom.Atom, bool, bool) ([]upstream.UpstreamResult, error) {
+	runUpstreamWithTargets = func(upstream.RunOptions) ([]upstream.UpstreamResult, error) {
 		return results, err
 	}
 	t.Cleanup(func() { runUpstreamWithTargets = orig })

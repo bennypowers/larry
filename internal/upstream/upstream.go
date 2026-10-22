@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -898,27 +899,59 @@ func resolveVersionFromSRCURI(ei *ebuild.EbuildInfo, providerType string, rid *r
 	}
 }
 
+// Progress reports root-package progress. Dependency rows are part of the
+// work for a root but do not increment Done or Total.
+type Progress struct {
+	Package string
+	Done    int
+	Total   int
+}
+
+// RunOptions configures an upstream walk.
+type RunOptions struct {
+	Context          context.Context
+	OverlayDir       string
+	Registry         *provider.ProviderRegistry
+	Targets          []*atom.Atom
+	AllowPrereleases bool
+	Fresh            bool
+	CacheDir         string         // empty -> DefaultCachePath()
+	Progress         func(Progress) // nil-safe
+}
+
 // RunWithTargets walks the overlay and checks specific targets (or all if nil).
 // Deprecated and renamed packages from profiles/package.deprecated and profiles/updates/* are skipped.
-func RunWithTargets(overlayDir string, registry *provider.ProviderRegistry, targets []*atom.Atom, allowPrereleases bool, fresh bool) ([]UpstreamResult, error) {
-	cacheDir := DefaultCachePath()
+func RunWithTargets(opts RunOptions) ([]UpstreamResult, error) {
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	cacheDir := opts.CacheDir
+	if cacheDir == "" {
+		cacheDir = DefaultCachePath()
+	}
 	cache := NewVersionCacheWithPath(cacheDir, 6*time.Hour)
 
-	if fresh {
+	if opts.Fresh {
 		_ = cache.Clear()
 	}
 
 	// Load deprecated/renamed package list
-	deprecated := LoadDeprecatedPackages(overlayDir)
+	deprecated := LoadDeprecatedPackages(opts.OverlayDir)
 
-	return walkAndCheckTargets(overlayDir, deprecated, registry, targets, allowPrereleases, cache)
+	return walkAndCheckTargets(ctx, opts, deprecated, cache)
 }
 
 // walkAndCheckTargets processes a list of PackageTarget and returns results.
 // Deprecated and renamed packages are skipped.
-// When targetAtoms is non-nil, only those atoms are checked.
-func walkAndCheckTargets(overlayDir string, deprecated map[string]DeprecatedInfo, registry *provider.ProviderRegistry, targetAtoms []*atom.Atom, allowPrereleases bool, cache *VersionCache) ([]UpstreamResult, error) {
-	targets, err := discoverTargets(overlayDir)
+// When TargetAtoms is non-nil, only those atoms are checked.
+func walkAndCheckTargets(ctx context.Context, opts RunOptions, deprecated map[string]DeprecatedInfo, cache *VersionCache) ([]UpstreamResult, error) {
+	registry := opts.Registry
+	allowPrereleases := opts.AllowPrereleases
+	targetAtoms := opts.Targets
+
+	targets, err := discoverTargets(opts.OverlayDir)
 	if err != nil {
 		return nil, err
 	}
@@ -932,18 +965,36 @@ func walkAndCheckTargets(overlayDir string, deprecated map[string]DeprecatedInfo
 		}
 	}
 
+	// Select roots first so progress totals describe the requested set, not
+	// every package in the overlay.
+	roots := make([]*PackageTarget, 0, len(targets))
+	for _, target := range targets {
+		key := target.Atom.Category + "/" + target.Atom.PN
+		if allowed != nil && !allowed[key] {
+			continue
+		}
+		roots = append(roots, target)
+	}
+
+	total := len(roots)
+	emit := func(p Progress) {
+		if opts.Progress != nil {
+			opts.Progress(p)
+		}
+	}
+
 	var results []UpstreamResult
 	// Single visited map shared across the whole walk (script's CHECKED_PACKAGES).
 	// A package already emitted at any depth is never emitted again.
 	visited := make(map[string]bool)
 
-	for _, target := range targets {
-		atomKey := target.Atom.Category + "/" + target.Atom.PN
-
-		// Filter to specified targets
-		if allowed != nil && !allowed[atomKey] {
-			continue
+	for i, target := range roots {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
+
+		atomKey := target.Atom.Category + "/" + target.Atom.PN
+		emit(Progress{Package: atomKey, Done: i, Total: total})
 
 		// Skip deprecated/renamed packages
 		if dep, ok := deprecated[atomKey]; ok {
@@ -956,20 +1007,23 @@ func walkAndCheckTargets(overlayDir string, deprecated map[string]DeprecatedInfo
 				Target:  dep.Target,
 			})
 			visited[atomKey] = true
+			emit(Progress{Package: atomKey, Done: i + 1, Total: total})
 			continue
 		}
 
 		// Skip if already emitted as a dependency of an earlier package.
 		if visited[atomKey] {
+			emit(Progress{Package: atomKey, Done: i + 1, Total: total})
 			continue
 		}
 
-		row := resolveOne(overlayDir, target.Ebuild, registry, allowPrereleases, cache, 0)
+		row := resolveOne(opts.OverlayDir, target.Ebuild, registry, allowPrereleases, cache, 0)
 		results = append(results, row)
 		visited[atomKey] = true
 
 		// Scan in-overlay dependencies (pre-order, depth 0→3, single visited map).
-		results = append(results, ScanDependencies(overlayDir, target.Ebuild, registry, allowPrereleases, cache, 0, visited)...)
+		results = append(results, ScanDependencies(opts.OverlayDir, target.Ebuild, registry, allowPrereleases, cache, 0, visited)...)
+		emit(Progress{Package: atomKey, Done: i + 1, Total: total})
 	}
 
 	return results, nil

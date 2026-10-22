@@ -136,9 +136,18 @@ Examples:
 			registry.Register(p)
 		}
 
+		runOpts := upstream.RunOptions{
+			OverlayDir:       overlayDir,
+			Registry:         registry,
+			Targets:          targets,
+			AllowPrereleases: upstreamPrereleases,
+			Fresh:            upstreamFresh,
+			CacheDir:         cfg.ResolveCacheDir(rootFlags.CacheDir),
+		}
+
 		// Machine output: every result, no spinner, no text on stdout.
 		if upstreamOutput == "json" {
-			results, err := runUpstreamWithTargets(overlayDir, registry, targets, upstreamPrereleases, upstreamFresh)
+			results, err := runUpstreamWithTargets(runOpts)
 			if err != nil {
 				return fmt.Errorf("upstream check failed: %w", err)
 			}
@@ -149,7 +158,7 @@ Examples:
 		if !upstreamTUI {
 			spinnerMsg := fmt.Sprintf("Checking packages in overlay: %s", overlayDir)
 			out, runErr := cli.AnimateSpinner(spinnerMsg, cfg.Quiet, func() (string, error) {
-				results, err := runUpstreamWithTargets(overlayDir, registry, targets, upstreamPrereleases, upstreamFresh)
+				results, err := runUpstreamWithTargets(runOpts)
 				if err != nil {
 					// Errors belong to the caller: return "" so the spinner
 					// never prints error text — RunE reports it to stderr
@@ -199,7 +208,7 @@ Examples:
 		}
 
 		// TUI mode: run check then show interactive TUI.
-		results, err := runUpstreamWithTargets(overlayDir, registry, targets, upstreamPrereleases, upstreamFresh)
+		results, err := runUpstreamWithTargets(runOpts)
 		if err != nil {
 			return fmt.Errorf("upstream check failed: %w", err)
 		}
