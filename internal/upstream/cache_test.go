@@ -3,12 +3,13 @@ package upstream
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestCache_Miss(t *testing.T) {
-	cache := NewVersionCache()
+	cache := NewVersionCacheWithPath(t.TempDir(), 6*time.Hour)
 	_, ok := cache.Get("nonexistent")
 	if ok {
 		t.Fatal("expected cache miss")
@@ -16,7 +17,7 @@ func TestCache_Miss(t *testing.T) {
 }
 
 func TestCache_Hit(t *testing.T) {
-	cache := NewVersionCache()
+	cache := NewVersionCacheWithPath(t.TempDir(), 6*time.Hour)
 	cache.Set("cat/pkg/pypi:1.0.0", "2.0.0")
 	version, ok := cache.Get("cat/pkg/pypi:1.0.0")
 	if !ok {
@@ -143,4 +144,11 @@ func stringsContainsAt(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestMakeKey_IncludesSchemaVersion(t *testing.T) {
+	got := MakeKey("cat", "pkg", "github", "1.0")
+	if !strings.HasPrefix(got, "v2/") {
+		t.Errorf("MakeKey = %q, want v2/ schema prefix", got)
+	}
 }

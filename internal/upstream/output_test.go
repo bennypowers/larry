@@ -471,3 +471,20 @@ func TestRenderTable_Indentation(t *testing.T) {
 		t.Errorf("expected '    p/c' (double-indented) in output, got:\n%s", output)
 	}
 }
+
+func TestStatusManual(t *testing.T) {
+	if got := StatusManual.String(); got != "MANUAL" {
+		t.Errorf("StatusManual.String() = %q, want MANUAL", got)
+	}
+	if StatusManual.IsSignificant() {
+		t.Error("StatusManual should be hidden by default")
+	}
+
+	r := UpstreamResult{Status: StatusManual, Source: SourceInfo{Label: "vendor", URL: "https://vendor.example/drivers"}}
+	if got := SourceCell(r, false); got != "vendor" {
+		t.Errorf("SourceCell(no links) = %q, want vendor", got)
+	}
+	if got := SourceCell(r, true); !strings.Contains(got, "https://vendor.example/drivers") || !strings.Contains(got, "vendor") {
+		t.Errorf("SourceCell(links) = %q, want hyperlinked vendor label", got)
+	}
+}

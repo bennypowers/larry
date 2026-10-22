@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/bump"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/git"
@@ -206,7 +207,7 @@ func runBump(cmd *cobra.Command, args []string) error {
 
 func runBumpDryRun(out io.Writer, dir string, mode bump.BumpMode, version string) error {
 	// Find the latest ebuild
-	latest, err := bump.FindLatestEbuild(dir)
+	latest, err := atom.FindLatest(dir)
 	if err != nil {
 		return fmt.Errorf("dry-run: %w", err)
 	}
@@ -224,7 +225,7 @@ func runBumpDryRun(out io.Writer, dir string, mode bump.BumpMode, version string
 	}
 
 	// Dry-run output; failures are unrecoverable.
-	_, _ = fmt.Fprintf(out, "dry-run: %s %s -> %s\n", action, latest, newVer)
+	_, _ = fmt.Fprintf(out, "dry-run: %s %s -> %s\n", action, latest.Path, newVer)
 	_, _ = fmt.Fprintln(out, "dry-run: would also run prepare (distfiles + manifest)")
 	return nil
 }

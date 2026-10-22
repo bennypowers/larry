@@ -279,7 +279,7 @@ func detectProviderFromSRCURI(srcURI string, homepage string) string {
 			return "pypi"
 		case strings.Contains(text, "files.pythonhosted.org/"):
 			return "pypi"
-		case strings.Contains(text, "mirror://npm/"):
+		case strings.Contains(text, "mirror://npm/"), strings.Contains(text, "registry.npmjs.org/"):
 			return "npm"
 		case strings.Contains(text, "mirror://github/") || strings.Contains(text, "mirror://github.com/"):
 			return "github"
@@ -653,11 +653,41 @@ func resolveOne(
 	// ResolveOptions on any GitHubProvider so that state does not leak
 	// between packages during a multi-package walk.
 	var resOpts *larryconfig.ResolveOptions
+	var cfgErr error
 	if eb.Path != "" {
-		if cfg, err := larryconfig.LoadConfig(filepath.Dir(eb.Path)); err == nil && cfg.Upstream != nil {
-			if opts, err := cfg.Upstream.Compile(einfo.PVVal); err == nil {
+		cfg, err := larryconfig.LoadConfig(filepath.Dir(eb.Path))
+		if err != nil {
+			cfgErr = err
+		} else if cfg.Upstream != nil {
+			opts, err := cfg.Upstream.Compile(einfo.PVVal)
+			if err != nil {
+				cfgErr = fmt.Errorf("invalid %s: %w", larryconfig.ConfigFile, err)
+			} else {
 				resOpts = opts
 			}
+		}
+	}
+	if cfgErr != nil {
+		return UpstreamResult{
+			Package: eb.Category + "/" + eb.PN,
+			Current: eb.PVR,
+			Latest:  "",
+			Status:  StatusUnknown,
+			Error:   cfgErr.Error(),
+			Depth:   depth,
+		}
+	}
+
+	// Vendor-only packages opt out of upstream checks. Report MANUAL rather
+	// than UNKNOWN, and link to HOMEPAGE as the manual source.
+	if resOpts != nil && !resOpts.Check {
+		return UpstreamResult{
+			Package: einfo.Category + "/" + einfo.Pkg,
+			Current: eb.PVR,
+			Latest:  "",
+			Status:  StatusManual,
+			Source:  SourceInfo{Label: "vendor", URL: einfo.HOMEPAGE},
+			Depth:   depth,
 		}
 	}
 
@@ -763,7 +793,7 @@ func resolveOne(
 			}
 		}
 
-			// Wire per-package ResolveOptions onto any GitHubProvider before
+		// Wire per-package ResolveOptions onto any GitHubProvider before
 		// resolution so that ignore_tags / strip_prefixes apply. UNCONDITIONAL
 		// set (even if resOpts is nil) to prevent state leaking from a
 		// previously resolved package.
@@ -966,9 +996,10 @@ func npmVarMap(ei *ebuild.EbuildInfo) ebuild.VariableMap {
 // expanding every `^[A-Z_]+="…"` assignment in the raw ebuild (the script
 // scans all variable declarations, not just the ebuild's SRC_URI field).
 //
-// Algorithm: take the first line containing mirror://npm/, expand variables,
-// strip everything up to and including mirror://npm/, then drop everything
-// from /-/ onward.
+// Algorithm: take the first line containing an npm registry URL (the legacy
+// mirror://npm/ scheme or a direct registry.npmjs.org URL), expand variables,
+// strip everything up to and including the registry prefix, then drop
+// everything from /-/ onward.
 //
 // Scoped URL with no /-/: we deliberately keep only the @scope/name prefix
 // rather than the script's output which includes the full path
@@ -976,23 +1007,29 @@ func npmVarMap(ei *ebuild.EbuildInfo) ebuild.VariableMap {
 //
 // e.g., "mirror://npm/@scope/pkg/-/pkg-1.0.tgz" -> "@scope/pkg"
 // e.g., "mirror://npm/pkg/-/pkg-1.0.tgz" -> "pkg"
+// e.g., "https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.tgz" -> "@scope/pkg"
 // e.g., "mirror://npm/${MY_SCOPE}/${PN}/-/${P}.tgz" -> "@scope/pkg"
 func extractNpmNameFromSRCURI(srcURI, fullContent, pn string) string {
 	lines := strings.Split(fullContent, "\n")
 	for _, line := range lines {
-		if !strings.Contains(line, "mirror://npm/") {
+		if !strings.Contains(line, "mirror://npm/") && !strings.Contains(line, "registry.npmjs.org/") {
 			continue
 		}
 		// Expand variables using npmVarMap + the shared expander
 		vars := npmVarMap(&ebuild.EbuildInfo{Raw: fullContent, Pkg: pn})
 		path := ebuild.ExpandVariables(line, vars)
 
-		// Strip everything up to and including "mirror://npm/"
-		idx := strings.Index(path, "mirror://npm/")
-		if idx < 0 {
+		// Strip everything up to and including the registry prefix
+		// (mirror://npm/ or a direct registry.npmjs.org/ URL).
+		for _, prefix := range []string{"mirror://npm/", "https://registry.npmjs.org/", "http://registry.npmjs.org/"} {
+			if idx := strings.Index(path, prefix); idx >= 0 {
+				path = path[idx+len(prefix):]
+				break
+			}
+		}
+		if strings.Contains(path, "mirror://npm/") || strings.Contains(path, "registry.npmjs.org/") {
 			continue
 		}
-		path = path[idx+len("mirror://npm/"):]
 
 		// The npm mirror URL format is: mirror://npm/<package-name>/-/<filename>
 		// Extract everything before the first "-/" (the package name)

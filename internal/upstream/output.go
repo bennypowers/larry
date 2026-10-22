@@ -69,6 +69,12 @@ func SourceGlyph(info SourceInfo) string {
 // no OSC-8 escape is emitted. This function reads no environment.
 func SourceCell(r UpstreamResult, hyperlinks bool) string {
 	switch r.Status {
+	case StatusManual:
+		// Vendor-only package: link to the upstream homepage when possible.
+		if r.Source.URL != "" && hyperlinks {
+			return renderCellHyperlink(r.Source.URL, "vendor")
+		}
+		return "vendor"
 	case StatusDeprecated:
 		// Show deprecated/renamed status — no glyph, no hyperlink.
 		if r.Target != "" {
@@ -117,15 +123,16 @@ func SourceLabelShort(info SourceInfo) string {
 type Status int
 
 const (
-	StatusOutdated Status = iota // Current version is behind upstream
-	StatusUpToDate               // Current version matches latest upstream
-	StatusAhead                  // Current version is newer than latest upstream
-	StatusNewerTag               // A newer tag exists but current is not outdated
-	StatusLive                   // Live version (9999)
-	StatusDeprecated             // Package is deprecated/renamed
-	StatusUnknown                // Could not determine upstream status
-	StatusHasRelease             // Live-only ebuild, but upstream has a release
-	StatusCheckTag               // Only a non-version-like tag was found; needs a human
+	StatusOutdated   Status = iota // Current version is behind upstream
+	StatusUpToDate                 // Current version matches latest upstream
+	StatusAhead                    // Current version is newer than latest upstream
+	StatusNewerTag                 // A newer tag exists but current is not outdated
+	StatusLive                     // Live version (9999)
+	StatusDeprecated               // Package is deprecated/renamed
+	StatusUnknown                  // Could not determine upstream status
+	StatusHasRelease               // Live-only ebuild, but upstream has a release
+	StatusCheckTag                 // Only a non-version-like tag was found; needs a human
+	StatusManual                   // Package opts out of checks (vendor-only binary)
 )
 
 // String returns the display string for the status.
@@ -149,28 +156,30 @@ func (s Status) String() string {
 		return "HAS-RELEASE"
 	case StatusCheckTag:
 		return "CHECK-TAG"
+	case StatusManual:
+		return "MANUAL"
 	default:
 		return "UNKNOWN"
 	}
 }
 
 // IsSignificant returns true for statuses that should be shown by default
-// (i.e., everything except UP-TO-DATE, LIVE, and DEPRECATED).
-// Use -v to show DEPRECATED packages.
+// (i.e., everything except UP-TO-DATE, LIVE, DEPRECATED, HAS-RELEASE, and MANUAL).
+// Use -v to show DEPRECATED and MANUAL packages.
 func (s Status) IsSignificant() bool {
-	return s != StatusUpToDate && s != StatusLive && s != StatusDeprecated && s != StatusHasRelease
+	return s != StatusUpToDate && s != StatusLive && s != StatusDeprecated && s != StatusHasRelease && s != StatusManual
 }
 
 // UpstreamResult holds the result of an upstream version check.
 type UpstreamResult struct {
-	Package     string
-	Current     string
-	Latest      string
-	Status      Status
-	Source      SourceInfo // label, URL, glyph — precomputed in upstream.go
-	Target      string     // target package atom (for deprecated/renamed)
-	Error       string
-	Depth       int        // recursion depth (0=root, 1=direct dep, 2=grand-dep, 3=great-grand-dep)
+	Package string
+	Current string
+	Latest  string
+	Status  Status
+	Source  SourceInfo // label, URL, glyph — precomputed in upstream.go
+	Target  string     // target package atom (for deprecated/renamed)
+	Error   string
+	Depth   int // recursion depth (0=root, 1=direct dep, 2=grand-dep, 3=great-grand-dep)
 }
 
 // String returns a human-readable string representation.

@@ -70,6 +70,31 @@ Results are displayed as a colored table:
 | STATUS | UP-TO-DATE (green), OUTDATED (red), LIVE (blue), UNKNOWN (yellow) |
 | SOURCE | Upstream source provider |
 
+### Per-package upstream rules
+
+A package can override upstream resolution with `<cat>/<pkg>/.larry/config.yaml`:
+
+```yaml
+upstream:
+  strategy: tags            # GitHub only: resolve from tags, not releases
+  tag_match: '^release-(?P<V>\d+\.\d+)$'
+  version_template: '${V}'
+  ignore_tags: ['^nightly$']
+  strip_prefixes: ['stable_']
+  check: false              # vendor-only package: report MANUAL, skip lookup
+```
+
+`strategy` accepts `""`, `releases`, or `semver` (the default release-first
+cascade) and `tags` (skip GitHub releases and resolve from remote tags, falling
+back to dated tags). In `tags` mode, tags whose GitHub release is marked as a
+prerelease are ignored unless `--prereleases` is passed. `tag_match` applies to
+raw tag names and its named captures feed `version_template`.
+
+`check: false` is for packages with no machine-readable upstream (vendor
+binary drivers, firmware downloaded by hand). They report `MANUAL`, are hidden
+from the default table, and link to `HOMEPAGE` with `-v`; `larry bump` refuses
+auto-versioning for them.
+
 ## `larry bump`
 
 Create a new versioned ebuild from the latest upstream version.

@@ -196,6 +196,8 @@ func (m *upstreamModel) statusColor(s upstream.Status) string {
 		return m.colors.Blue("HAS-RELEASE")
 	case upstream.StatusUnknown:
 		return m.colors.Yellow("UNKNOWN")
+	case upstream.StatusManual:
+		return m.colors.Dim("MANUAL")
 	default:
 		return m.colors.Dim("UNKNOWN")
 	}

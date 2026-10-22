@@ -18,20 +18,20 @@ import (
 
 // mockProvider is a test double for provider.UpstreamProvider
 type mockProvider struct {
-	mockType   remoteid.RemoteIdType
+	mockType    remoteid.RemoteIdType
 	mockVersion *version.Version
-	mockErr    error
+	mockErr     error
 }
 
-func (m *mockProvider) Type() remoteid.RemoteIdType             { return m.mockType }
-func (m *mockProvider) Metadata() provider.ProviderMetadata    { return provider.ProviderMetadata{} }
+func (m *mockProvider) Type() remoteid.RemoteIdType         { return m.mockType }
+func (m *mockProvider) Metadata() provider.ProviderMetadata { return provider.ProviderMetadata{} }
 func (m *mockProvider) FetchLatestVersion(rid remoteid.RemoteId, allowPrereleases bool) (*version.Version, error) {
 	if !allowPrereleases && m.mockVersion != nil && m.mockVersion.IsPrerelease() {
 		return nil, nil
 	}
 	return m.mockVersion, m.mockErr
 }
-func (m *mockProvider) Name() string                   { return "mock" }
+func (m *mockProvider) Name() string                         { return "mock" }
 func (m *mockProvider) IsPrerelease(v *version.Version) bool { return v.IsPrerelease() }
 
 // --- StatusHasRelease tests (D9) ---
@@ -72,6 +72,9 @@ func TestStatusIotaUnchanged(t *testing.T) {
 	}
 	if StatusCheckTag != 8 {
 		t.Errorf("StatusCheckTag = %d, want 8", StatusCheckTag)
+	}
+	if StatusManual != 9 {
+		t.Errorf("StatusManual = %d, want 9", StatusManual)
 	}
 }
 
@@ -319,9 +322,9 @@ SLOT="0"
 `)
 	registry := provider.NewProviderRegistry()
 	registry.Register(&mockProvider{
-		mockType:  remoteid.TypeGitHub,
+		mockType:    remoteid.TypeGitHub,
 		mockVersion: nil,
-		mockErr:   fmt.Errorf("no releases"),
+		mockErr:     fmt.Errorf("no releases"),
 	})
 	results, err := RunWithTargets(overlay, registry, nil, false, false)
 	if err != nil {
@@ -790,6 +793,27 @@ func TestDetectProviderFromSRCURI_NPM(t *testing.T) {
 	}
 }
 
+func TestDetectProviderFromSRCURI_NPMDirectRegistry(t *testing.T) {
+	// Direct registry URLs must classify as npm even when a GitHub releases
+	// URL (the overlay's own deps tarball) sits in the same SRC_URI.
+	srcURI := "https://registry.npmjs.org/@scope/myapp/-/myapp-1.0.0.tgz " +
+		"https://github.com/o/r/releases/download/myapp/myapp-1.0.0-deps.tar.xz"
+	tType := detectProviderFromSRCURI(srcURI, "")
+	if tType != "npm" {
+		t.Fatalf("expected npm, got %s", tType)
+	}
+}
+
+func TestExtractNpmNameFromSRCURI_DirectRegistry(t *testing.T) {
+	content := `MY_NPM_SCOPE="@earendil-works"
+SRC_URI="https://registry.npmjs.org/${MY_NPM_SCOPE}/${PN}/-/${P}.tgz -> ${P}.tgz"
+`
+	got := extractNpmNameFromSRCURI("", content, "pi-coding-agent")
+	if got != "@earendil-works/pi-coding-agent" {
+		t.Fatalf("extractNpmNameFromSRCURI(direct) = %q, want %q", got, "@earendil-works/pi-coding-agent")
+	}
+}
+
 func TestDetectProviderFromSRCURI_GitHub(t *testing.T) {
 	tType := detectProviderFromSRCURI("mirror://github/owner/repo/archive/v1.0.0.tar.gz", "")
 	if tType != "github" {
@@ -894,9 +918,11 @@ type fakeTagResolver struct {
 	ver *version.Version
 }
 
-func (f *fakeTagResolver) Type() remoteid.RemoteIdType                { return remoteid.TypeGitHub }
-func (f *fakeTagResolver) Name() string                               { return "fake" }
-func (f *fakeTagResolver) Metadata() provider.ProviderMetadata        { return provider.ProviderMetadata{Name: "fake"} }
+func (f *fakeTagResolver) Type() remoteid.RemoteIdType { return remoteid.TypeGitHub }
+func (f *fakeTagResolver) Name() string                { return "fake" }
+func (f *fakeTagResolver) Metadata() provider.ProviderMetadata {
+	return provider.ProviderMetadata{Name: "fake"}
+}
 func (f *fakeTagResolver) FetchLatestVersion(rid remoteid.RemoteId, pre bool) (*version.Version, error) {
 	if f.ver == nil {
 		return nil, errors.New("fake: no version")
@@ -1065,7 +1091,7 @@ SLOT="0"
 	reg := provider.NewProviderRegistry()
 	// mockProvider does NOT implement ResolverWithTags.
 	reg.Register(&mockProvider{
-		mockType:  remoteid.TypeGitHub,
+		mockType:    remoteid.TypeGitHub,
 		mockVersion: mustVersion("7.0"),
 	})
 
@@ -1180,5 +1206,77 @@ SLOT="0"
 	}
 	if r.Error == "" {
 		t.Error("Error must be non-empty")
+	}
+}
+
+func TestResolveOne_InvalidStrategyReportsError(t *testing.T) {
+	overlay := setupTestOverlay(t)
+	writeEbuild(t, overlay, "dev-util/badcfg/badcfg-1.0.ebuild", `EAPI=8
+DESCRIPTION="Test"
+SRC_URI="https://github.com/o/r/archive/x.tar.gz"
+LICENSE="MIT"
+SLOT="0"
+`)
+	cfgDir := filepath.Join(overlay, "dev-util", "badcfg", ".larry")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte("upstream:\n  strategy: bogus\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := provider.NewProviderRegistry()
+	results, err := RunWithTargets(overlay, reg, nil, false, true)
+	if err != nil {
+		t.Fatalf("RunWithTargets: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	r := results[0]
+	if r.Status != StatusUnknown {
+		t.Errorf("status = %v, want %v", r.Status, StatusUnknown)
+	}
+	if !strings.Contains(r.Error, "strategy") {
+		t.Errorf("Error = %q, want it to mention strategy", r.Error)
+	}
+}
+
+func TestResolveOne_ManualCheckSkipsProvider(t *testing.T) {
+	overlay := setupTestOverlay(t)
+	writeEbuild(t, overlay, "net-print/vendorprint/vendorprint-3.5.1.ebuild", `EAPI=8
+DESCRIPTION="Vendor-only binary driver"
+HOMEPAGE="https://vendor.example/downloads"
+SRC_URI="https://vendor.example/files/vendorprint-3.5.1.rpm"
+LICENSE="vendor-eula"
+SLOT="0"
+`)
+	cfgDir := filepath.Join(overlay, "net-print", "vendorprint", ".larry")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte("upstream:\n  check: false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty registry: if the manual branch did not short-circuit, this would
+	// produce a "no provider" error instead.
+	reg := provider.NewProviderRegistry()
+	results, err := RunWithTargets(overlay, reg, nil, false, true)
+	if err != nil {
+		t.Fatalf("RunWithTargets: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	r := results[0]
+	if r.Status != StatusManual {
+		t.Errorf("status = %v, want %v", r.Status, StatusManual)
+	}
+	if r.Error != "" {
+		t.Errorf("Error = %q, want empty", r.Error)
+	}
+	if r.Source.URL != "https://vendor.example/downloads" {
+		t.Errorf("Source.URL = %q, want HOMEPAGE", r.Source.URL)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"bennypowers.dev/larry/internal/atom"
@@ -25,23 +26,23 @@ const (
 
 // BumpConfig holds configuration for a version bump.
 type BumpConfig struct {
-	Dir             string                        // ebuild directory path
-	Mode            BumpMode                      // bump mode (auto, version, revision)
-	Version         string                        // target version (for version mode)
-	ProviderReg     *provider.ProviderRegistry    // provider registry for auto-version
-	AllowPrerelease bool                          // allow prerelease versions
+	Dir             string                     // ebuild directory path
+	Mode            BumpMode                   // bump mode (auto, version, revision)
+	Version         string                     // target version (for version mode)
+	ProviderReg     *provider.ProviderRegistry // provider registry for auto-version
+	AllowPrerelease bool                       // allow prerelease versions
 }
 
 // BumpResult holds the result of a version bump operation.
 type BumpResult struct {
-	OldFile       string   // original ebuild path
-	NewFile       string   // new ebuild path
-	PackageName   string   // package name (PN)
-	OldVersion    string   // old version (PV)
-	NewVersion    string   // new version (PV)
-	Revision      int      // revision number (0 if not a revision bump)
-	Mode          BumpMode // the mode used
-	Warnings      []string // advisory warnings, e.g. version-pinned FILESDIR refs
+	OldFile     string   // original ebuild path
+	NewFile     string   // new ebuild path
+	PackageName string   // package name (PN)
+	OldVersion  string   // old version (PV)
+	NewVersion  string   // new version (PV)
+	Revision    int      // revision number (0 if not a revision bump)
+	Mode        BumpMode // the mode used
+	Warnings    []string // advisory warnings, e.g. version-pinned FILESDIR refs
 }
 
 // Bump performs a version or revision bump on ebuilds in the given directory.
@@ -106,13 +107,21 @@ func Bump(cfg BumpConfig) (*BumpResult, error) {
 		result.NewVersion = cfg.Version
 	}
 
+	// The new version flows unvalidated into the generated ebuild body (PV=
+	// line) and the output filename — an upstream version with newlines or
+	// slashes would inject arbitrary bash lines or traverse paths. Reject
+	// anything outside the Gentoo version charset before any use.
+	if err := validateNewVersion(result.NewVersion); err != nil {
+		return nil, err
+	}
+
 	// Generate new ebuild with bumped version
 	// Skip if old and new versions are the same (no bump needed).
 	if result.NewVersion == result.OldVersion {
 		return nil, fmt.Errorf("already at latest version %s", result.OldVersion)
 	}
 
-	newFileName, newContent, err := generateBumpedEbuild(latest, content, pn, pv, result.NewVersion)
+	newFileName, newContent, err := generateBumpedEbuild(latest, content, pn, result.NewVersion)
 	if err != nil {
 		return nil, fmt.Errorf("bump: %w", err)
 	}
@@ -155,14 +164,18 @@ func revisionBump(latest *atom.ParsedEbuild, content []byte) (*BumpResult, error
 	}, nil
 }
 
-// FindLatestEbuild is the exported version of findLatestEbuild.
-// It finds the ebuild with the highest version in the directory.
-func FindLatestEbuild(dir string) (string, error) {
-	pe, err := atom.FindLatest(dir)
-	if err != nil {
-		return "", err
+// versionCharsetRe is the Gentoo version charset: a version must start with a
+// digit and may contain only letters, digits, '.', '+', '_' and '-'. No
+// slashes, whitespace or control characters.
+var versionCharsetRe = regexp.MustCompile(`^[0-9][A-Za-z0-9.+_-]*$`)
+
+// validateNewVersion rejects version strings that could inject content into
+// the generated ebuild or escape the output directory via its filename.
+func validateNewVersion(pv string) error {
+	if !versionCharsetRe.MatchString(pv) {
+		return fmt.Errorf("bump: invalid version %q: must start with a digit and contain only letters, digits, '.', '+', '_' and '-'", pv)
 	}
-	return pe.Path, nil
+	return nil
 }
 
 // extractPVFromContent extracts PV from the ebuild content.
@@ -196,6 +209,21 @@ func getUpstreamVersion(cfg BumpConfig, pn string, ebuildPath string) (string, e
 		return "", fmt.Errorf("unable to parse ebuild info for provider resolution")
 	}
 
+	// Load per-package .larry/config.yaml upstream config first: a package may
+	// opt out of upstream checks entirely (`check: false`), in which case there
+	// is no point in provider detection.
+	var resOpts *larryconfig.ResolveOptions
+	if pkgDir := filepath.Dir(ebuildPath); pkgDir != "" {
+		if lcfg, lerr := larryconfig.LoadConfig(pkgDir); lerr == nil && lcfg.Upstream != nil {
+			if opts, cerr := lcfg.Upstream.Compile(ebi.PVVal); cerr == nil {
+				resOpts = opts
+			}
+		}
+	}
+	if resOpts != nil && !resOpts.Check {
+		return "", fmt.Errorf("upstream checks are disabled for this package (.larry/config.yaml: check: false); bump manually")
+	}
+
 	// Use shared provider resolution logic
 	providerType := upstream.ResolveProviderType(ebuildPath, ebi.SRC_URI, ebi.HOMEPAGE, ebi.Inherit, ebi.Raw)
 	if providerType == "" {
@@ -209,17 +237,6 @@ func getUpstreamVersion(cfg BumpConfig, pn string, ebuildPath string) (string, e
 	}
 	if rid == nil {
 		return "", fmt.Errorf("could not resolve remote id for %s", providerType)
-	}
-
-	// Load per-package .larry/config.yaml upstream config and wire ResolveOptions
-	// onto the provider (same logic as upstream command's resolveOne).
-	var resOpts *larryconfig.ResolveOptions
-	if pkgDir := filepath.Dir(ebuildPath); pkgDir != "" {
-		if lcfg, lerr := larryconfig.LoadConfig(pkgDir); lerr == nil && lcfg.Upstream != nil {
-			if opts, cerr := lcfg.Upstream.Compile(ebi.PVVal); cerr == nil {
-				resOpts = opts
-			}
-		}
 	}
 
 	// Get provider and wire ResolveOptions onto GitHubProvider.
@@ -276,20 +293,20 @@ func getUpstreamVersion(cfg BumpConfig, pn string, ebuildPath string) (string, e
 
 // generateBumpedEbuild creates a new ebuild file with the bumped version.
 // Returns (filename, content, error).
-func generateBumpedEbuild(latest *atom.ParsedEbuild, content []byte, pn, oldPV, newPV string) (string, string, error) {
+func generateBumpedEbuild(latest *atom.ParsedEbuild, content []byte, pn, newPV string) (string, string, error) {
 	oldDir := filepath.Dir(latest.Path)
 
 	// New filename: pn-newPV.ebuild
 	newFileName := filepath.Join(oldDir, pn+"-"+newPV+".ebuild")
 
 	// Generate content
-	newContent := generateBumpedFileContent(string(content), pn, oldPV, newPV)
+	newContent := generateBumpedFileContent(string(content), pn, newPV)
 
 	return newFileName, newContent, nil
 }
 
 // generateBumpedFileContent generates the new ebuild file content with bumped version.
-func generateBumpedFileContent(oldContent, pn, oldPV, newPV string) string {
+func generateBumpedFileContent(oldContent, pn, newPV string) string {
 	lines := strings.Split(oldContent, "\n")
 	var newLines []string
 
@@ -308,23 +325,10 @@ func generateBumpedFileContent(oldContent, pn, oldPV, newPV string) string {
 			continue
 		}
 
-		// Update SRC_URI: replace hardcoded version references
-		newLine := updateSRCURI(line, oldPV, newPV)
-		newLines = append(newLines, newLine)
+		// SRC_URI lines are kept as-is: ebuilds use ${PV}/${P}/${A} variables
+		// that Portage expands itself.
+		newLines = append(newLines, line)
 	}
 
 	return strings.Join(newLines, "\n")
-}
-
-// updateSRCURI updates SRC_URI lines with the new version references.
-// Preserves ${PV}, ${P}, ${A} variable references.
-func updateSRCURI(line, oldPV, newPV string) string {
-	trimmed := strings.TrimSpace(line)
-	if !strings.HasPrefix(trimmed, "SRC_URI=") {
-		return line
-	}
-
-	// Ebuild SRC_URI typically uses variables (${PV}, ${P}, ${A}) that
-	// Portage handles automatically. No need to replace version strings.
-	return line
 }

@@ -46,14 +46,6 @@ func DefaultCachePath() string {
 	return filepath.Join(u, ".cache", cacheDirName, cacheSubdir)
 }
 
-// NewVersionCache creates a new in-memory cache with default 6h TTL.
-func NewVersionCache() *VersionCache {
-	return &VersionCache{
-		ttl:      defaultTTL,
-		inMemory: make(map[string]cachedEntry),
-	}
-}
-
 // NewVersionCacheWithPath creates a new cache with disk persistence.
 // Entries are stored as files under dir/.
 func NewVersionCacheWithPath(dir string, ttl time.Duration) *VersionCache {
@@ -178,12 +170,12 @@ func (c *VersionCache) Clear() error {
 
 // --- Cache key helpers ---
 
+// cacheKeySchema invalidates entries whose meaning changed. Bump it whenever
+// version resolution semantics change (v2: PEP 440 dev releases are filtered,
+// GitHub tags strategy added).
+const cacheKeySchema = "v2"
+
 // MakeKey creates a cache key from category, package, provider type, and version.
 func MakeKey(category, pkg, provider string, version string) string {
-	return fmt.Sprintf("%s/%s/%s:%s", category, pkg, provider, version)
-}
-
-// MakeKeyFromRemoteId creates a cache key from a RemoteId.
-func MakeKeyFromRemoteId(category, pkg, provider string, ridType string) string {
-	return fmt.Sprintf("%s/%s/%s:%s", category, pkg, provider, ridType)
+	return fmt.Sprintf("%s/%s/%s/%s:%s", cacheKeySchema, category, pkg, provider, version)
 }
