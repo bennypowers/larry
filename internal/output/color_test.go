@@ -2,7 +2,29 @@ package output
 
 import (
 	"testing"
+
+	"github.com/muesli/termenv"
 )
+
+func TestColorHelper_Profile(t *testing.T) {
+	always, err := NewColorHelper("always")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !always.Enabled() || always.Profile() == termenv.Ascii {
+		t.Errorf("always: enabled=%v profile=%v, want enabled and non-Ascii",
+			always.Enabled(), always.Profile())
+	}
+
+	never, err := NewColorHelper("never")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if never.Enabled() || never.Profile() != termenv.Ascii {
+		t.Errorf("never: enabled=%v profile=%v, want disabled and Ascii",
+			never.Enabled(), never.Profile())
+	}
+}
 
 func TestColor_NewColorHelper(t *testing.T) {
 	tests := []struct {

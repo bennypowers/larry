@@ -19,11 +19,21 @@ func NewColorHelper(mode string) (*ColorHelper, error) {
 	if mode != "auto" && mode != "always" && mode != "never" {
 		return nil, &ConfigError{fmt.Sprintf("invalid color mode: %q (must be auto, always, or never)", mode)}
 	}
+	profile := termenv.Ascii
+	if mode == "always" {
+		profile = termenv.TrueColor
+	}
 	return &ColorHelper{
 		mode:    mode,
 		enabled: mode == "always",
-		profile: termenv.Ascii,
+		profile: profile,
 	}, nil
+}
+
+// Profile returns the resolved termenv profile. It is Ascii when colour is
+// disabled and the detected/forced profile otherwise.
+func (c *ColorHelper) Profile() termenv.Profile {
+	return c.profile
 }
 
 // Detect auto-detects terminal color support.

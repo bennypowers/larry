@@ -160,16 +160,71 @@ func TestSourceCell_DeprecatedNoTarget(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestHyperlinksEnabled — environment gate
+// TestHyperlinksOption — explicit render option, no environment gate
 // ---------------------------------------------------------------------------
-func TestHyperlinksEnabled(t *testing.T) {
-	t.Setenv("LARRY_COLOR", "always")
-	if !HyperlinksEnabled() {
-		t.Error("LARRY_COLOR=always → HyperlinksEnabled() should be true")
+func TestHyperlinksOption(t *testing.T) {
+	var plain bytes.Buffer
+	if err := RenderTable(&plain, []UpstreamResult{{
+		Package: "dev-util/a", Status: StatusOutdated,
+		Source: SourceInfo{Label: "GitHub:acme/a", URL: "https://github.com/acme/a"},
+	}}, RenderOptions{Hyperlinks: false}); err != nil {
+		t.Fatal(err)
 	}
-	t.Setenv("LARRY_COLOR", "never")
-	if HyperlinksEnabled() {
-		t.Error("LARRY_COLOR=never → HyperlinksEnabled() should be false")
+	if strings.Contains(plain.String(), "\033]8;;") {
+		t.Errorf("Hyperlinks:false emitted OSC-8: %q", plain.String())
+	}
+
+	var linked bytes.Buffer
+	if err := RenderTable(&linked, []UpstreamResult{{
+		Package: "dev-util/a", Status: StatusOutdated,
+		Source: SourceInfo{Label: "GitHub:acme/a", URL: "https://github.com/acme/a"},
+	}}, RenderOptions{Hyperlinks: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(linked.String(), "\033]8;;https://github.com/acme/a\033\\") {
+		t.Errorf("Hyperlinks:true did not emit the URL as target: %q", linked.String())
+	}
+}
+
+func TestRenderTable_ColorFalseNoANSI(t *testing.T) {
+	var buf bytes.Buffer
+	results := []UpstreamResult{{Package: "a/b", Status: StatusOutdated, Source: SourceInfo{URL: "https://example.com"}}}
+	if err := RenderTable(&buf, results, RenderOptions{Color: false, Hyperlinks: false}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "\x1b[") {
+		t.Errorf("Color:false emitted CSI: %q", buf.String())
+	}
+}
+
+func TestRenderTable_ColorTrueHasANSI(t *testing.T) {
+	var buf bytes.Buffer
+	results := []UpstreamResult{{Package: "a/b", Status: StatusOutdated}}
+	if err := RenderTable(&buf, results, RenderOptions{Color: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "\x1b[") {
+		t.Errorf("Color:true emitted no CSI: %q", buf.String())
+	}
+}
+
+func TestStatusColorMapping(t *testing.T) {
+	want := map[Status]string{
+		StatusOutdated:   "208",
+		StatusUpToDate:   "42",
+		StatusAhead:      "32",
+		StatusNewerTag:   "220",
+		StatusCheckTag:   "220",
+		StatusLive:       "39",
+		StatusHasRelease: "39",
+		StatusDeprecated: "249",
+		StatusManual:     "249",
+		StatusUnknown:    "220",
+	}
+	for status, color := range want {
+		if got := string(StatusColor(status)); got != color {
+			t.Errorf("StatusColor(%s) = %q, want %q", status, got, color)
+		}
 	}
 }
 
@@ -178,7 +233,7 @@ func TestHyperlinksEnabled(t *testing.T) {
 // A failing writer must surface the error.
 // ---------------------------------------------------------------------------
 func TestRenderTable_ErrorPropagates(t *testing.T) {
-	err := RenderTable(failWriter{}, []UpstreamResult{{Package: "a/b"}}, false)
+	err := RenderTable(failWriter{}, []UpstreamResult{{Package: "a/b"}}, RenderOptions{})
 	if err == nil {
 		t.Fatal("expected error from failing writer, got nil")
 	}
@@ -207,7 +262,7 @@ func TestRenderTable_AllProviders(t *testing.T) {
 
 	t.Setenv("LARRY_COLOR", "never")
 	var buf bytes.Buffer
-	if err := RenderTable(&buf, results, false); err != nil {
+	if err := RenderTable(&buf, results, RenderOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -263,7 +318,7 @@ func TestRenderTable_Outdated(t *testing.T) {
 	results := []UpstreamResult{
 		{Package: "dev-python/requests", Current: "1.0.0", Latest: "2.0.0", Status: StatusOutdated, Source: SourceInfo{URL: "https://pypi.org/project/requests/"}},
 	}
-	if err := RenderTable(&buf, results, false); err != nil {
+	if err := RenderTable(&buf, results, RenderOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	output := buf.String()
@@ -283,7 +338,7 @@ func TestRenderTable_UpToDate(t *testing.T) {
 	results := []UpstreamResult{
 		{Package: "dev-python/requests", Current: "2.0.0", Latest: "2.0.0", Status: StatusUpToDate},
 	}
-	if err := RenderTable(&buf, results, false); err != nil {
+	if err := RenderTable(&buf, results, RenderOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	output := buf.String()
@@ -297,7 +352,7 @@ func TestRenderTable_Ahead(t *testing.T) {
 	results := []UpstreamResult{
 		{Package: "dev-python/requests", Current: "3.0.0", Latest: "2.0.0", Status: StatusAhead},
 	}
-	if err := RenderTable(&buf, results, false); err != nil {
+	if err := RenderTable(&buf, results, RenderOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	output := buf.String()
@@ -311,7 +366,7 @@ func TestRenderTable_Live(t *testing.T) {
 	results := []UpstreamResult{
 		{Package: "dev-python/requests", Current: "9999", Latest: "", Status: StatusLive},
 	}
-	if err := RenderTable(&buf, results, false); err != nil {
+	if err := RenderTable(&buf, results, RenderOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	output := buf.String()
@@ -325,7 +380,7 @@ func TestRenderTable_Unknown(t *testing.T) {
 	results := []UpstreamResult{
 		{Package: "dev-python/requests", Current: "1.0.0", Latest: "", Status: StatusUnknown},
 	}
-	if err := RenderTable(&buf, results, false); err != nil {
+	if err := RenderTable(&buf, results, RenderOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	output := buf.String()
@@ -337,7 +392,7 @@ func TestRenderTable_Unknown(t *testing.T) {
 func TestRenderTable_Empty(t *testing.T) {
 	var buf bytes.Buffer
 	results := []UpstreamResult{}
-	if err := RenderTable(&buf, results, false); err != nil {
+	if err := RenderTable(&buf, results, RenderOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	output := buf.String()
@@ -353,7 +408,7 @@ func TestRenderTable_MultipleResults(t *testing.T) {
 		{Package: "dev-python/flask", Current: "2.0.0", Latest: "2.0.0", Status: StatusUpToDate},
 		{Package: "dev-python/django", Current: "5.0.0", Latest: "4.0.0", Status: StatusAhead},
 	}
-	if err := RenderTable(&buf, results, false); err != nil {
+	if err := RenderTable(&buf, results, RenderOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	output := buf.String()
@@ -389,30 +444,31 @@ func TestStatusString(t *testing.T) {
 }
 
 func TestStatusColor_CheckTag(t *testing.T) {
-	t.Setenv("LARRY_COLOR", "never")
 	var buf bytes.Buffer
 	results := []UpstreamResult{
 		{Package: "dev-foo/bar", Current: "1.0", Latest: "nightly", Status: StatusCheckTag, Source: SourceInfo{URL: "https://example.com"}},
 	}
-	if err := RenderTable(&buf, results, true); err != nil {
+	if err := RenderTable(&buf, results, RenderOptions{Hyperlinks: true}); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
 	if strings.Contains(out, "\x1b[") {
-		t.Errorf("RenderTable with LARRY_COLOR=never emitted CSI; output = %q", out)
+		t.Errorf("RenderTable with Color:false emitted CSI; output = %q", out)
 	}
 	if !strings.Contains(out, "CHECK-TAG") {
 		t.Errorf("RenderTable did not render CHECK-TAG; output = %q", out)
 	}
 
-	t.Setenv("LARRY_COLOR", "always")
 	var buf2 bytes.Buffer
-	if err := RenderTable(&buf2, results, true); err != nil {
+	if err := RenderTable(&buf2, results, RenderOptions{Color: true, Hyperlinks: true}); err != nil {
 		t.Fatal(err)
 	}
 	out2 := buf2.String()
 	if !strings.Contains(out2, "CHECK-TAG") {
-		t.Errorf("RenderTable with LARRY_COLOR=always did not render CHECK-TAG; output = %q", out2)
+		t.Errorf("RenderTable with Color:true did not render CHECK-TAG; output = %q", out2)
+	}
+	if !strings.Contains(out2, "\x1b[") {
+		t.Errorf("RenderTable with Color:true emitted no ANSI; output = %q", out2)
 	}
 }
 
@@ -457,7 +513,7 @@ func TestRenderTable_Indentation(t *testing.T) {
 		{Package: "p/c", Current: "1.0", Latest: "1.0", Status: StatusUpToDate, Depth: 2},
 	}
 	t.Setenv("LARRY_COLOR", "never")
-	if err := RenderTable(&buf, results, false); err != nil {
+	if err := RenderTable(&buf, results, RenderOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	output := buf.String()

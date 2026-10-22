@@ -177,7 +177,10 @@ Examples:
 				}
 
 				var buf strings.Builder
-				if err := upstream.RenderTable(&buf, results, upstream.HyperlinksEnabled()); err != nil {
+				if err := upstream.RenderTable(&buf, results, upstream.RenderOptions{
+					Color:      color.Enabled(),
+					Hyperlinks: color.Enabled(),
+				}); err != nil {
 					return "", fmt.Errorf("render table: %w", err)
 				}
 				buf.WriteString("\nCheck complete. Cache stored in: " + upstream.DefaultCachePath() + " (expires after 6h)\n")

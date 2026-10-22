@@ -3,7 +3,6 @@ package upstream
 import (
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -31,18 +30,6 @@ type SourceInfo struct {
 	//               "SourceHut:git.sr.ht/~tsdh/nirius"
 	URL   string // canonical browse URL, already host-correct
 	Glyph string // Nerd Font glyph, "" when unknown
-}
-
-// HyperlinksEnabled reports whether OSC-8 hyperlinks should be emitted.
-// Same rule as RenderTable's colour detection (output.go:162-169).
-func HyperlinksEnabled() bool {
-	switch os.Getenv("LARRY_COLOR") {
-	case "always":
-		return true
-	case "never":
-		return false
-	}
-	return termenv.DefaultOutput().ColorProfile() != termenv.Ascii
 }
 
 // SourceGlyph returns the Nerd Font icon for a SourceInfo.
@@ -195,52 +182,59 @@ func renderCellHyperlink(url, text string) string {
 	return fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", url, text)
 }
 
-// RenderTable renders upstream check results as a formatted table. hyperlinks is
-// passed straight through to SourceCell; it does not affect the status-column
-// colouring, which keeps its own detection below.
-func RenderTable(w io.Writer, results []UpstreamResult, hyperlinks bool) error {
-	// Detect color support
-	colorProfile := termenv.Ascii
-	if colorEnv := os.Getenv("LARRY_COLOR"); colorEnv == "always" {
-		colorProfile = termenv.TrueColor
-	} else if colorEnv != "never" {
-		output := termenv.DefaultOutput()
-		colorProfile = output.ColorProfile()
+// RenderOptions controls colour and OSC-8 hyperlinks. Callers derive both
+// from the resolved --color setting; RenderTable never reads the environment.
+type RenderOptions struct {
+	Color      bool
+	Hyperlinks bool
+}
+
+// StatusColor is the single status-to-colour mapping shared by the plain
+// table and the TUI theme.
+func StatusColor(s Status) lipgloss.Color {
+	switch s {
+	case StatusOutdated:
+		return lipgloss.Color("208") // bright orange
+	case StatusUpToDate:
+		return lipgloss.Color("42") // green
+	case StatusAhead:
+		return lipgloss.Color("32") // cyan
+	case StatusNewerTag, StatusCheckTag:
+		return lipgloss.Color("220") // yellow
+	case StatusLive, StatusHasRelease:
+		return lipgloss.Color("39") // blue
+	case StatusDeprecated, StatusManual:
+		return lipgloss.Color("249") // dim
+	default:
+		return lipgloss.Color("220") // yellow (unknown)
+	}
+}
+
+// RenderTable renders upstream check results as a formatted table.
+func RenderTable(w io.Writer, results []UpstreamResult, opts RenderOptions) error {
+	r := lipgloss.NewRenderer(w)
+	if opts.Color {
+		r.SetColorProfile(termenv.TrueColor)
+	} else {
+		r.SetColorProfile(termenv.Ascii)
 	}
 
-	// Create table with rounded borders
+	// Create table with rounded borders.
 	t := table.New().
 		Border(lipgloss.NormalBorder()).
-		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("240"))).
+		BorderStyle(r.NewStyle().Foreground(lipgloss.Color("240"))).
 		StyleFunc(func(row, col int) lipgloss.Style {
 			switch {
 			case row == table.HeaderRow: // header row
-				return lipgloss.NewStyle().Bold(true).PaddingLeft(1).PaddingRight(1)
-			case col == 3 && colorProfile != termenv.Ascii: // status column
-				var r UpstreamResult
+				return r.NewStyle().Bold(true).PaddingLeft(1).PaddingRight(1)
+			case col == 3 && opts.Color: // status column
+				var res UpstreamResult
 				if row >= 0 && row < len(results) {
-					r = results[row]
+					res = results[row]
 				}
-				var color lipgloss.Color
-				switch r.Status {
-				case StatusOutdated:
-					color = lipgloss.Color("208") // bright orange
-				case StatusUpToDate:
-					color = lipgloss.Color("42") // green
-				case StatusAhead:
-					color = lipgloss.Color("32") // cyan
-				case StatusNewerTag:
-					color = lipgloss.Color("220") // yellow
-				case StatusCheckTag:
-					color = lipgloss.Color("220") // yellow
-				case StatusLive:
-					color = lipgloss.Color("39") // blue
-				default:
-					color = lipgloss.Color("249") // dim
-				}
-				return lipgloss.NewStyle().Foreground(color).PaddingLeft(1).PaddingRight(1)
+				return r.NewStyle().Foreground(StatusColor(res.Status)).PaddingLeft(1).PaddingRight(1)
 			default:
-				return lipgloss.NewStyle().PaddingLeft(1).PaddingRight(1)
+				return r.NewStyle().PaddingLeft(1).PaddingRight(1)
 			}
 		})
 
@@ -248,10 +242,9 @@ func RenderTable(w io.Writer, results []UpstreamResult, hyperlinks bool) error {
 	t.Headers("Package", "Current", "Latest", "Status", "Source")
 
 	// Data rows — indent Package cell by 2 spaces per depth level (plan 18).
-	// Plan 19 owns the Source cell; do not touch it here.
-	for _, r := range results {
-		pkg := strings.Repeat("  ", r.Depth) + r.Package
-		t.Row(pkg, r.Current, r.Latest, r.Status.String(), SourceCell(r, hyperlinks))
+	for _, res := range results {
+		pkg := strings.Repeat("  ", res.Depth) + res.Package
+		t.Row(pkg, res.Current, res.Latest, res.Status.String(), SourceCell(res, opts.Hyperlinks))
 	}
 
 	_, err := fmt.Fprint(w, t.Render())
