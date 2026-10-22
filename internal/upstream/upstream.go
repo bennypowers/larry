@@ -16,7 +16,7 @@ import (
 	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/larryconfig"
-	"bennypowers.dev/larry/internal/logger"
+	"bennypowers.dev/larry/internal/output"
 	"bennypowers.dev/larry/internal/provider"
 	"bennypowers.dev/larry/internal/providers"
 	"bennypowers.dev/larry/internal/remoteid"
@@ -636,6 +636,51 @@ type ebuildIdentity struct {
 	rid          *remoteid.RemoteId
 }
 
+// identifyCache memoizes parsed ebuild identity for one run. Discovery, the
+// plan preview, the batch prefetcher, and each worker otherwise re-parse the
+// same ebuild and .larry/config.yaml.
+var (
+	identifyCacheMu sync.Mutex
+	identifyCache   = make(map[string]*identifyEntry)
+)
+
+// identifyEntry is parsed once per path; concurrent workers wait on the same
+// entry instead of parsing duplicates.
+type identifyEntry struct {
+	once sync.Once
+	id   *ebuildIdentity
+	err  error
+}
+
+// resetIdentifyCache starts a fresh memo for the next run. It must be called
+// before the first identifyEbuildCached of that run so config edits apply.
+func resetIdentifyCache() {
+	identifyCacheMu.Lock()
+	identifyCache = make(map[string]*identifyEntry)
+	identifyCacheMu.Unlock()
+}
+
+// identifyEbuildCached returns the per-run identity for eb, parsing at most
+// once per absolute ebuild path.
+func identifyEbuildCached(eb *atom.ParsedEbuild) (*ebuildIdentity, error) {
+	if eb == nil || eb.Path == "" {
+		return identifyEbuild(eb)
+	}
+
+	identifyCacheMu.Lock()
+	entry, ok := identifyCache[eb.Path]
+	if !ok {
+		entry = &identifyEntry{}
+		identifyCache[eb.Path] = entry
+	}
+	identifyCacheMu.Unlock()
+
+	entry.once.Do(func() {
+		entry.id, entry.err = identifyEbuild(eb)
+	})
+	return entry.id, entry.err
+}
+
 func identifyEbuild(eb *atom.ParsedEbuild) (*ebuildIdentity, error) {
 	einfo, err := ParseEbuildInfo(eb.Path)
 	if err != nil {
@@ -695,7 +740,7 @@ func resolveOne(
 	depth int,
 	hints map[string]*provider.Resolution,
 ) UpstreamResult {
-	id, err := identifyEbuild(eb)
+	id, err := identifyEbuildCached(eb)
 	if err != nil {
 		return UpstreamResult{
 			Package: eb.Category + "/" + eb.PN,
@@ -725,10 +770,10 @@ func resolveOne(
 
 	// Live-only handling
 	if eb.Live {
-		logger.Tracef("upstream %s/%s (live): provider=%s", einfo.Category, einfo.Pkg, providerType)
+		output.Tracef("upstream %s/%s (live): provider=%s", einfo.Category, einfo.Pkg, providerType)
 		if id.rid != nil {
 			rid := id.rid
-			logger.Tracef("upstream %s/%s: remote-id=%s", einfo.Category, einfo.Pkg, rid.String())
+			output.Tracef("upstream %s/%s: remote-id=%s", einfo.Category, einfo.Pkg, rid.String())
 			cacheKey := cachePolicyKey(einfo.Category, einfo.Pkg, string(rid.Type), einfo.PVVal, resOpts, allowPrereleases)
 			var latestV *version.Version
 
@@ -777,7 +822,7 @@ func resolveOne(
 	}
 
 	// Normal (versioned) handling
-	logger.Tracef("upstream %s/%s: provider=%s", einfo.Category, einfo.Pkg, providerType)
+	output.Tracef("upstream %s/%s: provider=%s", einfo.Category, einfo.Pkg, providerType)
 
 	if providerType == "" || providerType == "unknown" {
 		return UpstreamResult{
@@ -801,7 +846,7 @@ func resolveOne(
 			Depth:   depth,
 		}
 	}
-	logger.Tracef("upstream %s/%s: remote-id=%s", einfo.Category, einfo.Pkg, rid.String())
+	output.Tracef("upstream %s/%s: remote-id=%s", einfo.Category, einfo.Pkg, rid.String())
 
 	cacheKey := cachePolicyKey(einfo.Category, einfo.Pkg, string(rid.Type), einfo.PVVal, resOpts, allowPrereleases)
 	var latestV *version.Version
@@ -961,6 +1006,7 @@ func RunWithTargets(opts RunOptions) ([]UpstreamResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	resetIdentifyCache()
 
 	cacheDir := opts.CacheDir
 	if cacheDir == "" {
@@ -1061,7 +1107,7 @@ func planEntry(n checkNode) PlanEntry {
 		entry.Target = n.Deprecated.Target
 		return entry
 	}
-	id, err := identifyEbuild(n.Ebuild)
+	id, err := identifyEbuildCached(n.Ebuild)
 	if err != nil {
 		return entry
 	}
@@ -1123,7 +1169,7 @@ func prefetchBatches(
 		if n.Deprecated != nil {
 			continue
 		}
-		id, err := identifyEbuild(n.Ebuild)
+		id, err := identifyEbuildCached(n.Ebuild)
 		if err != nil || id.rid == nil {
 			continue
 		}
@@ -1175,7 +1221,7 @@ func prefetchBatches(
 		}
 		resolved, err := br.BatchResolve(ctx, reqs, allowPrereleases)
 		if err != nil {
-			logger.Tracef("batch %s failed, falling back per-repo: %v", typ, err)
+			output.Tracef("batch %s failed, falling back per-repo: %v", typ, err)
 			continue
 		}
 		for key, res := range resolved {
@@ -1207,7 +1253,7 @@ func resolveNodes(
 
 	hints := prefetchBatches(ctx, nodes, registry, allowPrereleases)
 	if len(hints) > 0 {
-		logger.Tracef("batch prefetch resolved %d/%d packages", len(hints), len(nodes))
+		output.Tracef("batch prefetch resolved %d/%d packages", len(hints), len(nodes))
 	}
 
 	workers := jobs

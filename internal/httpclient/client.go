@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"bennypowers.dev/larry/internal/logger"
+	"bennypowers.dev/larry/internal/output"
 	"bennypowers.dev/larry/internal/ratelimit"
 	"bennypowers.dev/larry/internal/remoteid"
 )
@@ -139,9 +139,9 @@ func (c *Client) doWithRateLimit(method, url string, body io.Reader) (*http.Resp
 		return err
 	})
 	if resp != nil {
-		logger.Tracef("http %s %s -> %d (%s)", method, url, resp.StatusCode, time.Since(start).Round(time.Millisecond))
+		output.Tracef("http %s %s -> %d (%s)", method, url, resp.StatusCode, time.Since(start).Round(time.Millisecond))
 	} else {
-		logger.Tracef("http %s %s -> error: %v (%s)", method, url, err, time.Since(start).Round(time.Millisecond))
+		output.Tracef("http %s %s -> error: %v (%s)", method, url, err, time.Since(start).Round(time.Millisecond))
 	}
 	return resp, err
 }

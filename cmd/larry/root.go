@@ -6,7 +6,6 @@ import (
 
 	"bennypowers.dev/larry/internal/cli"
 	"bennypowers.dev/larry/internal/config"
-	"bennypowers.dev/larry/internal/logger"
 	"bennypowers.dev/larry/internal/output"
 
 	"github.com/spf13/cobra"
@@ -177,9 +176,10 @@ func persistentPreRunE(cmd *cobra.Command, args []string) error {
 	log.SetOut(cmd.OutOrStdout())
 	log.SetErr(cmd.ErrOrStderr())
 
-	// Give the prepare/ebuild diagnostics the same verbosity and stream.
-	logger.SetLevel(cfg.Verbose)
-	logger.SetOutput(cmd.ErrOrStderr())
+	// Give the prepare/ebuild diagnostics the same verbosity, quiet mode and stream.
+	output.SetLevel(cfg.Verbose)
+	output.SetQuiet(cfg.Quiet)
+	output.SetOutput(cmd.ErrOrStderr())
 
 	// gh and internal/providers read GITHUB_TOKEN directly.
 	if cfg.GitHubToken != "" {

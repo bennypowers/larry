@@ -17,7 +17,6 @@ import (
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
 	"bennypowers.dev/larry/internal/larryconfig"
-	"bennypowers.dev/larry/internal/logger"
 	"bennypowers.dev/larry/internal/output"
 	"bennypowers.dev/larry/internal/upstream"
 )
@@ -34,6 +33,9 @@ type PrepareConfig struct {
 	CleanupOrphanedAssets bool   // removes orphaned GitHub assets on prepare failure
 	RevisionBump          bool   // skip source download, only run manifest
 	CustomPrepareScript   string // relative path (from pkg dir) to custom prepare script; default: .larry/prepare.sh
+	// Quiet suppresses subprocess streaming (manifest output and heartbeat).
+	// Interactive TUI runs imply quiet: raw writes would corrupt the screen.
+	Quiet bool
 
 	// Context cancels long-running work between pipeline steps. A running
 	// external command is allowed to finish.
@@ -59,6 +61,7 @@ func Prepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	if cfg == nil {
 		cfg = &PrepareConfig{}
 	}
+	defer withManifestOutput(cfg)()
 	if err := cfg.contextErr(); err != nil {
 		return err
 	}
@@ -86,7 +89,7 @@ func Prepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	pkgConfig, err := larryconfig.LoadConfig(pkgDir)
 	if err != nil {
 		// Non-fatal: only log in verbose mode, continue with defaults.
-		logger.Debugf("read config: %v", err)
+		output.Debugf("read config: %v", err)
 	}
 
 	// Check for custom prepare script first.
@@ -111,8 +114,8 @@ func Prepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 		}
 	}
 
-	logger.Debug("detected type: " + string(pkgType))
-	logger.Debug("ebuild: " + ei.Path)
+	output.Debug("detected type: " + string(pkgType))
+	output.Debug("ebuild: " + ei.Path)
 	cfg.report(ProgressEvent{
 		Kind:    ProgressStep,
 		Package: pkgName,
@@ -172,6 +175,7 @@ func PrepareManifestAllWithConfig(cfg *PrepareConfig) error {
 	if cfg == nil {
 		cfg = &PrepareConfig{}
 	}
+	defer withManifestOutput(cfg)()
 	overlay, distdir := cfg.Overlay, cfg.Distdir
 	if distdir == "" {
 		return fmt.Errorf("manifest: distdir is empty")
@@ -558,7 +562,7 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 	// package regeneration, which drops the Manifest first.
 	manifestTarget := ei.Path
 	if manifestEntriesStale(filepath.Join(filepath.Dir(ei.Path), "Manifest"), cfg.Distdir) {
-		logger.Debug("custom prepare: stale Manifest entries, forcing full package regeneration")
+		output.Debug("custom prepare: stale Manifest entries, forcing full package regeneration")
 		manifestTarget = ""
 	}
 	req := manifestRequest{

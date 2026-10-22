@@ -167,6 +167,7 @@ func runBump(cmd *cobra.Command, args []string) error {
 		Distdir:               distdir,
 		Overlay:               overlayRoot,
 		ForceType:             forceType,
+		Quiet:                 cfg.Quiet,
 		CleanupOrphanedAssets: true,
 		RevisionBump:          mode == bump.BumpModeRevision,
 		Log:                   log,

@@ -11,7 +11,6 @@ import (
 	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/config"
 	"bennypowers.dev/larry/internal/exit"
-	"bennypowers.dev/larry/internal/logger"
 	"bennypowers.dev/larry/internal/output"
 )
 
@@ -38,7 +37,7 @@ func NewCmdRunner() CmdRunner {
 var TestRunnerForTest CmdRunner
 
 func (r *runner) Run(name string, args ...string) error {
-	logger.Tracef("exec: %s %s", name, strings.Join(args, " "))
+	output.Tracef("exec: %s %s", name, strings.Join(args, " "))
 	cmd := exec.Command(name, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -46,7 +45,7 @@ func (r *runner) Run(name string, args ...string) error {
 }
 
 func (r *runner) RunWithEnv(env []string, name string, args ...string) error {
-	logger.Tracef("exec: %s %s", name, strings.Join(args, " "))
+	output.Tracef("exec: %s %s", name, strings.Join(args, " "))
 	cmd := exec.Command(name, args...)
 	cmd.Env = env
 	cmd.Stdout = os.Stdout

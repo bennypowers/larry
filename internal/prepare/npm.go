@@ -18,7 +18,7 @@ import (
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
 	"bennypowers.dev/larry/internal/httpclient"
-	"bennypowers.dev/larry/internal/logger"
+	"bennypowers.dev/larry/internal/output"
 )
 
 // npmRunner executes the npm subprocess. Tests replace it.
@@ -136,11 +136,11 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 	// 2b. Upload vendored deps to GitHub release if SRC_URI references one
 	releasesURL := extractReleaseURL(ei.SRC_URI)
 	if releasesURL != "" {
-		logger.Debug("found release URL: " + releasesURL)
+		output.Debug("found release URL: " + releasesURL)
 		rawTag, rawAssetName := parseReleaseURL(releasesURL)
 		tag := ebuild.ExpandVariables(rawTag, vars)
 		assetName := ebuild.ExpandVariables(rawAssetName, vars)
-		logger.Debug("release tag: " + tag + " asset: " + assetName)
+		output.Debug("release tag: " + tag + " asset: " + assetName)
 		if tag != "" && assetName != "" {
 			// The asset name reaches several filepath.Join sites (DISTDIR,
 			// deps-tarball temp dir) — the regex group admits slashes, so a
@@ -160,14 +160,14 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 				// Old tarballs created by larry had node_modules/ which is incompatible
 				// with `npm --offline --cache` in the ebuild. Regenerate if needed.
 				if !npmDepsTarballHasCache(assetPath) {
-					logger.Debug("asset has wrong format (node_modules instead of npm-cache), regenerating...")
+					output.Debug("asset has wrong format (node_modules instead of npm-cache), regenerating...")
 				if err := npmCreateDepsTarball(mainDistfile, distDir, assetName); err != nil {
 					_ = Restore(ei.Path) // best-effort recovery after failure
 					return fmt.Errorf("npm: create deps tarball: %w", err)
 				}
-				logger.Debug("asset regenerated, uploading...")
+				output.Debug("asset regenerated, uploading...")
 			} else {
-				logger.Debug("uploading asset: " + assetPath)
+				output.Debug("uploading asset: " + assetPath)
 			}
 			exists, err := ghReleaseViewExists(tag, cfg.GitHubRepo, gh.Runner())
 			if err != nil {
@@ -186,12 +186,12 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 			}
 		} else {
 			// Asset not in distdir — create it from npm package
-			logger.Debug("asset not in distdir, creating...")
+			output.Debug("asset not in distdir, creating...")
 			if err := npmCreateDepsTarball(mainDistfile, distDir, assetName); err != nil {
 				_ = Restore(ei.Path) // best-effort recovery after failure
 				return fmt.Errorf("npm: create deps tarball: %w", err)
 			}
-			logger.Debug("asset created, uploading...")
+			output.Debug("asset created, uploading...")
 			if err := npmUploadAsset(tag, assetName, distDir, cfg.GitHubRepo, ei.PN(), gh.Runner()); err != nil {
 				_ = Restore(ei.Path) // best-effort recovery after failure
 				return fmt.Errorf("npm: upload asset %s: %w", assetName, err)
@@ -199,7 +199,7 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 		}
 		}
 	} else {
-		logger.Debug("no GitHub release URL found in SRC_URI")
+		output.Debug("no GitHub release URL found in SRC_URI")
 	}
 
 	// 3. Run pkgdev manifest
@@ -467,7 +467,7 @@ func npmCreateDepsTarball(npmTarball, distDir, assetName string) error {
 	}
 	cmd := exec.Command("npm", "--cache", npmCacheDir, "install", npmTarball, "--ignore-scripts")
 	cmd.Dir = tmpDir
-	logger.Debug("running: " + strings.Join(cmd.Args, " "))
+	output.Debug("running: " + strings.Join(cmd.Args, " "))
 	if err := npmRunner(cmd); err != nil {
 		return fmt.Errorf("npm install: %w", err)
 	}
@@ -533,21 +533,21 @@ func npmPrefetchPackage(pkgDir, distdir string) error {
 		// Read raw content
 		data, err := os.ReadFile(ebuildPath)
 		if err != nil {
-			logger.Debugf("npm prefetch: skip %s: %v", ebuildPath, err)
+			output.Debugf("npm prefetch: skip %s: %v", ebuildPath, err)
 			continue
 		}
 
 		// Parse ebuild path for PN/PV/P (Portage core variables)
 		pe, pathErr := atom.ParseEbuildPath(ebuildPath)
 		if pathErr != nil {
-			logger.Debugf("npm prefetch: skip %s: %v", ebuildPath, pathErr)
+			output.Debugf("npm prefetch: skip %s: %v", ebuildPath, pathErr)
 			continue
 		}
 
 		// Parse ebuild to extract SRC_URI and variables
 		info, err := ebuild.ParseEbuildFromFile(ebuildPath)
 		if err != nil {
-			logger.Debugf("npm prefetch: skip %s: %v", ebuildPath, err)
+			output.Debugf("npm prefetch: skip %s: %v", ebuildPath, err)
 			continue
 		}
 

@@ -241,8 +241,9 @@ func runLarryChildFunc(ctx context.Context, args []string, onLine func(string)) 
 	if err != nil {
 		return fmt.Errorf("resolve larry executable: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, exe, args...)
+	cmd := exec.Command(exe, args...)
 	cmd.Env = os.Environ()
+	configureProcessGroup(cmd)
 
 	// Keep stdout and stderr apart. os.Pipe (not io.Pipe) matters: os/exec
 	// does not spawn copy goroutines for *os.File writers, so cmd.Run returns
@@ -284,11 +285,34 @@ func runLarryChildFunc(ctx context.Context, args []string, onLine func(string)) 
 	go read(stdoutR)
 	go read(stderrR)
 
-	runErr := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		_ = stdoutW.Close()
+		_ = stderrW.Close()
+		_ = stdoutR.Close()
+		_ = stderrR.Close()
+		return fmt.Errorf("start: %w", err)
+	}
+	wait := make(chan error, 1)
+	go func() { wait <- cmd.Wait() }()
+
+	var runErr error
+	select {
+	case runErr = <-wait:
+	case <-ctx.Done():
+		// Kill the whole process group: pkgdev and podman children hold the
+		// work open long after the direct child notices the signal.
+		terminateProcessGroup(cmd, false)
+		select {
+		case runErr = <-wait:
+		case <-time.After(2 * time.Second):
+			terminateProcessGroup(cmd, true)
+			runErr = <-wait
+		}
+	}
 	_ = stdoutW.Close()
 	_ = stderrW.Close()
 
-	// cmd.Run returns when the child exits, but grandchildren inherit the pipe
+	// Wait returns when the child exits, but grandchildren inherit the pipe
 	// write ends. If one outlives the child (an orphaned pkgdev, for example),
 	// waiting for EOF would leave the action stuck forever. Close the read ends
 	// after a short drain so the session always regains control.

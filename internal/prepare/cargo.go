@@ -15,7 +15,7 @@ import (
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
 	"bennypowers.dev/larry/internal/httpclient"
-	"bennypowers.dev/larry/internal/logger"
+	"bennypowers.dev/larry/internal/output"
 )
 
 // lookPath is exec.LookPath, stubbable so tests can exercise the native parser
@@ -91,7 +91,7 @@ func PrepareCargo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	if err != nil {
 		return fmt.Errorf("cargo: update ebuild: %w", err)
 	}
-	logger.Debug("updated CRATES with " + fmt.Sprintf("%d", count) + " crate entries")
+	output.Debug("updated CRATES with " + fmt.Sprintf("%d", count) + " crate entries")
 
 	// 6. Generate Manifest
 	if err := runManifest(manifestRequest{

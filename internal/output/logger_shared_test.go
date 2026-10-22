@@ -1,4 +1,4 @@
-package logger
+package output
 
 import (
 	"bytes"
@@ -6,18 +6,20 @@ import (
 	"testing"
 )
 
-func reset(t *testing.T) {
+func resetShared(t *testing.T) {
 	t.Helper()
 	SetLevel(0)
+	SetQuiet(false)
 	SetOutput(nil)
 	t.Cleanup(func() {
 		SetLevel(0)
+		SetQuiet(false)
 		SetOutput(nil)
 	})
 }
 
-func TestLogger_SetLevelGating(t *testing.T) {
-	reset(t)
+func TestSharedLogger_SetLevelGating(t *testing.T) {
+	resetShared(t)
 	var buf bytes.Buffer
 	SetOutput(&buf)
 
@@ -43,8 +45,8 @@ func TestLogger_SetLevelGating(t *testing.T) {
 	}
 }
 
-func TestLogger_SetOutput(t *testing.T) {
-	reset(t)
+func TestSharedLogger_SetOutput(t *testing.T) {
+	resetShared(t)
 	var buf bytes.Buffer
 	SetOutput(&buf)
 	SetLevel(2)
@@ -54,20 +56,20 @@ func TestLogger_SetOutput(t *testing.T) {
 	}
 }
 
-func TestLogger_TracePrefix(t *testing.T) {
-	reset(t)
+func TestSharedLogger_TracePrefix(t *testing.T) {
+	resetShared(t)
 	var buf bytes.Buffer
 	SetOutput(&buf)
 	SetLevel(3)
 	Trace("details")
 	got := strings.TrimSpace(buf.String())
-	if !strings.HasPrefix(got, "[larry] ... ") {
-		t.Errorf("trace line = %q, want prefix %q", got, "[larry] ... ")
+	if !strings.HasPrefix(got, "... ") {
+		t.Errorf("trace line = %q, want prefix %q", got, "... ")
 	}
 }
 
-func TestLogger_SetLevelClamp(t *testing.T) {
-	reset(t)
+func TestSharedLogger_SetLevelClamp(t *testing.T) {
+	resetShared(t)
 	SetLevel(-1)
 	if got := Level(); got != 0 {
 		t.Errorf("Level(-1) = %d, want 0", got)
@@ -75,5 +77,18 @@ func TestLogger_SetLevelClamp(t *testing.T) {
 	SetLevel(42)
 	if got := Level(); got != 3 {
 		t.Errorf("Level(42) = %d, want 3", got)
+	}
+}
+
+func TestSharedLogger_QuietSuppressesDiagnostics(t *testing.T) {
+	resetShared(t)
+	var buf bytes.Buffer
+	SetOutput(&buf)
+	SetLevel(3)
+	SetQuiet(true)
+	Debug("debug-line")
+	Trace("trace-line")
+	if got := buf.String(); got != "" {
+		t.Errorf("quiet diagnostics = %q, want empty", got)
 	}
 }

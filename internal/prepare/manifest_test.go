@@ -2,6 +2,7 @@ package prepare
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -516,5 +517,32 @@ func TestVerifyManifest_MissingExpectedDistfileIsInvalid(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "foo-1.0-deps.tar.xz") {
 		t.Errorf("error = %v, want it to list the missing distfile", err)
+	}
+}
+
+func TestManifestOutput_QuietDiscardsStreams(t *testing.T) {
+	restore := withManifestOutput(&PrepareConfig{Quiet: true})
+	defer restore()
+	out, errW := manifestWriters()
+	if out != io.Discard || errW != io.Discard {
+		t.Errorf("quiet writers = %v/%v, want io.Discard", out, errW)
+	}
+}
+
+func TestManifestOutput_TUIDiscardsStreams(t *testing.T) {
+	restore := withManifestOutput(&PrepareConfig{UseTUI: true})
+	defer restore()
+	out, _ := manifestWriters()
+	if out != io.Discard {
+		t.Errorf("TUI writer = %v, want io.Discard", out)
+	}
+}
+
+func TestManifestOutput_RestoresPreviousPolicy(t *testing.T) {
+	restore := withManifestOutput(&PrepareConfig{Quiet: true})
+	restore()
+	out, _ := manifestWriters()
+	if out == io.Discard {
+		t.Error("writer still discarded after restore")
 	}
 }

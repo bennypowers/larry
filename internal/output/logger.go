@@ -65,6 +65,11 @@ func (l *Logger) SetLevel(n int) {
 	l.level = clampLevel(n)
 }
 
+// SetQuiet toggles quiet mode. Errors are still emitted.
+func (l *Logger) SetQuiet(quiet bool) {
+	l.quiet = quiet
+}
+
 // Msg writes a result message with the ">>> " prefix to the output writer.
 // Suppressed by --quiet, but shown at every verbosity level.
 func (l *Logger) Msg(format string, args ...any) {
@@ -141,3 +146,54 @@ func (l *Logger) Debugf(format string, args ...any) {
 func (l *Logger) Tracef(format string, args ...any) {
 	l.Trace(format, args...)
 }
+
+// ---------------------------------------------------------------------------
+// Package-level diagnostics
+//
+// Library packages (prepare, upstream, github, httpclient, test) cannot receive
+// the CLI Logger by value. They share one process-wide logger here instead:
+// default verbosity 0, not quiet, no colour, writing to stderr. The CLI points
+// it at its own streams in the root persistent pre-run.
+// ---------------------------------------------------------------------------
+
+var shared = func() *Logger {
+	l, err := NewLogger(LevelResults, false, nil)
+	if err != nil {
+		// NewLogger cannot fail for fixed arguments; keep the package usable
+		// if that ever changes.
+		panic(err)
+	}
+	l.SetOut(os.Stderr)
+	l.SetErr(os.Stderr)
+	return l
+}()
+
+// SetLevel sets the shared logger's verbosity, clamping to the supported range.
+func SetLevel(n int) { shared.SetLevel(n) }
+
+// Level returns the shared logger's verbosity.
+func Level() int { return shared.Level() }
+
+// SetQuiet mirrors --quiet on the shared logger. Errors are never suppressed.
+func SetQuiet(quiet bool) { shared.SetQuiet(quiet) }
+
+// SetOutput redirects all shared diagnostics. A nil writer restores stderr.
+func SetOutput(w io.Writer) {
+	if w == nil {
+		w = os.Stderr
+	}
+	shared.SetOut(w)
+	shared.SetErr(w)
+}
+
+// Debug writes a debug message at level >= 2.
+func Debug(msg string) { shared.Debug("%s", msg) }
+
+// Debugf writes a formatted debug message at level >= 2.
+func Debugf(format string, args ...any) { shared.Debug(format, args...) }
+
+// Trace writes a trace message at level >= 3.
+func Trace(msg string) { shared.Trace("%s", msg) }
+
+// Tracef writes a formatted trace message at level >= 3.
+func Tracef(format string, args ...any) { shared.Trace(format, args...) }

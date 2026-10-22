@@ -1525,3 +1525,96 @@ func TestCachePolicyKey_SeparatesRules(t *testing.T) {
 		t.Error("cache key is not stable for identical inputs")
 	}
 }
+
+// --- Per-run ebuild identity cache ---
+
+func TestIdentifyEbuildCached_ReusesIdentityWithinRun(t *testing.T) {
+	overlay := sharedRepoOverlay(t)
+	path := filepath.Join(overlay, "app-shells", "alpha", "alpha-1.0.0.ebuild")
+	eb, err := atom.ParseEbuildPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resetIdentifyCache()
+	first, err := identifyEbuildCached(eb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := identifyEbuildCached(eb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Error("identifyEbuildCached re-parsed the same ebuild within a run")
+	}
+}
+
+func TestIdentifyEbuildCached_ResetSeesConfigChange(t *testing.T) {
+	overlay := sharedRepoOverlay(t)
+	path := filepath.Join(overlay, "app-shells", "alpha", "alpha-1.0.0.ebuild")
+	eb, err := atom.ParseEbuildPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resetIdentifyCache()
+	before, err := identifyEbuildCached(eb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.resOpts != nil {
+		t.Fatalf("fixture unexpectedly has upstream rules: %+v", before.resOpts)
+	}
+
+	cfgDir := filepath.Join(overlay, "app-shells", "alpha", ".larry")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.yaml"),
+		[]byte("upstream:\n  strategy: tags\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	resetIdentifyCache()
+	after, err := identifyEbuildCached(eb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.resOpts == nil || after.resOpts.Strategy != "tags" {
+		t.Errorf("after reset resOpts = %+v, want strategy tags", after.resOpts)
+	}
+}
+
+func TestIdentifyEbuildCached_ConcurrentSameIdentity(t *testing.T) {
+	overlay := sharedRepoOverlay(t)
+	path := filepath.Join(overlay, "app-shells", "alpha", "alpha-1.0.0.ebuild")
+	eb, err := atom.ParseEbuildPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resetIdentifyCache()
+
+	const workers = 8
+	ids := make(chan *ebuildIdentity, workers)
+	for range workers {
+		go func() {
+			id, _ := identifyEbuildCached(eb)
+			ids <- id
+		}()
+	}
+	var want *ebuildIdentity
+	for i := range workers {
+		id := <-ids
+		if id == nil {
+			t.Fatal("nil identity")
+		}
+		if i == 0 {
+			want = id
+			continue
+		}
+		if id != want {
+			t.Error("concurrent callers got different identities")
+		}
+	}
+}

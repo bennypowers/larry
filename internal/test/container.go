@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"bennypowers.dev/larry/internal/atom"
-	"bennypowers.dev/larry/internal/logger"
+	"bennypowers.dev/larry/internal/output"
 )
 
 // ContainerConfig holds configuration for the container test runner.
@@ -330,7 +330,7 @@ func TestContainer(ebuildPath string, cfg *ContainerConfig, runner CmdRunner, pr
 type realRunner struct{}
 
 func (r *realRunner) Run(name string, args ...string) error {
-	logger.Tracef("exec: %s %s", name, strings.Join(args, " "))
+	output.Tracef("exec: %s %s", name, strings.Join(args, " "))
 	cmd := exec.Command(name, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -338,7 +338,7 @@ func (r *realRunner) Run(name string, args ...string) error {
 }
 
 func (r *realRunner) RunWithEnv(env []string, name string, args ...string) error {
-	logger.Tracef("exec: %s %s", name, strings.Join(args, " "))
+	output.Tracef("exec: %s %s", name, strings.Join(args, " "))
 	cmd := exec.Command(name, args...)
 	cmd.Env = env
 	cmd.Stdout = os.Stdout

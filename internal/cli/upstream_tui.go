@@ -453,6 +453,9 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.actionCancel != nil {
 					m.actionCancel()
 				}
+				// Invalidate the cancelled run's completion: a signal error is
+				// not a failure the user needs to see after pressing esc.
+				m.actionSeq++
 				m.mode = modeBrowse
 				return m, nil
 			}

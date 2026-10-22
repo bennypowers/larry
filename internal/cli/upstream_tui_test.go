@@ -800,3 +800,20 @@ func TestUpstreamModel_StartingStepFinishesPrevious(t *testing.T) {
 		t.Errorf("commit = %v, want pending", states["commit"])
 	}
 }
+
+func TestUpstreamModel_EscCancelDropsCompletion(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	m.mode = modeRunning
+	m.actionSeq = 3
+	m.actionCancel = func() {}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != modeBrowse {
+		t.Fatalf("mode = %v, want modeBrowse after esc", m.mode)
+	}
+
+	m.Update(actionEventMsg(actionEvent{seq: 3, done: true, err: errors.New("signal: terminated")}))
+	if m.ActionErr() != nil {
+		t.Errorf("ActionErr = %v, want nil after a user-initiated cancel", m.ActionErr())
+	}
+}

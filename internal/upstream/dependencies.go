@@ -113,6 +113,7 @@ func ScanDependencies(
 	parentDepth int,
 	visited map[string]bool,
 ) []UpstreamResult {
+	resetIdentifyCache()
 	nodes := discoverDependencyNodes(overlayRoot, eb, parentDepth, visited)
 	results, _ := resolveNodes(context.Background(), overlayRoot, nodes, registry, allowPrereleases, cache, 1, nil)
 	return results

@@ -14,29 +14,54 @@ import (
 	"strings"
 	"time"
 
-	"bennypowers.dev/larry/internal/logger"
+	"bennypowers.dev/larry/internal/output"
 )
+
+// manifestSilent suppresses live manifest subprocess output for --quiet and
+// interactive TUI runs. Prepare runs are single-flight per process, so the
+// package-level switch cannot race with another pipeline.
+var manifestSilent bool
+
+// withManifestOutput applies cfg's output policy for the duration of a prepare
+// run and returns the restore function (defer it).
+func withManifestOutput(cfg *PrepareConfig) func() {
+	prev := manifestSilent
+	manifestSilent = cfg.Quiet || cfg.UseTUI
+	return func() { manifestSilent = prev }
+}
+
+// manifestWriters returns the streams for the manifest subprocess. Quiet and
+// TUI runs discard them; output is still captured for trace logging.
+func manifestWriters() (io.Writer, io.Writer) {
+	if manifestSilent {
+		return io.Discard, io.Discard
+	}
+	return os.Stdout, os.Stderr
+}
 
 // ManifestRunner executes the resolved manifest subprocess. Tests replace it.
 var ManifestRunner = func(bin string, args []string, dir string, env []string) error {
-	logger.Tracef("exec: %s %s (dir=%s)", bin, strings.Join(args, " "), dir)
+	output.Tracef("exec: %s %s (dir=%s)", bin, strings.Join(args, " "), dir)
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = dir
 	cmd.Env = env
 	var stdout, stderr strings.Builder
 	// Stream live so long manifest runs (distfile downloads, digesting) show
 	// progress instead of going silent until the process exits.
-	cmd.Stdout = io.MultiWriter(os.Stdout, &stdout)
-	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
+	outW, errW := manifestWriters()
+	cmd.Stdout = io.MultiWriter(outW, &stdout)
+	cmd.Stderr = io.MultiWriter(errW, &stderr)
 
 	// Under a pipe (larry manage) there is no terminal progress bar, so portage
 	// can be silent for minutes. Announce the command and heartbeat.
 	interactive := false
-	if fi, statErr := os.Stdout.Stat(); statErr == nil {
-		interactive = fi.Mode()&os.ModeCharDevice != 0
+	if !manifestSilent {
+		if fi, statErr := os.Stdout.Stat(); statErr == nil {
+			interactive = fi.Mode()&os.ModeCharDevice != 0
+		}
 	}
 	done := make(chan struct{})
-	if !interactive {
+	if !interactive && !manifestSilent {
 		_, _ = fmt.Fprintf(os.Stdout, ">>> %s %s\n", bin, strings.Join(args, " "))
 		go func() {
 			ticker := time.NewTicker(15 * time.Second)
@@ -59,8 +84,8 @@ var ManifestRunner = func(bin string, args []string, dir string, env []string) e
 	if err != nil {
 		return err
 	}
-	logger.Debug("stdout:\n" + stdout.String())
-	logger.Debug("stderr:\n" + stderr.String())
+	output.Debug("stdout:\n" + stdout.String())
+	output.Debug("stderr:\n" + stderr.String())
 	return nil
 }
 
@@ -85,11 +110,11 @@ type manifestRequest struct {
 // findManifestRunner finds the manifest runner binary and returns its style.
 func findManifestRunner() (bin string, style manifestStyle, err error) {
 	if path, err := exec.LookPath("pkgdev"); err == nil {
-		logger.Debug("using pkgdev: " + path)
+		output.Debug("using pkgdev: " + path)
 		return path, stylePkgdev, nil
 	}
 	if path, err := exec.LookPath("ebuild"); err == nil {
-		logger.Debug("using ebuild: " + path)
+		output.Debug("using ebuild: " + path)
 		return path, styleEbuildDigest, nil
 	}
 	return "", 0, fmt.Errorf("manifest runner not found: try installing portage (pkgdev or ebuild)")
