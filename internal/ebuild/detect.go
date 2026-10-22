@@ -16,14 +16,15 @@ var validPackageTypes = []string{"npm", "cargo", "go", "vendored", "generic"}
 // detectFromRaw is the one and only detection algorithm, operating on the
 // raw, unexpanded ebuild text. Order: first match wins.
 //
-//  1. TypeNPM      — strings.Contains(raw, "mirror://npm/")
+//  1. TypeNPM      — strings.Contains(raw, "mirror://npm/") || strings.Contains(raw, "registry.npmjs.org/")
 //  2. TypeCargo    — cratesRe.MatchString(raw) || ParseInherit(raw) contains "cargo"
 //  3. TypeGo       — ParseInherit(raw) contains "go-module"
 //  4. TypeVendored — strings.Contains(raw, "releases/download/${PN}/")
 //  5. TypeGeneric  — otherwise
 func detectFromRaw(raw string) PackageType {
-	// 1. npm
-	if strings.Contains(raw, "mirror://npm/") {
+	// 1. npm: mirror scheme or direct registry URL (overlays moved off
+	// mirror://npm/ because Portage cannot resolve it).
+	if strings.Contains(raw, "mirror://npm/") || strings.Contains(raw, "registry.npmjs.org/") {
 		return TypeNPM
 	}
 

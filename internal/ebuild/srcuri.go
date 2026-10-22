@@ -428,6 +428,15 @@ func SRCURIVars(uri string, vars VariableMap) (string, error) {
 	return strings.Join(entries, " "), nil
 }
 
+// IsNpmRegistryURL reports whether a variable-expanded SRC_URI entry URL
+// points at the npm registry, either via the legacy mirror://npm/ scheme or
+// directly (https://registry.npmjs.org/…).
+func IsNpmRegistryURL(url string) bool {
+	return strings.HasPrefix(url, "mirror://npm/") ||
+		strings.HasPrefix(url, "https://registry.npmjs.org/") ||
+		strings.HasPrefix(url, "http://registry.npmjs.org/")
+}
+
 // ResolveNpmDistfile resolves a mirror://npm/ URI to the actual npm registry URL.
 func ResolveNpmDistfile(uri string, vars VariableMap) (string, error) {
 	if !strings.Contains(uri, "mirror://npm/") {
@@ -460,8 +469,11 @@ type SrcUriEntry struct {
 }
 
 // ParseSrcUri splits a SRC_URI value into entries, stripping USE-conditional
-// wrappers and resolving `->` renames.
-func ParseSrcUri(s string, vars VariableMap) []SrcUriEntry {
+// wrappers and resolving `->` renames. A rename target that is not a plain
+// filename (empty, absolute, containing path separators or "..") is a parse
+// error — it is used verbatim as the DISTDIR filename and must not be able
+// to escape it.
+func ParseSrcUri(s string, vars VariableMap) ([]SrcUriEntry, error) {
 	// 1. Expand variables first.
 	s = ExpandVariables(s, vars)
 
@@ -499,8 +511,12 @@ func ParseSrcUri(s string, vars VariableMap) []SrcUriEntry {
 		// Check for rename target.
 		if tok == "->" {
 			if i+1 < len(tokens) {
+				name := tokens[i+1]
+				if name == "" || name == "." || name == ".." || path.Base(name) != name {
+					return nil, fmt.Errorf("SRC_URI rename target %q is not a plain filename (no directories or \"..\" allowed)", name)
+				}
 				if len(entries) > 0 {
-					entries[len(entries)-1].Filename = tokens[i+1]
+					entries[len(entries)-1].Filename = name
 				}
 				i++ // consume the filename token
 			}
@@ -515,5 +531,5 @@ func ParseSrcUri(s string, vars VariableMap) []SrcUriEntry {
 		})
 	}
 
-	return entries
+	return entries, nil
 }

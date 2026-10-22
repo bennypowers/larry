@@ -31,6 +31,23 @@ var npmRunner = func(cmd *exec.Cmd) error {
 	return nil
 }
 
+// npmRegistryBase is the npm registry base URL used to resolve npm
+// distfiles (both mirror://npm/ and direct registry.npmjs.org forms are
+// rewritten onto it). Tests replace it to point at an httptest server.
+var npmRegistryBase = "https://registry.npmjs.org/"
+
+// npmDownloadURL rewrites any npm registry URL — the legacy mirror://npm/
+// scheme or a direct registry.npmjs.org URL — onto npmRegistryBase with the
+// registry-relative path, so tests can redirect downloads.
+func npmDownloadURL(url string) string {
+	for _, prefix := range []string{"mirror://npm/", "https://registry.npmjs.org/", "http://registry.npmjs.org/"} {
+		if rest, ok := strings.CutPrefix(url, prefix); ok {
+			return npmRegistryBase + rest
+		}
+	}
+	return url
+}
+
 // archiveRunner executes the tar subprocess. Tests replace it.
 var archiveRunner = func(cmd *exec.Cmd) error { return cmd.Run() }
 
@@ -67,17 +84,21 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 		pe = nil
 	}
 	vars := ebuild.BuildVariableMap(ei.Raw, pe)
-	entries := ebuild.ParseSrcUri(ei.SRC_URI, vars)
+	entries, err := ebuild.ParseSrcUri(ei.SRC_URI, vars)
+	if err != nil {
+		return fmt.Errorf("npm: parse SRC_URI: %w", err)
+	}
 
-	// Filter to npm entries.
+	// Filter to npm entries (mirror://npm/ or direct registry URLs).
 	var npmEntries []ebuild.SrcUriEntry
 	for _, e := range entries {
-		if strings.HasPrefix(e.URL, "mirror://npm/") {
+		if ebuild.IsNpmRegistryURL(e.URL) {
 			npmEntries = append(npmEntries, e)
 		}
 	}
 	if len(npmEntries) == 0 {
 		_ = Restore(ei.Path) // best-effort recovery after failure
+		return fmt.Errorf("npm: no mirror://npm/ or registry.npmjs.org/ entries found in SRC_URI of %s", ei.Path)
 	}
 
 	// Download every npm entry to distdir/<Filename>.
@@ -89,13 +110,17 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 	}
 	for _, e := range npmEntries {
 		destPath := filepath.Join(distDir, e.Filename)
-		// Skip if file already exists and is non-empty.
+		// Skip if file already exists and is non-empty. Safe: downloads are
+		// atomic (npmDownloadDistfile renames into place only after the full
+		// body matches Content-Length), so a non-empty file here is always a
+		// complete download — a short one never leaves a file behind.
 		if info, err := os.Stat(destPath); err == nil && info.Size() > 0 {
 			continue
 		}
-		rewritten := "https://registry.npmjs.org/" + strings.TrimPrefix(e.URL, "mirror://npm/")
+		rewritten := npmDownloadURL(e.URL)
 		if _, err := npmDownloadDistfile(rewritten, distDir, e.Filename, client); err != nil {
 			_ = Restore(ei.Path) // best-effort recovery after failure
+			return fmt.Errorf("npm: download distfile %s: %w", e.Filename, err)
 		}
 	}
 
@@ -117,8 +142,19 @@ func npmPrepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 		assetName := ebuild.ExpandVariables(rawAssetName, vars)
 		logger.Debug("release tag: " + tag + " asset: " + assetName)
 		if tag != "" && assetName != "" {
+			// The asset name reaches several filepath.Join sites (DISTDIR,
+			// deps-tarball temp dir) — the regex group admits slashes, so a
+			// crafted releases/download URL could traverse out of them.
+			// Reject anything that is not a plain basename.
+			if assetName == "." || assetName == ".." || filepath.Base(assetName) != assetName {
+				_ = Restore(ei.Path) // best-effort recovery after failure
+				return fmt.Errorf("npm: invalid release asset name %q in %s (must be a plain filename)", assetName, releasesURL)
+			}
 			assetPath := filepath.Join(distDir, assetName)
 			gh := github.NewClient()
+			if cfg.Runner != nil {
+				gh = github.NewClientWithRunner(cfg.Runner)
+			}
 			if _, err := os.Stat(assetPath); err == nil {
 				// Check if the existing tarball has the correct npm-cache/ format.
 				// Old tarballs created by larry had node_modules/ which is incompatible
@@ -208,8 +244,46 @@ func parseReleaseURL(url string) (tag, assetName string) {
 	return matches[3], matches[4]
 }
 
+// atomicWriteBody streams body to destPath+".part" and renames it into place
+// only after the full body copies successfully and matches contentLength
+// (when the server sent one, i.e. contentLength >= 0). On any error the
+// .part file is removed and nothing is left at destPath, so a later run
+// never mistakes a short download for a complete file.
+func atomicWriteBody(body io.Reader, destPath string, contentLength int64) error {
+	partPath := destPath + ".part"
+
+	out, err := os.Create(partPath)
+	if err != nil {
+		return fmt.Errorf("create dest file: %w", err)
+	}
+
+	written, copyErr := io.Copy(out, body)
+	closeErr := out.Close()
+	if copyErr != nil {
+		_ = os.Remove(partPath)
+		return fmt.Errorf("write distfile: %w", copyErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(partPath)
+		return fmt.Errorf("close distfile: %w", closeErr)
+	}
+	if contentLength >= 0 && written != contentLength {
+		_ = os.Remove(partPath)
+		return fmt.Errorf("truncated: wrote %d bytes, Content-Length %d", written, contentLength)
+	}
+	if err := os.Rename(partPath, destPath); err != nil {
+		_ = os.Remove(partPath)
+		return fmt.Errorf("finalize distfile: %w", err)
+	}
+	return nil
+}
+
 // npmDownloadDistfile downloads a distfile from the resolved URL to destDir.
 // The filename is the DISTDIR basename to use (not derived from the URL).
+// The download is atomic: the body is written to <dest>.part and renamed into
+// place only after the full body copies successfully and matches Content-Length
+// (when the server sends one). A failed or short download therefore never
+// leaves a file that a later run treats as complete.
 func npmDownloadDistfile(url, destDir, filename string, client *httpclient.Client) (string, error) {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return "", fmt.Errorf("npm: unsupported URL scheme: %s", url)
@@ -236,16 +310,15 @@ func npmDownloadDistfile(url, destDir, filename string, client *httpclient.Clien
 		destDir = cwd
 	}
 
-	destPath := filepath.Join(destDir, filename)
-
-	out, err := os.Create(destPath)
-	if err != nil {
-		return "", fmt.Errorf("npm: create dest file: %w", err)
+	// Defensive basename check: the rename target from SRC_URI (or a release
+	// asset name) must never escape DISTDIR via "/", ".." or an absolute path.
+	if filename == "" || filename == "." || filename == ".." || filepath.Base(filename) != filename {
+		return "", fmt.Errorf("npm: invalid distfile name %q", filename)
 	}
-	defer func() { _ = out.Close() }() // best-effort close
 
-	if _, err := io.Copy(out, resp.Body); err != nil {
-		return "", fmt.Errorf("npm: write distfile: %w", err)
+	destPath := filepath.Join(destDir, filename)
+	if err := atomicWriteBody(resp.Body, destPath, resp.ContentLength); err != nil {
+		return "", fmt.Errorf("npm: %w", err)
 	}
 
 	return destPath, nil
@@ -385,11 +458,14 @@ func npmCreateDepsTarball(npmTarball, distDir, assetName string) error {
 	// from inside the tarball and resolves all transitive dependencies through the cache.
 	// Unlike extracting first (which triggers shrinkwrap's resolved URLs to bypass cache),
 	// passing the .tgz directly causes npm to resolve from the registry cache.
+	// --ignore-scripts mirrors the vendored pipeline's npm ci: package
+	// lifecycle scripts must never run on the workstation, and they only
+	// affect node_modules — never the _cacache cache we tar.
 	// npmTarball is a filename relative to distDir — resolve to the full path.
 	if !filepath.IsAbs(npmTarball) {
 		npmTarball = filepath.Join(distDir, npmTarball)
 	}
-	cmd := exec.Command("npm", "--cache", npmCacheDir, "install", npmTarball)
+	cmd := exec.Command("npm", "--cache", npmCacheDir, "install", npmTarball, "--ignore-scripts")
 	cmd.Dir = tmpDir
 	logger.Debug("running: " + strings.Join(cmd.Args, " "))
 	if err := npmRunner(cmd); err != nil {
@@ -423,10 +499,13 @@ func npmCreateDepsTarball(npmTarball, distDir, assetName string) error {
 	return nil
 }
 
-// npmPrefetchPackage downloads, into distdir, every mirror://npm/ distfile declared by
-// every *.ebuild in pkgDir. Files already present and non-empty are skipped.
-// Errors on individual ebuilds are logged and skipped; only a download failure for a
-// file that is genuinely missing aborts.
+// npmPrefetchPackage downloads, into distdir, every npm distfile (mirror://npm/
+// or direct registry.npmjs.org URL) declared by every *.ebuild in pkgDir. Files
+// already present and non-empty are skipped. Per-ebuild read/parse errors are
+// ordinary "not an npm ebuild" cases and are skipped (logged at debug level);
+// a download failure for a genuinely missing distfile is fatal — pkgdev cannot
+// resolve mirror://npm/ itself, so letting it through would only surface later
+// as a confusing fetch error.
 func npmPrefetchPackage(pkgDir, distdir string) error {
 	// Create distdir if it doesn't exist
 	if err := os.MkdirAll(distdir, 0755); err != nil {
@@ -454,21 +533,21 @@ func npmPrefetchPackage(pkgDir, distdir string) error {
 		// Read raw content
 		data, err := os.ReadFile(ebuildPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[larry] npm prefetch: skip %s: %v\n", ebuildPath, err)
+			logger.Debugf("npm prefetch: skip %s: %v", ebuildPath, err)
 			continue
 		}
 
 		// Parse ebuild path for PN/PV/P (Portage core variables)
 		pe, pathErr := atom.ParseEbuildPath(ebuildPath)
 		if pathErr != nil {
-			fmt.Fprintf(os.Stderr, "[larry] npm prefetch: skip %s: %v\n", ebuildPath, pathErr)
+			logger.Debugf("npm prefetch: skip %s: %v", ebuildPath, pathErr)
 			continue
 		}
 
 		// Parse ebuild to extract SRC_URI and variables
 		info, err := ebuild.ParseEbuildFromFile(ebuildPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[larry] npm prefetch: skip %s: %v\n", ebuildPath, err)
+			logger.Debugf("npm prefetch: skip %s: %v", ebuildPath, err)
 			continue
 		}
 
@@ -476,24 +555,29 @@ func npmPrefetchPackage(pkgDir, distdir string) error {
 		vars := ebuild.BuildVariableMap(string(data), pe)
 
 		// Parse SRC_URI
-		entries := ebuild.ParseSrcUri(info.SRC_URI, vars)
+		entries, err := ebuild.ParseSrcUri(info.SRC_URI, vars)
+		if err != nil {
+			return fmt.Errorf("npm prefetch: parse SRC_URI of %s: %w", ebuildPath, err)
+		}
 
 		// Download every npm entry that's missing
 		for _, entry := range entries {
-			if !strings.HasPrefix(entry.URL, "mirror://npm/") {
+			if !ebuild.IsNpmRegistryURL(entry.URL) {
 				continue
 			}
 
-			// Skip if already exists and is non-empty
+			// Skip if already exists and is non-empty. Safe: npmDownloadDistfile
+			// writes atomically, so a non-empty file is always a complete
+			// download — a short one never leaves a file behind.
 			destPath := filepath.Join(distdir, entry.Filename)
 			if info, err := os.Stat(destPath); err == nil && info.Size() > 0 {
 				continue
 			}
 
 			// Download
-			rewritten := "https://registry.npmjs.org/" + strings.TrimPrefix(entry.URL, "mirror://npm/")
+			rewritten := npmDownloadURL(entry.URL)
 			if _, err := npmDownloadDistfile(rewritten, distdir, entry.Filename, client); err != nil {
-				fmt.Fprintf(os.Stderr, "[larry] npm prefetch: %s: %v\n", entry.Filename, err)
+				return fmt.Errorf("npm prefetch %s: %w", entry.Filename, err)
 			}
 		}
 	}

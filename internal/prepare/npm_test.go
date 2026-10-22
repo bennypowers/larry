@@ -1,11 +1,13 @@
 package prepare
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -104,6 +106,55 @@ func TestNpm_DownloadDistfile_NonHTTP(t *testing.T) {
 	}
 }
 
+func TestNpm_DownloadDistfile_TruncatedBody(t *testing.T) {
+	// A server that sends fewer bytes than Content-Length must not leave a
+	// usable distfile behind — the next run has to re-download it.
+	dir := t.TempDir()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1024")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("short")) // truncated vs declared Content-Length
+	}))
+	defer server.Close()
+
+	client := httpclient.NewClientWithTransport(server.Client().Transport)
+
+	_, err := npmDownloadDistfile(server.URL+"/pkg.tgz", dir, "pkg.tgz", client)
+	if err == nil {
+		t.Fatal("npmDownloadDistfile must fail on a truncated body")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "pkg.tgz")); statErr == nil {
+		t.Error("truncated download left a distfile behind — a later run would treat it as complete")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "pkg.tgz.part")); statErr == nil {
+		t.Error("truncated download left a .part file behind")
+	}
+}
+
+func TestNpm_DownloadDistfile_NoPartFileAfterSuccess(t *testing.T) {
+	dir := t.TempDir()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("full-body")) // httptest writer; a write error cannot occur here
+	}))
+	defer server.Close()
+
+	client := httpclient.NewClientWithTransport(server.Client().Transport)
+
+	downloaded, err := npmDownloadDistfile(server.URL+"/pkg.tgz", dir, "pkg.tgz", client)
+	if err != nil {
+		t.Fatalf("npmDownloadDistfile returned error: %v", err)
+	}
+	if _, statErr := os.Stat(downloaded + ".part"); statErr == nil {
+		t.Error("successful download left a .part file behind")
+	}
+	if _, statErr := os.Stat(downloaded); statErr != nil {
+		t.Errorf("distfile missing after successful download: %v", statErr)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // npmCopyToDistdir tests
 // ---------------------------------------------------------------------------
@@ -198,7 +249,10 @@ P="my-pkg-1.0.0"
 	// BuildVariableMap regex requires 2+ char var names; P is only 1 char.
 	// Add it manually.
 	vars["P"] = "my-pkg-1.0.0"
-	entries := ebuild.ParseSrcUri(info.SRC_URI, vars)
+	entries, err := ebuild.ParseSrcUri(info.SRC_URI, vars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 	if len(entries) != 1 {
 		t.Fatalf("got %d entries, want 1: %v", len(entries), entries)
 	}
@@ -254,7 +308,10 @@ P="my-pkg-1.0.0"
 	// BuildVariableMap regex requires 2+ char var names; P is only 1 char.
 	// Add it manually.
 	vars["P"] = "my-pkg-1.0.0"
-	entries := ebuild.ParseSrcUri(info.SRC_URI, vars)
+	entries, err := ebuild.ParseSrcUri(info.SRC_URI, vars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 	if len(entries) != 1 {
 		t.Fatalf("got %d entries, want 1", len(entries))
 	}
@@ -312,7 +369,10 @@ webui? ( mirror://npm/webui-pkg/webui-1.0.0.tgz )"`,
 	// We can't fully drive npmPrepare through the manifest step without pkgdev,
 	// so test the ParseSrcUri + download logic directly.
 	vars := ebuild.BuildVariableMap(info.Raw, nil)
-	entries := ebuild.ParseSrcUri(info.SRC_URI, vars)
+	entries, err := ebuild.ParseSrcUri(info.SRC_URI, vars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 
 	npmEntries := make([]ebuild.SrcUriEntry, 0)
 	for _, e := range entries {
@@ -377,7 +437,10 @@ SRC_URI="mirror://npm/@vtsls/${MY_NPM_NAME}/-/${MY_NPM_NAME}-0.3.0.tgz -> vtsls-
 	}
 
 	vars := ebuild.BuildVariableMap(info.Raw, nil)
-	entries := ebuild.ParseSrcUri(info.SRC_URI, vars)
+	entries, err := ebuild.ParseSrcUri(info.SRC_URI, vars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 
 	npmEntries := make([]ebuild.SrcUriEntry, 0)
 	for _, e := range entries {
@@ -392,7 +455,7 @@ SRC_URI="mirror://npm/@vtsls/${MY_NPM_NAME}/-/${MY_NPM_NAME}-0.3.0.tgz -> vtsls-
 
 	client := httpclient.NewClientWithTransport(server.Client().Transport)
 	rewritten := strings.Replace(npmEntries[0].URL, "mirror://npm/", "https://registry.npmjs.org/", 1)
-	_, err := npmDownloadDistfile(rewritten, distDir, npmEntries[0].Filename, client)
+	_, err = npmDownloadDistfile(rewritten, distDir, npmEntries[0].Filename, client)
 	if err != nil {
 		t.Fatalf("download: %v", err)
 	}
@@ -448,7 +511,10 @@ SRC_URI="mirror://npm/@vtsls/${MY_NPM_NAME}/-/${MY_NPM_NAME}-0.3.0.tgz -> vtsls-
 	}
 
 	vars := ebuild.BuildVariableMap(info.Raw, nil)
-	entries := ebuild.ParseSrcUri(info.SRC_URI, vars)
+	entries, err := ebuild.ParseSrcUri(info.SRC_URI, vars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 
 	npmEntries := make([]ebuild.SrcUriEntry, 0)
 	for _, e := range entries {
@@ -533,7 +599,10 @@ func TestNpm_NoNpmEntriesIsError(t *testing.T) {
 	}
 
 	vars := ebuild.BuildVariableMap(info.Raw, nil)
-	entries := ebuild.ParseSrcUri(info.SRC_URI, vars)
+	entries, err := ebuild.ParseSrcUri(info.SRC_URI, vars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 
 	npmEntries := make([]ebuild.SrcUriEntry, 0)
 	for _, e := range entries {
@@ -551,13 +620,322 @@ func TestNpm_NoNpmEntriesIsError(t *testing.T) {
 	_ = wantErr
 }
 
+func TestNpm_PrepareDirectRegistryPipeline(t *testing.T) {
+	// Regression: overlay ebuilds replaced mirror://npm/ with direct
+	// registry.npmjs.org URLs (overlay commit "fix: npm registry URIs").
+	// The full pipeline must still run for them: detection picks npm,
+	// the entry filter accepts direct URLs, downloads hit the registry,
+	// the deps tarball is created and uploaded, and the manifest runs.
+	tmpDir := t.TempDir()
+	pkgDir := filepath.Join(tmpDir, "test", "my-pkg")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	ebuildPath := filepath.Join(pkgDir, "my-pkg-1.0.0.ebuild")
+
+	raw := `EAPI=8
+MY_NPM_SCOPE="@scope"
+SRC_URI="https://registry.npmjs.org/${MY_NPM_SCOPE}/${PN}/-/${P}.tgz -> ${P}.tgz
+	https://github.com/o/r/releases/download/my-pkg/${P}-deps.tar.xz
+	webui? ( https://registry.npmjs.org/${MY_NPM_SCOPE}/webui/-/webui-1.0.0.tgz )"
+`
+	if err := os.WriteFile(ebuildPath, []byte(raw), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// The manifest runner is stubbed below, but verifyManifestValid still
+	// requires <pkgDir>/Manifest with DIST entries for every distfile.
+	manifest := "DIST my-pkg-1.0.0.tgz 23 BLAKE2B abc SHA512 def\n" +
+		"DIST my-pkg-1.0.0-deps.tar.xz 11 BLAKE2B abc SHA512 def\n" +
+		"DIST webui-1.0.0.tgz 23 BLAKE2B abc SHA512 def\n"
+	if err := os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte(manifest), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	tarballContent := []byte("fake-npm-tarball-content")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(tarballContent) // httptest writer; a write error cannot occur here
+	}))
+	defer server.Close()
+
+	origBase := npmRegistryBase
+	npmRegistryBase = server.URL + "/"
+	defer func() { npmRegistryBase = origBase }()
+
+	origNpm := npmRunner
+	var recordedNpm *exec.Cmd
+	npmRunner = func(cmd *exec.Cmd) error {
+		recordedNpm = cmd
+		return nil
+	}
+	defer func() { npmRunner = origNpm }()
+
+	origArchive := archiveRunner
+	archiveRunner = func(cmd *exec.Cmd) error {
+		if len(cmd.Args) >= 3 {
+			if err := os.WriteFile(cmd.Args[2], []byte("placeholder"), 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return nil
+	}
+	defer func() { archiveRunner = origArchive }()
+
+	manifestCalled := false
+	origManifest := ManifestRunner
+	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
+		manifestCalled = true
+		return nil
+	}
+	defer func() { ManifestRunner = origManifest }()
+
+	rec := &argvRecorder{inner: github.NewStubRunner()}
+
+	info := &ebuild.EbuildInfo{
+		Path:     ebuildPath,
+		Pkg:      "my-pkg",
+		Category: "test",
+		PVVal:    "1.0.0",
+		PVal:     "my-pkg-1.0.0",
+		SRC_URI:  "https://registry.npmjs.org/@scope/my-pkg/-/my-pkg-1.0.0.tgz -> my-pkg-1.0.0.tgz\n\thttps://github.com/o/r/releases/download/my-pkg/my-pkg-1.0.0-deps.tar.xz\n\twebui? ( https://registry.npmjs.org/@scope/webui/-/webui-1.0.0.tgz )",
+		Raw:      raw,
+	}
+
+	cfg := &PrepareConfig{
+		Distdir:    filepath.Join(tmpDir, "dist"),
+		Overlay:    tmpDir,
+		GitHubRepo: "o/r",
+		HTTPClient: server.Client(),
+		Runner:     rec,
+	}
+	err := Prepare(info, cfg)
+	if err != nil {
+		t.Fatalf("Prepare(direct-registry npm ebuild) returned error: %v", err)
+	}
+
+	// Both registry distfiles downloaded to distdir.
+	for _, name := range []string{"my-pkg-1.0.0.tgz", "webui-1.0.0.tgz"} {
+		data, readErr := os.ReadFile(filepath.Join(cfg.Distdir, name))
+		if readErr != nil {
+			t.Errorf("distfile %s not downloaded: %v", name, readErr)
+			continue
+		}
+		if string(data) != string(tarballContent) {
+			t.Errorf("distfile %s content = %q, want %q", name, data, tarballContent)
+		}
+	}
+
+	// npm install ran against the main distfile.
+	if recordedNpm == nil {
+		t.Fatal("npmRunner was not called — deps tarball was not created")
+	}
+	sawMainTgz := false
+	for _, a := range recordedNpm.Args {
+		if a == filepath.Join(cfg.Distdir, "my-pkg-1.0.0.tgz") {
+			sawMainTgz = true
+		}
+	}
+	if !sawMainTgz {
+		t.Errorf("npm argv must reference the main distfile: %v", recordedNpm.Args)
+	}
+
+	// The deps tarball was uploaded to the release tag from SRC_URI.
+	sawUpload := false
+	for _, argv := range rec.argv {
+		if len(argv) >= 5 && argv[0] == "gh" && argv[1] == "release" && argv[2] == "upload" &&
+			argv[3] == "my-pkg" && argv[4] == filepath.Join(cfg.Distdir, "my-pkg-1.0.0-deps.tar.xz") {
+			sawUpload = true
+		}
+	}
+	if !sawUpload {
+		t.Errorf("gh release upload for my-pkg-1.0.0-deps.tar.xz not recorded, argv = %v", rec.argv)
+	}
+
+	if !manifestCalled {
+		t.Error("manifest was not run")
+	}
+}
+
+func TestNpm_PrefetchDirectRegistry(t *testing.T) {
+	// npmPrefetchPackage must pre-populate DISTDIR for direct
+	// registry.npmjs.org URLs, not only mirror://npm/ ones.
+	pkgDir := filepath.Join(t.TempDir(), "foo")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	distDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pkgDir, "foo-1.0.ebuild"), []byte(`EAPI=8
+PN="foo"
+PV="1.0"
+SRC_URI="https://registry.npmjs.org/foo-pkg/-/foo-1.0.0.tgz"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("fake-tgz")) // httptest writer; a write error cannot occur here
+	}))
+	defer server.Close()
+
+	origBase := npmRegistryBase
+	npmRegistryBase = server.URL + "/"
+	defer func() { npmRegistryBase = origBase }()
+
+	if err := npmPrefetchPackage(pkgDir, distDir); err != nil {
+		t.Fatalf("npmPrefetchPackage: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(distDir, "foo-1.0.0.tgz")); err != nil {
+		t.Errorf("direct-registry distfile not prefetched: %v", err)
+	}
+}
+
+func TestNpm_PrepareDownloadFailureIsFatal(t *testing.T) {
+	// A failing distfile download must abort the pipeline with an error
+	// naming the distfile — the pipeline must not continue with a missing
+	// distfile.
+	tmpDir := t.TempDir()
+	ebuildPath := filepath.Join(tmpDir, "my-pkg-1.0.0.ebuild")
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	origBase := npmRegistryBase
+	npmRegistryBase = server.URL + "/"
+	defer func() { npmRegistryBase = origBase }()
+
+	// Stub the manifest runner so a nil return from npmPrepare is unambiguous.
+	origManifest := ManifestRunner
+	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
+		return nil
+	}
+	defer func() { ManifestRunner = origManifest }()
+
+	info := &ebuild.EbuildInfo{
+		Path:     ebuildPath,
+		Pkg:      "my-pkg",
+		Category: "test",
+		PVVal:    "1.0.0",
+		PVal:     "my-pkg-1.0.0",
+		SRC_URI:  "mirror://npm/my-pkg/my-pkg-1.0.0.tgz",
+		Raw: `MY_NPM_NAME="my-pkg"
+SRC_URI="mirror://npm/my-pkg/my-pkg-1.0.0.tgz"`,
+	}
+
+	cfg := &PrepareConfig{
+		Distdir:    filepath.Join(tmpDir, "dist"),
+		ForceType:  ebuild.TypeNPM,
+		HTTPClient: server.Client(),
+	}
+	err := Prepare(info, cfg)
+	if err == nil {
+		t.Fatal("Prepare must return an error when a distfile download fails")
+	}
+	if !strings.Contains(err.Error(), "my-pkg-1.0.0.tgz") {
+		t.Errorf("error = %v, want it to name the distfile my-pkg-1.0.0.tgz", err)
+	}
+}
+
+func TestNpm_PrepareRejectsEscapingReleaseAssetName(t *testing.T) {
+	// A releases/download URL whose asset segment contains "../" would
+	// traverse out of DISTDIR (and the deps-tarball temp dir) via
+	// filepath.Join — it must be rejected.
+	tmpDir := t.TempDir()
+	ebuildPath := filepath.Join(tmpDir, "my-pkg-1.0.0.ebuild")
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("fake-npm-tarball")) // httptest writer; a write error cannot occur here
+	}))
+	defer server.Close()
+
+	origBase := npmRegistryBase
+	npmRegistryBase = server.URL + "/"
+	defer func() { npmRegistryBase = origBase }()
+
+	// Stub npmRunner so a traversal that slips through would fail loudly in
+	// the deps-tarball step rather than invoking the real npm.
+	origNpm := npmRunner
+	npmRunner = func(cmd *exec.Cmd) error {
+		return errors.New("npm must not run in this test")
+	}
+	defer func() { npmRunner = origNpm }()
+
+	info := &ebuild.EbuildInfo{
+		Path:     ebuildPath,
+		Pkg:      "my-pkg",
+		Category: "test",
+		PVVal:    "1.0.0",
+		PVal:     "my-pkg-1.0.0",
+		SRC_URI:  "mirror://npm/my-pkg/my-pkg-1.0.0.tgz https://github.com/o/r/releases/download/v1.0/../../evil.tar.xz",
+		Raw: `MY_NPM_NAME="my-pkg"
+SRC_URI="mirror://npm/my-pkg/my-pkg-1.0.0.tgz https://github.com/o/r/releases/download/v1.0/../../evil.tar.xz"`,
+	}
+
+	cfg := &PrepareConfig{
+		Distdir:    filepath.Join(tmpDir, "dist"),
+		ForceType:  ebuild.TypeNPM,
+		HTTPClient: server.Client(),
+	}
+	err := Prepare(info, cfg)
+	if err == nil {
+		t.Fatal("Prepare must reject a release asset name containing ../")
+	}
+	if !strings.Contains(err.Error(), "evil.tar.xz") {
+		t.Errorf("error = %v, want it to name the invalid asset name", err)
+	}
+}
+
+func TestNpm_PrepareNoNpmEntriesReturnsErrorNotPanic(t *testing.T) {
+	// An npm-typed ebuild whose SRC_URI has zero mirror://npm/ entries must
+	// return an error — not panic on npmEntries[0].
+	tmpDir := t.TempDir()
+	ebuildPath := filepath.Join(tmpDir, "test-pkg-1.0.0.ebuild")
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	info := &ebuild.EbuildInfo{
+		Path:     ebuildPath,
+		Pkg:      "test-pkg",
+		Category: "test",
+		PVVal:    "1.0.0",
+		PVal:     "test-pkg-1.0.0",
+		SRC_URI:  "https://github.com/o/r/releases/download/v1.0/deps.tar.xz",
+		Raw:      `SRC_URI="https://github.com/o/r/releases/download/v1.0/deps.tar.xz"`,
+	}
+
+	cfg := &PrepareConfig{
+		Distdir:   t.TempDir(),
+		ForceType: ebuild.TypeNPM,
+	}
+	err := Prepare(info, cfg)
+	if err == nil {
+		t.Fatal("Prepare with npm type and no mirror://npm/ entries must return an error")
+	}
+	if !strings.Contains(err.Error(), "mirror://npm/") {
+		t.Errorf("error = %v, want it to name mirror://npm/", err)
+	}
+}
+
 
 // ---------------------------------------------------------------------------
 // Plan 22b: npmRunner/archiveRunner seams + D8, D6, D7, D5, D9
 // ---------------------------------------------------------------------------
 
 func TestNpm_InstallArgs(t *testing.T) {
-	// D8: npm --cache <dir> install <tgz>, no --ignore-scripts
+	// D8: npm --cache <dir> install <tgz> --ignore-scripts — lifecycle
+	// scripts must never run on the workstation (mirrors the vendored
+	// pipeline's npm ci --ignore-scripts; scripts only affect node_modules,
+	// never the _cacache cache we tar).
 	tgzPath := filepath.Join(t.TempDir(), "pkg-1.0.0.tgz")
 	if err := os.WriteFile(tgzPath, []byte("fake"), 0644); err != nil {
 		t.Fatal(err)
@@ -592,11 +970,11 @@ func TestNpm_InstallArgs(t *testing.T) {
 		t.Fatalf("npmCreateDepsTarball: %v", err)
 	}
 
-	// Verify npm argv: ["npm", "--cache", <cacheDir>, "install", <tgzPath>]
+	// Verify npm argv: ["npm", "--cache", <cacheDir>, "install", <tgzPath>, "--ignore-scripts"]
 	if recordedNpm == nil {
 		t.Fatal("npmRunner was not called")
 	}
-	if len(recordedNpm.Args) < 5 {
+	if len(recordedNpm.Args) < 6 {
 		t.Fatalf("npm argv too short: %v", recordedNpm.Args)
 	}
 	if recordedNpm.Args[0] != "npm" {
@@ -614,10 +992,14 @@ func TestNpm_InstallArgs(t *testing.T) {
 	if recordedNpm.Args[4] != tgzPath {
 		t.Errorf("npm argv[4] = %q, want %q", recordedNpm.Args[4], tgzPath)
 	}
+	sawIgnoreScripts := false
 	for _, a := range recordedNpm.Args {
 		if a == "--ignore-scripts" {
-			t.Error("--ignore-scripts should not be present")
+			sawIgnoreScripts = true
 		}
+	}
+	if !sawIgnoreScripts {
+		t.Errorf("npm argv must contain --ignore-scripts: %v", recordedNpm.Args)
 	}
 	// Verify tar argv: ["tar", "-caf", <out>, "-C", <dir>, "npm-cache"]
 	if recordedTar == nil {
@@ -714,17 +1096,23 @@ func TestNpm_TarballCompressionFromExtension(t *testing.T) {
 
 func TestNpm_ReleaseCreatePassesNotes(t *testing.T) {
 	// D7: gh release create tag --title "pn deps" --notes "npm dependency cache for pn"
-	runner := github.NewStubRunner()
+	rec := &argvRecorder{inner: github.NewStubRunner()}
 
-	err := ghReleaseCreate("v1.0.0", "", "fish-lsp", runner)
+	err := ghReleaseCreate("v1.0.0", "", "fish-lsp", rec)
 	if err != nil {
 		t.Fatalf("ghReleaseCreate: %v", err)
 	}
 
-	// Verify the stub runner saw the command with --title and --notes
-	key := "gh release create v1.0.0 --title fish-lsp deps --notes npm dependency cache for fish-lsp"
-	if _, ok := runner.Errors[key]; ok {
-		t.Errorf("error recorded for key %q — title/notes should be in the key", key)
+	want := []string{
+		"gh", "release", "create", "v1.0.0",
+		"--title", "fish-lsp deps",
+		"--notes", "npm dependency cache for fish-lsp",
+	}
+	if len(rec.argv) != 1 {
+		t.Fatalf("runner ran %d command(s), want 1: %v", len(rec.argv), rec.argv)
+	}
+	if !reflect.DeepEqual(rec.argv[0], want) {
+		t.Errorf("gh argv = %v, want %v", rec.argv[0], want)
 	}
 }
 
@@ -801,9 +1189,47 @@ SRC_URI="mirror://npm/foo-pkg/foo-0.9.0.tgz"
 	}
 }
 
+func TestNpm_PrefetchDownloadFailureIsFatal(t *testing.T) {
+	// The mirror://npm/ pre-populate rule: a genuinely-missing distfile whose
+	// download fails must abort the manifest-prefetch step with an error
+	// naming the distfile — otherwise pkgdev fails later with a confusing
+	// fetch error.
+	// pkgDir must be named after the package (ParseEbuildPath derives PN
+	// from the parent directory).
+	pkgDir := filepath.Join(t.TempDir(), "foo")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	distDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pkgDir, "foo-1.0.ebuild"), []byte(`EAPI=8
+PN="foo"
+PV="1.0"
+SRC_URI="mirror://npm/foo-pkg/foo-1.0.0.tgz"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	origBase := npmRegistryBase
+	npmRegistryBase = server.URL + "/"
+	defer func() { npmRegistryBase = origBase }()
+
+	err := npmPrefetchPackage(pkgDir, distDir)
+	if err == nil {
+		t.Fatal("npmPrefetchPackage must error when a missing distfile cannot be downloaded")
+	}
+	if !strings.Contains(err.Error(), "foo-1.0.0.tgz") {
+		t.Errorf("error = %v, want it to name the distfile foo-1.0.0.tgz", err)
+	}
+}
+
 func TestNpm_ReleaseUploadUsesClobber(t *testing.T) {
 	// gh release upload <tag> <path> --clobber
-	runner := github.NewStubRunner()
+	rec := &argvRecorder{inner: github.NewStubRunner()}
 
 	tmpDir := t.TempDir()
 	assetPath := filepath.Join(tmpDir, "deps.tar.xz")
@@ -811,9 +1237,16 @@ func TestNpm_ReleaseUploadUsesClobber(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := ghUploadAsset("v1.0.0", assetPath, "", runner)
+	err := ghUploadAsset("v1.0.0", assetPath, "", rec)
 	if err != nil {
 		t.Fatalf("ghUploadAsset: %v", err)
 	}
-	// --clobber is hardcoded in ghUploadAsset source.
+
+	want := []string{"gh", "release", "upload", "v1.0.0", assetPath, "--clobber"}
+	if len(rec.argv) != 1 {
+		t.Fatalf("runner ran %d command(s), want 1: %v", len(rec.argv), rec.argv)
+	}
+	if !reflect.DeepEqual(rec.argv[0], want) {
+		t.Errorf("gh argv = %v, want %v", rec.argv[0], want)
+	}
 }

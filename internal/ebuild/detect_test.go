@@ -65,6 +65,19 @@ func TestDetectType_NpmWithVendoredDepsURL(t *testing.T) {
 	}
 }
 
+func TestDetectType_NpmDirectRegistryURL(t *testing.T) {
+	// Overlay ebuilds moved from mirror://npm/ to direct
+	// registry.npmjs.org URLs; those must still detect as NPM.
+	raw := fixture(t, "npm-direct-registry.ebuild")
+	pathType, infoType := runDetect(t, raw)
+	if pathType != TypeNPM {
+		t.Errorf("DetectType(direct-registry fixture) = %q, want %q", pathType, TypeNPM)
+	}
+	if infoType != TypeNPM {
+		t.Errorf("DetectTypeFromInfo(direct-registry fixture) = %q, want %q", infoType, TypeNPM)
+	}
+}
+
 func TestDetectType_CratesLiteral(t *testing.T) {
 	// T2: literal CRATES= at column 0 should detect cargo.
 	raw := fixture(t, "cargo-literal-crates.ebuild")
@@ -162,6 +175,7 @@ func TestDetectType_AgreesWithInfoVariant(t *testing.T) {
 	// T1, T5: both entry points must agree for every fixture.
 	names := []string{
 		"npm-with-deps-release.ebuild",
+		"npm-direct-registry.ebuild",
 		"cargo-literal-crates.ebuild",
 		"cargo-no-crates.ebuild",
 		"go-module.ebuild",

@@ -609,17 +609,17 @@ func TestExtractVarName(t *testing.T) {
 // ---- TestExpandVariables_MaxIter: stops after max iterations ----
 
 func TestExpandVariables_MaxIter(t *testing.T) {
-	// Self-referencing variable should not infinite loop
+	// Self-referencing variable should not infinite loop. The 10-iteration
+	// cap stops the growth with a leaked literal ${A} followed by one
+	// "-suffix" per completed pass (10 total).
 	vars := VariableMap{
 		"A": "${A}-suffix",
 	}
 	result := ExpandVariables("${A}", vars)
-	// Should stabilize after first expansion without infinite loop
-	if result == "" {
-		t.Error("ExpandVariables should not return empty for self-ref")
+	want := "${A}-suffix-suffix-suffix-suffix-suffix-suffix-suffix-suffix-suffix-suffix"
+	if result != want {
+		t.Errorf("ExpandVariables(%q) = %q, want %q", "${A}", result, want)
 	}
-	// Verify it doesn't loop forever (max 10 iterations)
-	_ = result
 }
 
 // ---- TestExpandVariables_Mixed: $VAR and ${VAR} both work ----
@@ -645,14 +645,12 @@ func TestExpandVariables_Escape(t *testing.T) {
 		"PN": "my-pkg",
 	}
 
-	// Double-brace ${${PN}} should not expand the inner ${PN}
+	// Double-brace ${${PN}}: the outer ${} captures "${PN" as the var name,
+	// which doesn't exist, so the input is returned unchanged.
 	result := ExpandVariables("${${PN}}", vars)
-	// The outer ${} captures ${PN} as the var name, which doesn't exist
-	// So it should remain unchanged
-	if result == "" {
-		t.Error("ExpandVariables should not return empty")
+	if result != "${${PN}}" {
+		t.Errorf("ExpandVariables(%q) = %q, want the input unchanged", "${${PN}}", result)
 	}
-	_ = result
 }
 
 // ---- TestExpandVariables_Empty: empty input ----
@@ -889,7 +887,10 @@ func TestBuildVariableMap_MultiLineSRCURI(t *testing.T) {
 		"SRC_URI": multiLine,
 	}
 
-	entries := ParseSrcUri(multiLine, vars)
+	entries, err := ParseSrcUri(multiLine, vars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 	if len(entries) != 1 {
 		t.Fatalf("ParseSrcUri(multiLine, vars) = %d entries, want 1: %v", len(entries), entries)
 	}
@@ -943,7 +944,10 @@ var ParseSrcUriTestVars = VariableMap{
 
 func TestParseSrcUri_Unconditional(t *testing.T) {
 	input := "\n\tmirror://npm/${PN}/-/${P}.tgz\n"
-	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	entries, err := ParseSrcUri(input, ParseSrcUriTestVars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 	if len(entries) != 1 {
 		t.Fatalf("got %d entries, want 1: %v", len(entries), entries)
 	}
@@ -959,7 +963,10 @@ func TestParseSrcUri_Unconditional(t *testing.T) {
 
 func TestParseSrcUri_RenameTarget(t *testing.T) {
 	input := "mirror://npm/@vtsls/${MY_NPM_NAME}/-/${MY_NPM_NAME}-${PV}.tgz -> ${P}.tgz"
-	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	entries, err := ParseSrcUri(input, ParseSrcUriTestVars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 	if len(entries) != 1 {
 		t.Fatalf("got %d entries, want 1: %v", len(entries), entries)
 	}
@@ -975,7 +982,10 @@ func TestParseSrcUri_RenameTarget(t *testing.T) {
 
 func TestParseSrcUri_UseConditional(t *testing.T) {
 	input := "webui? ( mirror://npm/a/-/a-1.0.tgz -> a.tgz )"
-	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	entries, err := ParseSrcUri(input, ParseSrcUriTestVars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 	if len(entries) != 1 {
 		t.Fatalf("got %d entries, want 1: %v", len(entries), entries)
 	}
@@ -995,7 +1005,10 @@ func TestParseSrcUri_MultiEntryUseGroup(t *testing.T) {
 	https://github.com/o/r/releases/download/pi/${P}-deps.tar.xz
 	webui? ( mirror://npm/${MY_NPM_SCOPE}/pi-web-ui/-/${MY_WEBUI_P}.tgz -> ${MY_WEBUI_P}.tgz
 		https://github.com/o/r/releases/download/pi/${MY_WEBUI_P}-deps.tar.xz )`
-	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	entries, err := ParseSrcUri(input, ParseSrcUriTestVars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 	if len(entries) != 4 {
 		t.Fatalf("got %d entries, want 4: %v", len(entries), entries)
 	}
@@ -1025,7 +1038,10 @@ func TestParseSrcUri_MultiEntryUseGroup(t *testing.T) {
 
 func TestParseSrcUri_NegatedUseFlag(t *testing.T) {
 	input := `!minimal? ( https://e.com/x-1.0.tar.gz )`
-	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	entries, err := ParseSrcUri(input, ParseSrcUriTestVars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 	if len(entries) != 1 {
 		t.Fatalf("got %d entries, want 1: %v", len(entries), entries)
 	}
@@ -1036,7 +1052,10 @@ func TestParseSrcUri_NegatedUseFlag(t *testing.T) {
 
 func TestParseSrcUri_ScopedNpm(t *testing.T) {
 	input := "mirror://npm/@vtsls/language-server/-/language-server-0.3.0.tgz"
-	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	entries, err := ParseSrcUri(input, ParseSrcUriTestVars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 	if len(entries) != 1 {
 		t.Fatalf("got %d entries, want 1: %v", len(entries), entries)
 	}
@@ -1047,7 +1066,10 @@ func TestParseSrcUri_ScopedNpm(t *testing.T) {
 
 func TestParseSrcUri_MultipleEntriesMixedProviders(t *testing.T) {
 	input := "mirror://npm/pkg/pkg-1.0.tgz https://github.com/o/r/releases/download/v1.0/deps.tar.gz"
-	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	entries, err := ParseSrcUri(input, ParseSrcUriTestVars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 	if len(entries) != 2 {
 		t.Fatalf("got %d entries, want 2: %v", len(entries), entries)
 	}
@@ -1061,7 +1083,10 @@ func TestParseSrcUri_MultipleEntriesMixedProviders(t *testing.T) {
 
 func TestParseSrcUri_UrlIsMirrorUnresolved(t *testing.T) {
 	input := "mirror://npm/@scope/pkg/-/pkg-1.0.0.tgz"
-	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	entries, err := ParseSrcUri(input, ParseSrcUriTestVars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 	if len(entries) != 1 {
 		t.Fatalf("got %d entries, want 1: %v", len(entries), entries)
 	}
@@ -1072,7 +1097,10 @@ func TestParseSrcUri_UrlIsMirrorUnresolved(t *testing.T) {
 
 func TestParseSrcUri_IgnoresBareAssignment(t *testing.T) {
 	input := `MY_P="x" mirror://npm/a/-/a.tgz`
-	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	entries, err := ParseSrcUri(input, ParseSrcUriTestVars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 	if len(entries) != 1 {
 		t.Fatalf("got %d entries, want 1: %v", len(entries), entries)
 	}
@@ -1083,7 +1111,10 @@ func TestParseSrcUri_IgnoresBareAssignment(t *testing.T) {
 
 func TestParseSrcUri_Continuation(t *testing.T) {
 	input := "mirror://npm/a/-/a.tgz \\\n\thttps://e.com/b.tar.gz"
-	entries := ParseSrcUri(input, ParseSrcUriTestVars)
+	entries, err := ParseSrcUri(input, ParseSrcUriTestVars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 	if len(entries) != 2 {
 		t.Fatalf("got %d entries, want 2: %v", len(entries), entries)
 	}
@@ -1096,8 +1127,32 @@ func TestParseSrcUri_Continuation(t *testing.T) {
 }
 
 func TestParseSrcUri_Empty(t *testing.T) {
-	entries := ParseSrcUri("", ParseSrcUriTestVars)
+	entries, err := ParseSrcUri("", ParseSrcUriTestVars)
+	if err != nil {
+		t.Fatalf("ParseSrcUri: %v", err)
+	}
 	if len(entries) != 0 {
 		t.Errorf("got %d entries, want 0", len(entries))
+	}
+}
+
+func TestParseSrcUri_RejectsEscapingRenameTarget(t *testing.T) {
+	// The `->` rename target is used verbatim as the DISTDIR filename — a
+	// target with directories, "..", or an absolute path would write outside
+	// DISTDIR and must be a parse error.
+	for _, input := range []string{
+		"https://x/y.tgz -> ../escape.tgz",
+		"https://x/y.tgz -> sub/dir/y.tgz",
+		"https://x/y.tgz -> /abs/y.tgz",
+		"https://x/y.tgz -> ..",
+	} {
+		_, err := ParseSrcUri(input, ParseSrcUriTestVars)
+		if err == nil {
+			t.Errorf("ParseSrcUri(%q) must reject the rename target", input)
+			continue
+		}
+		if !strings.Contains(err.Error(), "escape.tgz") && !strings.Contains(err.Error(), "y.tgz") && !strings.Contains(err.Error(), "..") {
+			t.Errorf("ParseSrcUri(%q) error = %v, want it to name the bad token", input, err)
+		}
 	}
 }
