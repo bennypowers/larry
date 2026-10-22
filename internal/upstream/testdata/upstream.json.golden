@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "package": "dev-util/alpha",
+      "current": "1.0.0",
+      "latest": "1.1.0",
+      "status": "outdated",
+      "source": {
+        "label": "GitHub:acme/alpha",
+        "url": "https://github.com/acme/alpha"
+      },
+      "depth": 0
+    },
+    {
+      "package": "dev-util/beta",
+      "current": "2.0.0",
+      "latest": "2.0.0",
+      "status": "up_to_date",
+      "source": {
+        "label": "GitLab:gitlab.gnome.org/g/beta",
+        "url": "https://gitlab.gnome.org/g/beta"
+      },
+      "depth": 1
+    },
+    {
+      "package": "dev-util/gamma",
+      "current": "3.0.0",
+      "latest": "2.9.0",
+      "status": "ahead",
+      "source": {
+        "label": "Codeberg:acme/gamma",
+        "url": "https://codeberg.org/acme/gamma"
+      },
+      "depth": 0
+    },
+    {
+      "package": "dev-util/zeta",
+      "current": "9999 (live)",
+      "latest": "6.0.0",
+      "status": "has_release",
+      "source": {
+        "label": "npm:@acme/zeta",
+        "url": "https://www.npmjs.com/package/@acme/zeta"
+      },
+      "depth": 0
+    },
+    {
+      "package": "dev-util/theta",
+      "current": "8.0.0",
+      "latest": "",
+      "status": "deprecated",
+      "source": {
+        "label": "deprecated"
+      },
+      "target": "dev-util/iota",
+      "depth": 0
+    },
+    {
+      "package": "dev-util/kappa",
+      "current": "9.0.0",
+      "latest": "",
+      "status": "unknown",
+      "source": {
+        "label": ""
+      },
+      "error": "no provider match",
+      "depth": 0
+    }
+  ]
+}

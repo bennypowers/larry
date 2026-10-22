@@ -20,6 +20,7 @@ var (
 	upstreamFresh       bool
 	upstreamPrereleases bool
 	upstreamTUI         bool
+	upstreamOutput      string
 )
 
 // runUpstreamWithTargets is upstream.RunWithTargets; tests replace it.
@@ -34,6 +35,8 @@ func init() {
 		"include pre-release versions in checks")
 	upstreamCmd.Flags().BoolVar(&upstreamTUI, "tui", false,
 		"render results as an interactive TUI (requires TTY)")
+	upstreamCmd.Flags().StringVar(&upstreamOutput, "output", "text",
+		"output format: text or json")
 }
 
 var upstreamCmd = cobra.Command{
@@ -76,6 +79,14 @@ Examples:
 `,
 	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		switch upstreamOutput {
+		case "text", "json":
+		default:
+			return fmt.Errorf("invalid --output %q (must be text or json)", upstreamOutput)
+		}
+		if upstreamTUI && upstreamOutput == "json" {
+			return fmt.Errorf("--tui cannot be combined with --output json")
+		}
 		// Resolve overlay directory.
 		overlayDir, err := cfg.ResolveOverlay(rootFlags.Overlay)
 		if err != nil {
@@ -123,6 +134,15 @@ Examples:
 		registry := provider.NewProviderRegistry()
 		for _, p := range providers.AllProviders() {
 			registry.Register(p)
+		}
+
+		// Machine output: every result, no spinner, no text on stdout.
+		if upstreamOutput == "json" {
+			results, err := runUpstreamWithTargets(overlayDir, registry, targets, upstreamPrereleases, upstreamFresh)
+			if err != nil {
+				return fmt.Errorf("upstream check failed: %w", err)
+			}
+			return upstream.RenderJSON(cmd.OutOrStdout(), results)
 		}
 
 		// Non-TTY mode: run check with spinner.
