@@ -22,6 +22,10 @@ import (
 // even on a workstation that has pycargoebuild installed.
 var lookPath = exec.LookPath
 
+// cratesDownloadBase is the static.crates.io download base URL. Tests
+// replace it to point at an httptest server.
+var cratesDownloadBase = "https://static.crates.io/crates/"
+
 // forgeKind identifies the upstream forge for a cargo package.
 type forgeKind int
 
@@ -387,6 +391,8 @@ edition = "2021"
 func runPycargoebuild(dir, ebuildPath string, runner github.CmdRunner) error {
 	cmd := exec.Command("pycargoebuild", dir, "--no-write-crate-tarball", "--no-manifest", "--inplace", ebuildPath)
 	cmd.Dir = dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	return runner.Run(cmd)
 }
 
@@ -520,11 +526,13 @@ func cargoPrefetchPackage(pkgDir, distdir string) error {
 		}
 
 		for _, c := range crates {
-			crateURL := "https://static.crates.io/crates/" + c.Name + "/" + c.Name + "-" + c.Version + ".crate"
+			crateURL := cratesDownloadBase + c.Name + "/" + c.Name + "-" + c.Version + ".crate"
 			filename := c.Name + "-" + c.Version + ".crate"
 			destPath := filepath.Join(distdir, filename)
 
-			// Skip if already exists and is non-empty
+			// Skip if already exists and is non-empty. Safe: downloads are
+			// atomic (rename into place only after the full body matches
+			// Content-Length), so a non-empty file is always complete.
 			if info, err := os.Stat(destPath); err == nil && info.Size() > 0 {
 				continue
 			}
@@ -555,16 +563,11 @@ func cargoPrefetchPackage(pkgDir, distdir string) error {
 				continue
 			}
 
-			out, err := os.Create(destPath)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "[larry] cargo prefetch: %s: %v\n", filename, err)
-				_ = resp.Body.Close()
-				continue
-			}
-			if _, err := io.Copy(out, resp.Body); err != nil {
+			// Atomic write: a short or failed download must never leave a
+			// file that a later run treats as complete.
+			if err := atomicWriteBody(resp.Body, destPath, resp.ContentLength); err != nil {
 				fmt.Fprintf(os.Stderr, "[larry] cargo prefetch: %s: %v\n", filename, err)
 			}
-			_ = out.Close()
 			_ = resp.Body.Close()
 		}
 	}

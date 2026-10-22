@@ -119,7 +119,9 @@ func PrepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 		if tag, ok := goReleaseTag(ei, pe, cfg.GitHubRepo); ok {
 			gh := github.NewClientWithRunner(runner)
 			if err := npmUploadAsset(tag, filepath.Base(outPath), distDir, cfg.GitHubRepo, ei.PN(), gh.Runner()); err != nil {
-				fmt.Fprintf(os.Stderr, "[larry] go: upload deps asset: %v (manifest may fail if distfiles are unavailable)\n", err)
+				// The ebuild's SRC_URI fetches this asset — a swallowed
+				// failure would ship an ebuild that 404s while larry exits 0.
+				return fmt.Errorf("go: upload deps asset: %w", err)
 			}
 		}
 	}
@@ -184,8 +186,43 @@ func findGoRepo(ei *ebuild.EbuildInfo) (owner, repo string) {
 	return "", ""
 }
 
+// tarConfinedTarget returns the destination path for a tar entry name, or an
+// error when the name is absolute or escapes destDir via ".." components.
+func tarConfinedTarget(destDir, name string) (string, error) {
+	if name == "" || filepath.IsAbs(name) {
+		return "", fmt.Errorf("tar entry %q has an absolute or empty path", name)
+	}
+	root := filepath.Clean(destDir)
+	target := filepath.Clean(filepath.Join(root, name))
+	if target != root && !strings.HasPrefix(target, root+string(filepath.Separator)) {
+		return "", fmt.Errorf("tar entry %q escapes the extraction directory", name)
+	}
+	return target, nil
+}
+
+// tarLinkEscapes reports whether a symlink/hardlink entry's target would
+// resolve outside destDir. Both resolutions are tried — relative to the
+// entry's own directory (symlink semantics) and to the extraction root
+// (hardlink semantics) — so a link is only rejected when it escapes both.
+func tarLinkEscapes(destDir, entryDir, linkname string) bool {
+	if linkname == "" {
+		return false
+	}
+	if filepath.IsAbs(linkname) {
+		return true
+	}
+	root := filepath.Clean(destDir)
+	confined := func(p string) bool {
+		return p == root || strings.HasPrefix(p, root+string(filepath.Separator))
+	}
+	return !confined(filepath.Clean(filepath.Join(entryDir, linkname))) &&
+		!confined(filepath.Clean(filepath.Join(root, linkname)))
+}
+
 // extractGoSource extracts a gzip tarball from the given reader into destDir.
-// Uses archive/tar + compress/gzip (no subprocess).
+// Uses archive/tar + compress/gzip (no subprocess). Every entry is confined
+// to destDir: absolute paths and ".." traversal are rejected with an error,
+// as are symlink/hardlink entries whose resolved target would escape.
 func extractGoSource(r io.Reader, destDir string) error {
 	gzr, err := gzip.NewReader(r)
 	if err != nil {
@@ -203,7 +240,10 @@ func extractGoSource(r io.Reader, destDir string) error {
 			return fmt.Errorf("read tar entry: %w", err)
 		}
 
-		target := filepath.Join(destDir, header.Name)
+		target, err := tarConfinedTarget(destDir, header.Name)
+		if err != nil {
+			return err
+		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -223,6 +263,14 @@ func extractGoSource(r io.Reader, destDir string) error {
 				return fmt.Errorf("write file: %w", err)
 			}
 			_ = outFile.Close() // best-effort close after successful write
+		case tar.TypeSymlink, tar.TypeLink:
+			// Link entries are not materialised, but validate their targets
+			// so a hostile tarball cannot smuggle an escaping link past the
+			// guard.
+			if tarLinkEscapes(destDir, filepath.Dir(target), header.Linkname) {
+				return fmt.Errorf("tar entry %q links to %q which escapes the extraction directory", header.Name, header.Linkname)
+			}
+			// Confined link: skipped (not materialised), matching previous behaviour.
 		}
 	}
 
@@ -263,6 +311,8 @@ func findGoModuleRoot(root string) (string, error) {
 func runGoModVendor(dir string, runner github.CmdRunner) error {
 	cmd := exec.Command("go", "mod", "vendor")
 	cmd.Dir = dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	return runner.Run(cmd)
 }
 

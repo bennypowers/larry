@@ -1622,3 +1622,47 @@ func diffStrings(a, b string) string {
 func jsonUnmarshal(data []byte, v interface{}) error {
 	return json.Unmarshal(data, v)
 }
+
+// ---------------------------------------------------------------------------
+// cargoPrefetchPackage — atomic distfile downloads
+// ---------------------------------------------------------------------------
+
+func TestCargo_PrefetchAtomicDownload(t *testing.T) {
+	// A truncated crate download must not leave a usable distfile (or a
+	// .part file) behind — the next run has to re-download it.
+	pkgDir := t.TempDir()
+	distDir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(pkgDir, "foo-1.0.ebuild"), []byte(`EAPI=8
+PN="foo"
+PV="1.0"
+CRATES="
+	winhook@0.1.0
+"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1024")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("short")) // truncated vs declared Content-Length
+	}))
+	defer server.Close()
+
+	origBase := cratesDownloadBase
+	cratesDownloadBase = server.URL + "/"
+	defer func() { cratesDownloadBase = origBase }()
+
+	if err := cargoPrefetchPackage(pkgDir, distDir); err != nil {
+		t.Fatalf("cargoPrefetchPackage: %v", err)
+	}
+
+	destPath := filepath.Join(distDir, "winhook-0.1.0.crate")
+	if _, err := os.Stat(destPath); err == nil {
+		t.Error("truncated download left a distfile behind — a later run would treat it as complete")
+	}
+	if _, err := os.Stat(destPath + ".part"); err == nil {
+		t.Error("truncated download left a .part file behind")
+	}
+}

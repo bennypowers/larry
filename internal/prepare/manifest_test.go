@@ -499,3 +499,22 @@ func TestVerifyManifest_WellFormedDistIsValid(t *testing.T) {
 		t.Errorf("verifyManifestValid(pkgDir, [dist]) = %v, want nil", err)
 	}
 }
+
+func TestVerifyManifest_MissingExpectedDistfileIsInvalid(t *testing.T) {
+	// Counting DIST lines is not enough: every expected distfile must HAVE
+	// an entry, or the ebuild ships with a SRC_URI that cannot be fetched.
+	pkgDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte(
+		"DIST foo-1.0.tar.gz 1234 BLAKE2B abc SHA512 def\n",
+	), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := verifyManifestValid(pkgDir, []string{"foo-1.0.tar.gz", "foo-1.0-deps.tar.xz"})
+	if err == nil {
+		t.Fatal("expected error when an expected distfile has no DIST entry")
+	}
+	if !strings.Contains(err.Error(), "foo-1.0-deps.tar.xz") {
+		t.Errorf("error = %v, want it to list the missing distfile", err)
+	}
+}

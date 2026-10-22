@@ -33,11 +33,6 @@ var ManifestRunner = func(bin string, args []string, dir string, env []string) e
 	return nil
 }
 
-// ManifestRunnerRestore restores the original ManifestRunner (called from tests).
-func ManifestRunnerRestore(orig func(string, []string, string, []string) error) {
-	ManifestRunner = orig
-}
-
 // manifestStyle selects the manifest generation tool and argument format.
 type manifestStyle int
 
@@ -220,6 +215,8 @@ func runManifest(req manifestRequest) error {
 
 // verifyManifestValid checks <pkgDir>/Manifest.
 // expectedDistfiles may be empty, which means "no DIST lines required".
+// When distfiles are expected, every one of them must have a valid DIST
+// entry — a present-but-incomplete Manifest is an error.
 func verifyManifestValid(pkgDir string, expectedDistfiles []string) error {
 	manifestPath := filepath.Join(pkgDir, "Manifest")
 
@@ -241,16 +238,32 @@ func verifyManifestValid(pkgDir string, expectedDistfiles []string) error {
 	distRe := regexp.MustCompile(`^DIST\s+\S+\s+[1-9]\d*\s+\S+\s+\S+`)
 
 	entries := 0
+	present := make(map[string]bool)
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
-		if distRe.MatchString(scanner.Text()) {
+		line := scanner.Text()
+		if distRe.MatchString(line) {
 			entries++
+			if fields := strings.Fields(line); len(fields) >= 2 {
+				present[fields[1]] = true
+			}
 		}
 	}
 
 	// Zero matching DIST lines is an error only if distfiles were expected.
 	if entries == 0 && len(expectedDistfiles) > 0 {
 		return fmt.Errorf("manifest has no valid DIST entries (expected %d distfile(s))", len(expectedDistfiles))
+	}
+
+	// Every expected distfile must have an entry.
+	var missing []string
+	for _, want := range expectedDistfiles {
+		if !present[want] {
+			missing = append(missing, want)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("manifest has no DIST entry for: %s", strings.Join(missing, ", "))
 	}
 
 	return nil

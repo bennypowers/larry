@@ -2,6 +2,7 @@ package prepare
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
@@ -103,9 +105,14 @@ func extractSRCURIForPN(srcURI, pkg string) []string {
 // downloadFileFromURL — download a file from a URL
 // ---------------------------------------------------------------------------
 
+// downloadClient downloads distfiles for the vendored pipeline. The timeout
+// guards against stalled servers, not slow ones: it is sized for
+// distfile-sized tarballs, so it must stay generous.
+var downloadClient = &http.Client{Timeout: 10 * time.Minute}
+
 // downloadFileFromURL downloads a file from url to dest.
 func downloadFileFromURL(url, dest string) error {
-	resp, err := http.Get(url)
+	resp, err := downloadClient.Get(url)
 	if err != nil {
 		return fmt.Errorf("download %s: %w", url, err)
 	}
@@ -151,6 +158,8 @@ func extractTarball(tarballPath, destDir string) error {
 	}
 
 	cmd.Dir = destDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
@@ -175,6 +184,8 @@ func createVendorTarball(baseDir, contentDir, outputPath string) error {
 		cmd = exec.Command("tar", "cIf", outputPath, "-C", baseDir, contentDir)
 	}
 
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
@@ -203,6 +214,25 @@ func copyTarballToDistdir(srcTarball, distdir string) error {
 // GitHub helpers — release view, create, upload
 // ---------------------------------------------------------------------------
 
+// ghReleaseNotFound reports whether err is gh's "release not found"
+// response: exit code 1 with "not found" on stderr. Stub runners produce
+// plain errors, so a not-found-shaped message also counts; every other
+// error (auth, network, rate limit) is a real failure.
+func ghReleaseNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		if exitErr.ExitCode() != 1 {
+			return false
+		}
+		stderr := strings.ToLower(string(exitErr.Stderr)) + " " + strings.ToLower(err.Error())
+		return strings.Contains(stderr, "not found")
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "not found")
+}
+
 // ghReleaseViewExists checks if a GitHub release tag exists.
 func ghReleaseViewExists(tag, repo string, runner github.CmdRunner) (bool, error) {
 	cmd := exec.Command("gh", "release", "view", tag, "--json", "tagName,url")
@@ -213,7 +243,10 @@ func ghReleaseViewExists(tag, repo string, runner github.CmdRunner) (bool, error
 
 	out, err := runner.Output(cmd)
 	if err != nil {
-		return false, nil // not found is not an error for our purposes
+		if ghReleaseNotFound(err) {
+			return false, nil // release absent — not an error for our purposes
+		}
+		return false, fmt.Errorf("gh release view %s: %w", tag, err)
 	}
 
 	if len(out) == 0 {
@@ -384,14 +417,20 @@ func runVendorCommand(depType DepType, workDir string) error {
 		}
 		cmd := exec.Command("npm", "ci", "--ignore-scripts")
 		cmd.Dir = workDir
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 		return cmd.Run()
 	case DepCargo:
 		cmd := exec.Command("cargo", "vendor", "vendor/")
 		cmd.Dir = workDir
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 		return cmd.Run()
 	case DepGo:
 		cmd := exec.Command("go", "mod", "vendor")
 		cmd.Dir = workDir
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 		return cmd.Run()
 	default:
 		return fmt.Errorf("unknown dep type: %s", depType)

@@ -526,8 +526,69 @@ func TestRunCustomPrepare_UsesCmdDir(t *testing.T) {
 	}
 }
 
-// TestRunCustomPrepare_SandboxWarningSuppressible verifies the sandbox
-// warning uses the logger's Warn method (quiet-suppressed).
+func TestRunCustomPrepare_TmpdirAliveDuringScript(t *testing.T) {
+	// The sandbox TMPDIR must exist for the script's whole execution (mktemp
+	// uses it) and be cleaned up only after the script AND the manifest step
+	// complete.
+	pkgDir := filepath.Join(t.TempDir(), "test")
+	ebuildPath := filepath.Join(pkgDir, "test-1.0.ebuild")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ebuildPath, []byte("EAPI=8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// mktemp fails when TMPDIR points at a deleted directory, so the script
+	// doubles as a TMPDIR-liveness probe. It records the created file so the
+	// test can verify cleanup afterward.
+	tmpdirFile := filepath.Join(pkgDir, "tmpdir.out")
+	scriptPath := filepath.Join(pkgDir, ".larry", "prepare.sh")
+	script := "#!/bin/sh\nmktemp > " + tmpdirFile + "\n"
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stub ManifestRunner so the manifest step runs after the script.
+	orig := ManifestRunner
+	ManifestRunner = func(bin string, args []string, dir string, env []string) error {
+		return nil
+	}
+	t.Cleanup(func() { ManifestRunner = orig })
+
+	ei := &ebuild.EbuildInfo{
+		Path:  ebuildPath,
+		Pkg:   "test",
+		PVVal: "1.0",
+		PVal:  "test-1.0",
+	}
+	cfg := &PrepareConfig{
+		Distdir: t.TempDir(),
+	}
+
+	err := runCustomPrepare(ei, scriptPath, cfg)
+	if err != nil {
+		t.Fatalf("runCustomPrepare: %v (mktemp must succeed — the sandbox TMPDIR must exist while the script runs)", err)
+	}
+
+	data, err := os.ReadFile(tmpdirFile)
+	if err != nil {
+		t.Fatalf("read tmpdir.out: %v", err)
+	}
+	scriptTmp := strings.TrimSpace(string(data))
+	if scriptTmp == "" {
+		t.Fatal("script did not record a temp file path")
+	}
+	// The file mktemp created lives under the sandbox TMPDIR — after
+	// runCustomPrepare returns, the whole sandbox dir must be gone.
+	if _, err := os.Stat(filepath.Dir(scriptTmp)); err == nil {
+		t.Errorf("sandbox temp dir %s still exists after runCustomPrepare", filepath.Dir(scriptTmp))
+	}
+}
+
 func TestRunCustomPrepare_SandboxWarningSuppressible(t *testing.T) {
 	// Proper dir structure: <tmpdir>/test/test-1.0.ebuild
 	pkgDir := filepath.Join(t.TempDir(), "test")
@@ -592,5 +653,76 @@ func TestRunCustomPrepare_SandboxWarningSuppressible(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// sandboxEnv — userspace sandbox environment sanitization
+// ---------------------------------------------------------------------------
+
+func TestSandboxEnv_Sanitizes(t *testing.T) {
+	// sandboxEnv must strip dangerous vars (BASH_ENV, GREP_OPTIONS), restrict
+	// PATH to system dirs, and add the larry-specific entries.
+	t.Setenv("BASH_ENV", "/evil/bash-env.sh")
+	t.Setenv("GREP_OPTIONS", "--evil")
+	t.Setenv("PATH", "/home/user/.local/bin:/usr/bin")
+
+	tmpDir := t.TempDir()
+	ebuildPath := filepath.Join(tmpDir, "dev-util", "foo", "foo-1.0.ebuild")
+	ei := &ebuild.EbuildInfo{
+		Path:     ebuildPath,
+		Category: "dev-util",
+		Pkg:      "foo",
+		PVVal:    "1.0",
+		PVal:     "foo-1.0",
+	}
+	cfg := &PrepareConfig{Distdir: "/dist/dir"}
+
+	sandboxTmp := filepath.Join(t.TempDir(), "larry-prepare-x")
+	if err := os.MkdirAll(sandboxTmp, 0755); err != nil {
+		t.Fatal(err)
+	}
+	env := sandboxEnv(ei, cfg, sandboxTmp)
+
+	for _, e := range env {
+		if strings.HasPrefix(e, "BASH_ENV=") {
+			t.Errorf("env contains BASH_ENV: %q", e)
+		}
+		if strings.HasPrefix(e, "GREP_OPTIONS=") {
+			t.Errorf("env contains GREP_OPTIONS: %q", e)
+		}
+	}
+
+	// PATH is restricted to the system dirs, not inherited.
+	wantPath := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	var gotPath string
+	for _, e := range env {
+		if strings.HasPrefix(e, "PATH=") {
+			gotPath = strings.TrimPrefix(e, "PATH=")
+		}
+	}
+	if gotPath != wantPath {
+		t.Errorf("PATH = %q, want %q", gotPath, wantPath)
+	}
+
+	// Larry-specific entries are present.
+	for _, want := range []string{
+		"EBUILD=" + ebuildPath,
+		"DISTDIR=/dist/dir",
+		"LARRY_SANDBOX_WRITE=" + filepath.Dir(ebuildPath) + ":/dist/dir",
+		"LARRY_SANDBOX_READ=/",
+		"TMPDIR=" + sandboxTmp,
+		"TEMP=" + sandboxTmp,
+	} {
+		found := false
+		for _, e := range env {
+			if e == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("env missing %q; got %v", want, env)
+		}
 	}
 }

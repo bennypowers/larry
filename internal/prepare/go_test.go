@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"errors"
 
 	"github.com/ulikunitz/xz"
 	"encoding/json"
@@ -647,6 +648,59 @@ func TestPrepareGo_UploadUsesSrcUriReleaseTag(t *testing.T) {
 	assertNoVersionTagGhCalls(t, runner)
 }
 
+func TestPrepareGo_UploadFailureIsFatal(t *testing.T) {
+	// The deps-asset upload backs a SRC_URI the ebuild will fetch — a
+	// swallowed upload failure ships an ebuild whose SRC_URI 404s while
+	// larry exits 0.
+	tmpDir := t.TempDir()
+	srv := goFixture(t, "acme", "proj", "v1.0.0")
+
+	ei := makeGoEbuildInfoWithReleaseURL(t, tmpDir, "acme", "proj", "bennypowers/gentoo-overlay")
+	inner := &recRunner{}
+	runner := &failingGhRunner{inner: inner}
+	overlay := filepath.Join(tmpDir, "overlay")
+	distDir := t.TempDir()
+
+	stubManifestRunner(t)
+
+	cfg := &PrepareConfig{
+		Overlay:       overlay,
+		Distdir:       distDir,
+		GitHubBaseURL: srv.URL,
+		GitHubRepo:    "bennypowers/gentoo-overlay",
+		Runner:        runner,
+		HTTPClient:    srv.Client(),
+	}
+
+	err := PrepareGo(ei, cfg)
+	if err == nil {
+		t.Fatal("expected PrepareGo to fail when the deps-asset upload fails")
+	}
+	if !strings.Contains(err.Error(), "upload") {
+		t.Errorf("error = %v, want it to mention the upload failure", err)
+	}
+}
+
+// failingGhRunner passes go commands through to the inner runner but fails
+// every gh invocation.
+type failingGhRunner struct {
+	inner *recRunner
+}
+
+func (r *failingGhRunner) Run(cmd *exec.Cmd) error {
+	if len(cmd.Args) > 0 && cmd.Args[0] == "gh" {
+		return errors.New("gh upload exploded")
+	}
+	return r.inner.Run(cmd)
+}
+
+func (r *failingGhRunner) Output(cmd *exec.Cmd) ([]byte, error) {
+	if len(cmd.Args) > 0 && cmd.Args[0] == "gh" {
+		return nil, errors.New("gh upload exploded")
+	}
+	return r.inner.Output(cmd)
+}
+
 func TestPrepareGo_NoUploadForForeignReleaseURL(t *testing.T) {
 	tmpDir := t.TempDir()
 	srv := goFixture(t, "acme", "proj", "v1.0.0")
@@ -1196,6 +1250,85 @@ func TestExtractGoSource_BadGzip(t *testing.T) {
 	err := extractGoSource(strings.NewReader("not a gzip file"), tmpDir)
 	if err == nil {
 		t.Error("expected error for bad gzip data")
+	}
+}
+
+func TestExtractGoSource_RejectsPathTraversal(t *testing.T) {
+	// A hostile tarball must not write outside the extraction dir.
+	destDir := t.TempDir()
+
+	// Absolute-path target — use a unique name so a failing guard leaves a
+	// detectable (and cleaned-up) canary rather than clobbering /tmp.
+	evilAbs := filepath.Join(os.TempDir(), fmt.Sprintf("larry-evil-absolute-%d.txt", os.Getpid()))
+	defer func() { _ = os.Remove(evilAbs) }()
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	w := tar.NewWriter(gz)
+
+	for _, hdr := range []*tar.Header{
+		{Name: "../evil.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 3},
+		{Name: evilAbs, Typeflag: tar.TypeReg, Mode: 0o644, Size: 3},
+	} {
+		if err := w.WriteHeader(hdr); err != nil {
+			t.Fatalf("tar header: %v", err)
+		}
+		if _, err := w.Write([]byte("bad")); err != nil { // tar writer; error cannot occur after header
+			t.Fatalf("tar data: %v", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close gzip writer: %v", err)
+	}
+
+	err := extractGoSource(bytes.NewReader(buf.Bytes()), destDir)
+	if err == nil {
+		t.Fatal("expected error for path traversal entries")
+	}
+	if !strings.Contains(err.Error(), "../evil.txt") {
+		t.Errorf("error = %v, want it to name the escaping entry", err)
+	}
+
+	// Nothing may be written outside destDir.
+	if _, statErr := os.Stat(filepath.Join(filepath.Dir(destDir), "evil.txt")); statErr == nil {
+		t.Error("../evil.txt was written outside the extraction dir")
+	}
+	if _, statErr := os.Stat(evilAbs); statErr == nil {
+		t.Error("absolute-path entry was written outside the extraction dir")
+	}
+}
+
+func TestExtractGoSource_RejectsEscapingSymlink(t *testing.T) {
+	destDir := t.TempDir()
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	w := tar.NewWriter(gz)
+	hdr := &tar.Header{
+		Name:     "proj-1.0.0/link",
+		Linkname: "../../../etc/passwd",
+		Typeflag: tar.TypeSymlink,
+		Mode:     0o777,
+	}
+	if err := w.WriteHeader(hdr); err != nil {
+		t.Fatalf("tar header: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close gzip writer: %v", err)
+	}
+
+	err := extractGoSource(bytes.NewReader(buf.Bytes()), destDir)
+	if err == nil {
+		t.Fatal("expected error for a symlink whose target escapes the extraction dir")
+	}
+	if !strings.Contains(err.Error(), "link") {
+		t.Errorf("error = %v, want it to name the link entry", err)
 	}
 }
 

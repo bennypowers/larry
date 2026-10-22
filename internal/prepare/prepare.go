@@ -108,9 +108,9 @@ func Prepare(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	// (keep this comment to preserve line numbering for existing tests)
 	switch pkgType {
 	case ebuild.TypeNPM:
-		return prepareNpm(ei, cfg)
+		return npmPrepare(ei, cfg)
 	case ebuild.TypeCargo:
-		return prepareCargo(ei, cfg)
+		return PrepareCargo(ei, cfg)
 	case ebuild.TypeGo:
 		return PrepareGo(ei, cfg)
 	case ebuild.TypeVendored:
@@ -275,22 +275,6 @@ func warnToLogger(cfg *PrepareConfig, msg string) {
 	fmt.Fprintf(os.Stderr, "*** %s\n", msg)
 }
 
-// prepareNpm runs the npm-specific prepare pipeline.
-func prepareNpm(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
-	return npmPrepare(ei, cfg)
-}
-
-// prepareCargo runs the cargo-specific prepare pipeline.
-func prepareCargo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
-	return PrepareCargo(ei, cfg)
-}
-
-// NewEbuildInfoFromPath creates an EbuildInfo from a file path.
-// Uses the shared upstream parser for accurate multi-line value extraction.
-func NewEbuildInfoFromPath(path string) (*ebuild.EbuildInfo, error) {
-	return upstream.ParseEbuildInfo(path)
-}
-
 // parsePVRaw parses a PV string and returns (basePV, revision).
 func parsePVRaw(pv string) (string, int) {
 	// Check for revision suffix: -rN
@@ -406,8 +390,20 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 	}
 	defer func() { _ = os.Remove(ei.Path + ".bak") }() // best-effort cleanup
 
+	// Sandbox temp dir. Created here (not inside sandboxEnv) so it stays
+	// alive for the script's whole execution AND the manifest step below —
+	// sandboxEnv returns before the script runs, so a temp dir created (and
+	// deferred-removed) there would already be gone by the time the script
+	// uses TMPDIR. The deferred cleanup fires only when runCustomPrepare
+	// returns, after both steps complete.
+	tmpDir, err := os.MkdirTemp("/tmp", "larry-prepare-")
+	if err != nil {
+		return fmt.Errorf("create sandbox temp dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }() // best-effort cleanup
+
 	// Build sandboxed environment
-	env := sandboxEnv(ei, cfg)
+	env := sandboxEnv(ei, cfg, tmpDir)
 
 	// The child chdirs into the package dir before exec, so a relative
 	// script path would resolve against the package dir instead of larry's
@@ -465,8 +461,10 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 }
 
 // sandboxEnv builds a sandboxed environment for custom prepare scripts,
-// modeled after Portage's ebuild.sh environment handling.
-func sandboxEnv(ei *ebuild.EbuildInfo, cfg *PrepareConfig) []string {
+// modeled after Portage's ebuild.sh environment handling. tmpDir is the
+// larry-owned temp dir exposed as TMPDIR/TMP/TEMP; the caller owns its
+// lifetime (it must outlive the script's execution).
+func sandboxEnv(ei *ebuild.EbuildInfo, cfg *PrepareConfig, tmpDir string) []string {
 	// Start with a minimal set of inherited env vars
 	systemDirs := []string{
 		"/usr/local/sbin", "/usr/local/bin",
@@ -513,9 +511,7 @@ func sandboxEnv(ei *ebuild.EbuildInfo, cfg *PrepareConfig) []string {
 		"LARRY_SANDBOX_READ=/",
 	)
 
-	// Temp dir — restrict to a larry-owned temp dir
-	tmpDir, _ := os.MkdirTemp("/tmp", "larry-prepare-")
-	defer func() { _ = os.RemoveAll(tmpDir) }() // best-effort cleanup
+	// Temp dir — restrict to a larry-owned temp dir (caller-managed lifetime)
 	env = append(env,
 		"TMPDIR="+tmpDir,
 		"TMP="+tmpDir,

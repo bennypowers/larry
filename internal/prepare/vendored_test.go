@@ -2,19 +2,63 @@ package prepare
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"bennypowers.dev/larry/internal/atom"
 	"bennypowers.dev/larry/internal/ebuild"
 	"bennypowers.dev/larry/internal/github"
 	"bennypowers.dev/larry/internal/larryconfig"
 )
+
+// captureStderr swaps os.Stderr for a pipe, runs fn, and returns whatever fn
+// wrote directly to the real stderr stream.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = orig }()
+
+	fn()
+	if err := w.Close(); err != nil {
+		t.Fatalf("close pipe writer: %v", err)
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read pipe: %v", err)
+	}
+	return string(data)
+}
+
+// argvRecorder wraps a StubRunner and records the full argv of every command
+// run through it (same pattern as internal/providers recordingRunner).
+type argvRecorder struct {
+	inner *github.StubRunner
+	argv  [][]string
+}
+
+func (r *argvRecorder) Run(cmd *exec.Cmd) error {
+	r.argv = append(r.argv, cmd.Args)
+	return r.inner.Run(cmd)
+}
+
+func (r *argvRecorder) Output(cmd *exec.Cmd) ([]byte, error) {
+	r.argv = append(r.argv, cmd.Args)
+	return r.inner.Output(cmd)
+}
 
 // ---------------------------------------------------------------------------
 // parseDepSpec tests — infer DepSpec from distfile name
@@ -138,6 +182,36 @@ func TestVendored_DownloadSource_NotFound(t *testing.T) {
 	}
 }
 
+func TestVendored_DownloadStallTimesOut(t *testing.T) {
+	// A server that accepts the connection but never responds must fail once
+	// the download client's timeout elapses — a stalled server must not hang
+	// prepare forever.
+	block := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block
+	}))
+	t.Cleanup(func() {
+		close(block)
+		server.Close()
+	})
+
+	// Swap in a short timeout so the test fails fast; the production client
+	// uses a generous one (distfile-sized downloads).
+	orig := downloadClient
+	downloadClient = &http.Client{Timeout: 100 * time.Millisecond}
+	t.Cleanup(func() { downloadClient = orig })
+
+	dest := filepath.Join(t.TempDir(), "stalled.tar.gz")
+	start := time.Now()
+	err := downloadFileFromURL(server.URL+"/stalled.tar.gz", dest)
+	if err == nil {
+		t.Fatal("expected error from stalled server")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("download took %v to fail; the client timeout should bound it", elapsed)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // extractSource tests
 // ---------------------------------------------------------------------------
@@ -178,6 +252,33 @@ func TestVendored_ExtractSource_InvalidTarball(t *testing.T) {
 	err := extractTarball("/nonexistent.tar.gz", t.TempDir())
 	if err == nil {
 		t.Fatal("expected error for invalid tarball")
+	}
+}
+
+func TestVendored_ExtractTarball_PassesThroughCommandOutput(t *testing.T) {
+	// A failing tar must surface its stderr output, not a bare "exit status 1".
+	dir := t.TempDir()
+	garbage := filepath.Join(dir, "garbage.tar.gz")
+	if err := os.WriteFile(garbage, []byte("not a tarball"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	stderr := captureStderr(t, func() {
+		_ = extractTarball(garbage, filepath.Join(dir, "out"))
+	})
+	if stderr == "" {
+		t.Error("tar failure produced no stderr output — subprocess output is discarded")
+	}
+}
+
+func TestVendored_RunVendorCommand_PassesThroughCommandOutput(t *testing.T) {
+	// A failing vendor command (go mod vendor in a dir without go.mod) must
+	// surface its stderr output, not a bare "exit status 1".
+	stderr := captureStderr(t, func() {
+		_ = runVendorCommand(DepGo, t.TempDir())
+	})
+	if stderr == "" {
+		t.Error("vendor command failure produced no stderr output — subprocess output is discarded")
 	}
 }
 
@@ -297,19 +398,67 @@ func TestVendored_GhReleaseView_NotExists(t *testing.T) {
 	}
 }
 
+func TestVendored_GhReleaseView_OtherErrorPropagates(t *testing.T) {
+	// Auth/network failures must not read as "release does not exist" —
+	// they surface later as confusing create-release errors instead.
+	runner := github.NewStubRunner()
+	runner.Errors["gh release view pkg --json tagName,url"] = fmt.Errorf("gh: authentication required")
+
+	exists, err := ghReleaseViewExists("pkg", "", runner)
+	if err == nil {
+		t.Fatal("expected non-not-found gh error to propagate")
+	}
+	if !strings.Contains(err.Error(), "authentication required") {
+		t.Errorf("error = %v, want it to contain the underlying gh error", err)
+	}
+	if exists {
+		t.Error("exists should be false on error")
+	}
+}
+
+func TestVendored_GhReleaseView_ExitOneNotFoundIsNotAnError(t *testing.T) {
+	// gh's documented not-found shape: exit code 1 with "not found" on
+	// stderr (exec.Cmd.Output captures stderr into *exec.ExitError).
+	cmd := exec.Command("sh", "-c", `echo 'release not found' >&2; exit 1`)
+	if _, err := cmd.Output(); err == nil {
+		t.Fatal("test setup: expected sh to exit 1")
+	} else {
+		runner := github.NewStubRunner()
+		runner.Errors["gh release view pkg --json tagName,url"] = err
+
+		exists, viewErr := ghReleaseViewExists("pkg", "", runner)
+		if viewErr != nil {
+			t.Fatalf("exit-1 not-found must yield (false, nil), got %v", viewErr)
+		}
+		if exists {
+			t.Error("expected release to not exist")
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // ghReleaseCreate tests via StubRunner
 // ---------------------------------------------------------------------------
 
 func TestVendored_GhReleaseCreate(t *testing.T) {
-	runner := github.NewStubRunner()
+	rec := &argvRecorder{inner: github.NewStubRunner()}
 
-	err := ghReleaseCreate("pkg", "", "pkg", runner)
+	err := ghReleaseCreate("pkg", "", "pkg", rec)
 	if err != nil {
 		t.Fatalf("ghReleaseCreate failed: %v", err)
 	}
 
-	// StubRunner doesn't populate Outputs; success is verified by err == nil.
+	want := []string{
+		"gh", "release", "create", "pkg",
+		"--title", "pkg deps",
+		"--notes", "npm dependency cache for pkg",
+	}
+	if len(rec.argv) != 1 {
+		t.Fatalf("runner ran %d command(s), want 1: %v", len(rec.argv), rec.argv)
+	}
+	if !reflect.DeepEqual(rec.argv[0], want) {
+		t.Errorf("gh argv = %v, want %v", rec.argv[0], want)
+	}
 }
 
 func TestVendored_GhReleaseCreate_Failure(t *testing.T) {
