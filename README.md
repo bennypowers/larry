@@ -32,6 +32,10 @@ go build -o larry ./cmd/larry
 
 ## Quick Start
 
+### Manage packages interactively
+
+`larry` starts a TUI to interactively manage your packages. `b` to bump, `?` for more keys.
+
 ### Check upstream versions
 
 ```bash
@@ -56,16 +60,6 @@ larry manage dev-util/cem
 # Check a specific overlay
 larry upstream /path/to/my-overlay
 ```
-
-### Manage packages interactively
-
-Bare `larry` opens `larry manage` when both stdin and stdout are terminals, and
-prints help otherwise. `larry upstream` never starts a TUI, so piped and CI
-runs stay plain.
-
-Checks run concurrently (`--jobs`, 0 = auto). GitHub and SourceHut repositories
-are batch-resolved in as few API calls as possible; other providers use the
-worker pool.
 
 ### Bump a package
 
