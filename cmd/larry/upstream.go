@@ -22,6 +22,9 @@ var (
 	upstreamTUI         bool
 )
 
+// runUpstreamWithTargets is upstream.RunWithTargets; tests replace it.
+var runUpstreamWithTargets = upstream.RunWithTargets
+
 func init() {
 	rootCmd.AddCommand(&upstreamCmd)
 
@@ -49,7 +52,7 @@ Overlay directory resolution (priority order):
 
 Providers are auto-detected from SRC_URI:
   mirror://pypi/   -> PyPI
-  mirror://npm/    -> npm
+  mirror://npm/, registry.npmjs.org/ -> npm
   mirror://github/ -> GitHub
   mirror://gitlab/ -> GitLab
   mirror://codeberg/ -> Codeberg
@@ -125,10 +128,13 @@ Examples:
 		// Non-TTY mode: run check with spinner.
 		if !upstreamTUI {
 			spinnerMsg := fmt.Sprintf("Checking packages in overlay: %s", overlayDir)
-			cli.AnimateSpinner(spinnerMsg, false, func() string {
-				results, err := upstream.RunWithTargets(overlayDir, registry, targets, upstreamPrereleases, upstreamFresh)
+			_, runErr := cli.AnimateSpinner(spinnerMsg, cfg.Quiet, func() (string, error) {
+				results, err := runUpstreamWithTargets(overlayDir, registry, targets, upstreamPrereleases, upstreamFresh)
 				if err != nil {
-					return "Error: " + err.Error()
+					// Errors belong to the caller: return "" so the spinner
+					// never prints error text — RunE reports it to stderr
+					// with a non-zero exit.
+					return "", err
 				}
 
 				// Filter results based on verbosity (exclude LIVE unless --verbose).
@@ -147,22 +153,25 @@ Examples:
 					log.Msg("All packages are up-to-date.")
 					log.Msg("Check complete. Cache stored in: %s (expires after 6h)", upstream.DefaultCachePath())
 					log.Msg("Use --fresh to force a refresh.")
-					return ""
+					return "", nil
 				}
 
 				var buf strings.Builder
 				if err := upstream.RenderTable(&buf, results, upstream.HyperlinksEnabled()); err != nil {
-					return "Error rendering table: " + err.Error()
+					return "", fmt.Errorf("render table: %w", err)
 				}
 				buf.WriteString("\nCheck complete. Cache stored in: " + upstream.DefaultCachePath() + " (expires after 6h)\n")
 				buf.WriteString("Use --fresh to force a refresh.\n")
-				return buf.String()
+				return buf.String(), nil
 			})
+			if runErr != nil {
+				return fmt.Errorf("upstream check failed: %w", runErr)
+			}
 			return nil
 		}
 
 		// TUI mode: run check then show interactive TUI.
-		results, err := upstream.RunWithTargets(overlayDir, registry, targets, upstreamPrereleases, upstreamFresh)
+		results, err := runUpstreamWithTargets(overlayDir, registry, targets, upstreamPrereleases, upstreamFresh)
 		if err != nil {
 			return fmt.Errorf("upstream check failed: %w", err)
 		}

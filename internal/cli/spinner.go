@@ -5,8 +5,6 @@ import (
 	"os"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/term"
 )
 
@@ -14,26 +12,38 @@ import (
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // AnimateSpinner runs fn() while printing a spinner animation.
-// Returns fn's string result.
-// If quiet is true, the spinner is suppressed.
-func AnimateSpinner(msg string, quiet bool, fn func() string) string {
+// Returns fn's string result and error. fn's result is printed only on
+// success — error text is never printed here; errors belong to the caller,
+// which reports them (stderr, non-zero exit).
+// If quiet is true, the spinner is suppressed (the result string is still
+// printed, matching the previous behaviour).
+func AnimateSpinner(msg string, quiet bool, fn func() (string, error)) (string, error) {
 	if quiet {
-		out := fn()
-		fmt.Print(out)
-		return out
+		out, err := fn()
+		if err == nil {
+			fmt.Print(out)
+		}
+		return out, err
 	}
 
 	// Check if stdout is a TTY
 	if !isTTYStdout() {
-		out := fn()
-		fmt.Print(out)
-		return out
+		out, err := fn()
+		if err == nil {
+			fmt.Print(out)
+		}
+		return out, err
 	}
 
 	// Run fn in a goroutine so spinner can run concurrently
-	ch := make(chan string, 1)
+	type result struct {
+		out string
+		err error
+	}
+	ch := make(chan result, 1)
 	go func() {
-		ch <- fn()
+		out, err := fn()
+		ch <- result{out, err}
 	}()
 
 	s := 0
@@ -46,11 +56,14 @@ func AnimateSpinner(msg string, quiet bool, fn func() string) string {
 			frame := spinnerFrames[s%len(spinnerFrames)]
 			s++
 			fmt.Printf("\r%s %s  ", frame, msg)
-		case out := <-ch:
-			// Move to a new line and print the result
+		case res := <-ch:
+			// Move to a new line, then print the result — success text only;
+			// error text is the caller's to report.
 			fmt.Println()
-			fmt.Print(out)
-			return out
+			if res.err == nil {
+				fmt.Print(res.out)
+			}
+			return res.out, res.err
 		}
 	}
 }
@@ -58,92 +71,4 @@ func AnimateSpinner(msg string, quiet bool, fn func() string) string {
 // isTTYStdout checks if stdout is a TTY using golang.org/x/term.
 func isTTYStdout() bool {
 	return term.IsTerminal(int(os.Stdout.Fd()))
-}
-
-// ---- bubbletea spinner model for TUI mode ----
-
-// spinnerTickMsg is a message fired by the spinner tick command.
-type spinnerTickMsg struct{}
-
-// spinnerModel renders a spinning indicator.
-type spinnerModel struct {
-	spinner *Spinner
-	message string
-	width   int
-	quit    bool
-}
-
-// Spinner is a simple loading spinner for use in bubbletea models.
-type Spinner struct {
-	frames   []string
-	frame    int
-	interval time.Duration
-}
-
-// NewSpinner creates a new Spinner with default settings.
-func NewSpinner() *Spinner {
-	return &Spinner{
-		frames:   spinnerFrames,
-		interval: 100 * time.Millisecond,
-	}
-}
-
-// Tick returns the next frame and a tea.Cmd that fires after the interval.
-func (s *Spinner) Tick() tea.Cmd {
-	return tea.Tick(s.interval, func(t time.Time) tea.Msg {
-		return spinnerTickMsg{}
-	})
-}
-
-// Next advances to the next frame and returns it.
-func (s *Spinner) Next() string {
-	frame := s.frames[s.frame]
-	s.frame = (s.frame + 1) % len(s.frames)
-	return frame
-}
-
-// NewSpinnerModel creates a new spinner model for bubbletea.
-func NewSpinnerModel(msg string) *spinnerModel {
-	return &spinnerModel{
-		spinner: NewSpinner(),
-		message: msg,
-		width:   80,
-	}
-}
-
-func (m *spinnerModel) Init() tea.Cmd {
-	return m.spinner.Tick()
-}
-
-func (m *spinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-	case tea.KeyMsg:
-		if msg.Type == tea.KeyCtrlC {
-			m.quit = true
-			return m, tea.Quit
-		}
-	case spinnerTickMsg:
-		return m, m.spinner.Tick()
-	}
-	return m, nil
-}
-
-func (m *spinnerModel) View() string {
-	if m.quit {
-		return ""
-	}
-	return lipgloss.NewStyle().
-		Width(m.width).
-		Bold(true).
-		Render(m.spinner.Next() + "  " + m.message) + "\n"
-}
-
-// FetchingStateView renders the spinner view for the upstream TUI.
-var FetchingStateView = func() string {
-	// Use a fixed frame for the TUI fetching state
-	return lipgloss.NewStyle().
-		Bold(true).
-		Render("Checking upstream versions...\n")
 }
