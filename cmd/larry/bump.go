@@ -169,6 +169,7 @@ func runBump(cmd *cobra.Command, args []string) error {
 		ForceType:             forceType,
 		Quiet:                 cfg.Quiet,
 		CleanupOrphanedAssets: true,
+		CleanupOnFailure:      true,
 		RevisionBump:          mode == bump.BumpModeRevision,
 		Log:                   log,
 		// Prepare runs inside bump; forward its named steps so the pane is

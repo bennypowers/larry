@@ -256,11 +256,11 @@ func TestPrepareGo_HappyPath(t *testing.T) {
 	}
 
 	// Both files should exist
-	pkgTarball := filepath.Join(filepath.Dir(ei.Path), "proj-1.0.0-deps.tar.xz")
+	pkgTarball := filepath.Join(filepath.Dir(ei.Path), "proj-1.0.0-deps.tar.gz")
 	if _, err := os.Stat(pkgTarball); err != nil {
 		t.Errorf("tarball not created at %s: %v", pkgTarball, err)
 	}
-	distTarball := filepath.Join(distDir, "proj-1.0.0-deps.tar.xz")
+	distTarball := filepath.Join(distDir, "proj-1.0.0-deps.tar.gz")
 	if _, err := os.Stat(distTarball); err != nil {
 		t.Errorf("tarball not copied to distdir %s: %v", distTarball, err)
 	}
@@ -301,19 +301,19 @@ func TestPrepareGo_TarballRootIsVendorDir(t *testing.T) {
 	}
 
 	// Open the tarball at the package-dir location and inspect headers
-	pkgTarball := filepath.Join(filepath.Dir(ei.Path), "proj-1.0.0-deps.tar.xz")
+	pkgTarball := filepath.Join(filepath.Dir(ei.Path), "proj-1.0.0-deps.tar.gz")
 	f, err := os.Open(pkgTarball)
 	if err != nil {
 		t.Fatalf("open tarball: %v", err)
 	}
 defer func() { if err := f.Close(); err != nil { t.Fatal(err) } }()
 
-	xr, err := xz.NewReader(f)
+	gzr, err := gzip.NewReader(f)
 	if err != nil {
-		t.Fatalf("create xz reader: %v", err)
+		t.Fatalf("create gzip reader: %v", err)
 	}
 
-	tr := tar.NewReader(xr)
+	tr := tar.NewReader(gzr)
 	foundVendorX := false
 	hasDotPrefix := false
 	hasNoVendorPrefix := false
@@ -373,8 +373,8 @@ func TestPrepareGo_WritesBothLocations(t *testing.T) {
 	}
 
 	// Compare SHA-256 of both files
-	pkgTarball := filepath.Join(filepath.Dir(ei.Path), "proj-1.0.0-deps.tar.xz")
-	distTarball := filepath.Join(distDir, "proj-1.0.0-deps.tar.xz")
+	pkgTarball := filepath.Join(filepath.Dir(ei.Path), "proj-1.0.0-deps.tar.gz")
+	distTarball := filepath.Join(distDir, "proj-1.0.0-deps.tar.gz")
 
 	pkgData, err := os.ReadFile(pkgTarball)
 	if err != nil {
@@ -431,7 +431,7 @@ func TestPrepareGo_WriteOrderIsPkgDirThenDistdir(t *testing.T) {
 	}
 
 	// But the pkg-dir tarball should already exist (written before distdir copy)
-	pkgTarball := filepath.Join(filepath.Dir(ei.Path), "proj-1.0.0-deps.tar.xz")
+	pkgTarball := filepath.Join(filepath.Dir(ei.Path), "proj-1.0.0-deps.tar.gz")
 	if _, err := os.Stat(pkgTarball); err != nil {
 		t.Error("pkg-dir tarball should exist even when distdir copy fails")
 	}
@@ -863,13 +863,13 @@ func TestPrepareGo_DepsFilename(t *testing.T) {
 		t.Fatalf("PrepareGo returned error: %v", err)
 	}
 
-	// Both files named exactly proj-1.0.0-deps.tar.xz
-	pkgTarball := filepath.Join(filepath.Dir(ei.Path), "proj-1.0.0-deps.tar.xz")
+	// Both files named exactly proj-1.0.0-deps.tar.gz
+	pkgTarball := filepath.Join(filepath.Dir(ei.Path), "proj-1.0.0-deps.tar.gz")
 	if _, err := os.Stat(pkgTarball); err != nil {
 		t.Errorf("pkg tarball not found: %v", err)
 	}
 
-	distTarball := filepath.Join(distDir, "proj-1.0.0-deps.tar.xz")
+	distTarball := filepath.Join(distDir, "proj-1.0.0-deps.tar.gz")
 	if _, err := os.Stat(distTarball); err != nil {
 		t.Errorf("dist tarball not found: %v", err)
 	}

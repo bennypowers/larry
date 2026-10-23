@@ -24,7 +24,7 @@ var githubRe = regexp.MustCompile(`github\.com/([^/]+)/([^/]+)`)
 
 // PrepareGo is the go-specific prepare pipeline for `larry prepare`.
 // It vendors Go dependencies, creates a vendor tarball, and runs pkgdev manifest.
-func PrepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
+func PrepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) (retErr error) {
 	// Early exit for dry-run
 	if cfg.DryRun {
 		return nil
@@ -96,8 +96,35 @@ func PrepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 		return fmt.Errorf("go: go mod vendor: %w", err)
 	}
 
-	// 7. Create vendor tarball (xz compressed) in package directory
-	outPath := filepath.Join(filepath.Dir(ei.Path), ei.P()+"-deps.tar.xz")
+	// 7. Create vendor tarball in the package directory. The ebuild's SRC_URI
+	// is authoritative for both the filename and the compression: overlays in
+	// the wild reference `${P}-deps.tar.gz` (committed to the overlay repo) and
+	// `${P}-deps.tar.xz` (release asset). Writing a different name leaves
+	// pkgdev to fetch the missing one over the network, which 404s for a
+	// version that has not been pushed yet.
+	pe, err := atom.ParseEbuildPath(ei.Path)
+	if err != nil {
+		return fmt.Errorf("go: parse ebuild path: %w", err)
+	}
+	depsName := goDepsDistfile(ei, pe)
+	outPath := filepath.Join(filepath.Dir(ei.Path), depsName)
+	distPath := filepath.Join(distDir, depsName)
+	_, pkgStatErr := os.Stat(outPath)
+	_, distStatErr := os.Stat(distPath)
+	// A failed run must not orphan artifacts that did not exist before it:
+	// `larry bump` deletes the new ebuild, and the tarball would linger
+	// untracked beside it.
+	defer func() {
+		if retErr == nil || !cfg.CleanupOnFailure {
+			return
+		}
+		if pkgStatErr != nil {
+			_ = os.Remove(outPath) // best-effort cleanup after failure
+		}
+		if distStatErr != nil {
+			_ = os.Remove(distPath) // best-effort cleanup after failure
+		}
+	}()
 	if err := createGoVendorTarball(srcDir, outPath); err != nil {
 		return fmt.Errorf("go: create vendor tarball: %w", err)
 	}
@@ -111,10 +138,6 @@ func PrepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	// tarball from a release on the configured repo. The tag comes from the
 	// ebuild's own URL (like the npm pipeline), so the asset lands exactly
 	// where the ebuild will fetch it — never a guessed v${PV} tag.
-	pe, err := atom.ParseEbuildPath(ei.Path)
-	if err != nil {
-		return fmt.Errorf("go: parse ebuild path: %w", err)
-	}
 	if cfg.GitHubRepo != "" {
 		if tag, ok := goReleaseTag(ei, pe, cfg.GitHubRepo); ok {
 			gh := github.NewClientWithRunner(runner)
@@ -139,6 +162,37 @@ func PrepareGo(ei *ebuild.EbuildInfo, cfg *PrepareConfig) error {
 	}
 
 	return nil
+}
+
+// goDepsDistfile returns the DISTDIR filename the ebuild expects for its
+// vendored dependency tarball. The ebuild's SRC_URI is authoritative: Go
+// overlays reference both `${P}-deps.tar.gz` and `${P}-deps.tar.xz`. When no
+// deps entry is present, the SPEC default (`${P}-deps.tar.gz`) applies.
+func goDepsDistfile(ei *ebuild.EbuildInfo, pe *atom.ParsedEbuild) string {
+	vars := ebuild.BuildVariableMap(ei.Raw, pe)
+	if entries, err := ebuild.ParseSrcUri(ei.SRC_URI, vars); err == nil {
+		for _, e := range entries {
+			if isDepsDistfile(e.Filename) {
+				return e.Filename
+			}
+		}
+	}
+	return ei.P() + "-deps.tar.gz"
+}
+
+// isDepsDistfile reports whether name is a Go vendor deps tarball. Names that
+// belong to the npm/cargo pipelines are excluded: `pkg-1.0.0-npm-deps.tar.xz`
+// also ends in `-deps.tar.xz` but is not a Go vendor archive.
+func isDepsDistfile(name string) bool {
+	if strings.Contains(name, "-npm-deps.") || strings.Contains(name, "-cargo-deps.") {
+		return false
+	}
+	for _, suffix := range []string{"-deps.tar.gz", "-deps.tar.xz", "-deps.tar.zst"} {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // goReleaseTag returns the release tag the ebuild's SRC_URI fetches its deps
@@ -316,13 +370,19 @@ func runGoModVendor(dir string, runner github.CmdRunner) error {
 	return runner.Run(cmd)
 }
 
-// createGoVendorTarball creates an xz-compressed tarball of the vendor/
-// directory at outPath.  The tarball root is vendor/ (matching what the
-// go-module eclass expects).
+// createGoVendorTarball creates a gzip- or xz-compressed tarball of the
+// vendor/ directory at outPath, choosing the compressor from the extension.
+// The tarball root is vendor/ (matching what the go-module eclass expects).
 func createGoVendorTarball(srcDir, outPath string) error {
 	vendorDir := filepath.Join(srcDir, "vendor")
 	if _, err := os.Stat(vendorDir); err != nil {
 		return fmt.Errorf("vendor directory not found: %s", vendorDir)
+	}
+
+	// Reject unsupported formats before creating (and leaving) an empty file.
+	ext := filepath.Ext(outPath)
+	if ext != ".gz" && ext != ".xz" {
+		return fmt.Errorf("unsupported deps tarball extension %q (want .tar.gz or .tar.xz)", ext)
 	}
 
 	// Ensure output directory exists
@@ -336,13 +396,22 @@ func createGoVendorTarball(srcDir, outPath string) error {
 	}
 	defer func() { _ = outFile.Close() }() // best-effort close
 
-	xzw, err := xz.WriterConfig{DictCap: 64 * 1024 * 1024}.NewWriter(outFile)
-	if err != nil {
-		return fmt.Errorf("create xz writer: %w", err)
+	var comp io.WriteCloser
+	switch ext {
+	case ".gz":
+		comp, err = gzip.NewWriterLevel(outFile, gzip.BestCompression)
+		if err != nil {
+			return fmt.Errorf("create gzip writer: %w", err)
+		}
+	case ".xz":
+		comp, err = xz.WriterConfig{DictCap: 64 * 1024 * 1024}.NewWriter(outFile)
+		if err != nil {
+			return fmt.Errorf("create xz writer: %w", err)
+		}
 	}
-	defer func() { _ = xzw.Close() }() // best-effort close
+	defer func() { _ = comp.Close() }() // best-effort close
 
-	tr := tar.NewWriter(xzw)
+	tr := tar.NewWriter(comp)
 	defer func() { _ = tr.Close() }() // best-effort close
 
 	// Walk vendor/ and write entries with "vendor/" prefix

@@ -32,6 +32,10 @@ type PrepareConfig struct {
 	HTTPClient            *http.Client
 	CleanupOrphanedAssets bool   // removes orphaned GitHub assets on prepare failure
 	RevisionBump          bool   // skip source download, only run manifest
+	// CleanupOnFailure removes build artifacts (deps tarballs) that this run
+	// created when the pipeline fails. `larry bump` sets it because it also
+	// deletes the new ebuild, which would otherwise orphan the tarball.
+	CleanupOnFailure bool
 	CustomPrepareScript   string // relative path (from pkg dir) to custom prepare script; default: .larry/prepare.sh
 	// Quiet suppresses subprocess streaming (manifest output and heartbeat).
 	// Interactive TUI runs imply quiet: raw writes would corrupt the screen.
