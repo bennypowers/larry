@@ -374,7 +374,8 @@ edition = "2021"
 			runner = github.NewClient().Runner()
 		}
 		if err := runPycargoebuild(work, ebuildPath, runner); err != nil {
-			// pycargoebuild failed, fall through to native
+			warnToLogger(cfg, fmt.Sprintf(
+				"pycargoebuild failed (%v); falling back to native CRATES parsing", err))
 			return updateCargoEbuildNative(ebuildPath, crates)
 		}
 		// pycargoebuild ran successfully — the ebuild was updated in place.
@@ -388,8 +389,19 @@ edition = "2021"
 // runPycargoebuild runs pycargoebuild --inplace on the ebuild.
 // The command's working directory is set to dir (typically a temp dir holding
 // Cargo.lock and a synthetic Cargo.toml).
+//
+// Flags: -C (--fill-crates) keeps pycargoebuild to CRATES, matching larry's
+// native fallback; -L (--no-license) skips the crate-license rewrite, which
+// aborts when the ebuild lacks pycargoebuild's `# Dependent crate licenses`
+// marker (common in hand-maintained ebuilds). --no-manifest leaves manifest
+// generation to larry's own pipeline.
 func runPycargoebuild(dir, ebuildPath string, runner github.CmdRunner) error {
-	cmd := exec.Command("pycargoebuild", dir, "--no-write-crate-tarball", "--no-manifest", "--inplace", ebuildPath)
+	// Resolve against larry's cwd before switching cmd.Dir to the temp dir.
+	absEbuild, err := filepath.Abs(ebuildPath)
+	if err != nil {
+		return fmt.Errorf("resolve ebuild path: %w", err)
+	}
+	cmd := exec.Command("pycargoebuild", dir, "-C", "-L", "--no-manifest", "--inplace", absEbuild)
 	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
