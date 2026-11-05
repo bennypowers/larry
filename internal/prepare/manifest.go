@@ -238,10 +238,18 @@ func runManifest(req manifestRequest) error {
 		}
 	}
 
-	// Remove stale Manifest before regen, but only when processing a full cat/pkg.
 	// When targeting a single ebuild path, preserve the existing Manifest so
 	// pkgdev manifest can merge in the new ebuild's entries without clobbering
-	// entries from sibling ebuilds.
+	// entries from sibling ebuilds. But merge mode never re-hashes, so a stale
+	// entry (distfile regenerated with a different hash) survives and breaks
+	// fetches later; -f is no help either, as it verifies against the stale
+	// entries first. Fall back to a full package regeneration, which drops the
+	// Manifest first — pkgdev then rebuilds it from all ebuilds in the package.
+	if req.EbuildPath != "" && manifestEntriesStale(manifestPath, req.Distdir) {
+		output.Debug("manifest: stale entries for target ebuild, forcing full package regeneration")
+		req.EbuildPath = ""
+	}
+
 	if req.EbuildPath == "" {
 		_ = os.Remove(manifestPath)
 	}

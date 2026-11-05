@@ -556,24 +556,14 @@ func runCustomPrepare(ei *ebuild.EbuildInfo, scriptPath string, cfg *PrepareConf
 	}
 
 	// Run manifest for this package (catPkg, not a file path).
-	//
 	// The single-ebuild target makes pkgdev manifest merge into the
-	// existing Manifest, keeping existing DIST lines untouched — right
-	// when the hook changed nothing, wrong when it regenerated a
-	// distfile: the stale entry would survive and break fetches later
-	// (merge mode never re-hashes, and -f verifies against the stale
-	// entries first). Detect mismatched entries and fall back to a full
-	// package regeneration, which drops the Manifest first.
-	manifestTarget := ei.Path
-	if manifestEntriesStale(filepath.Join(filepath.Dir(ei.Path), "Manifest"), cfg.Distdir) {
-		output.Debug("custom prepare: stale Manifest entries, forcing full package regeneration")
-		manifestTarget = ""
-	}
+	// existing Manifest; runManifest falls back to a full package
+	// regeneration when the Manifest holds stale entries.
 	req := manifestRequest{
 		Overlay:    cfg.Overlay,
 		CatPkg:     ei.Category + "/" + ei.PN(),
 		Distdir:    cfg.Distdir,
-		EbuildPath: manifestTarget,
+		EbuildPath: ei.Path,
 		Prefetch:   nil,
 	}
 	cfg.report(ProgressEvent{Kind: ProgressStep, Package: pkgName, Step: "manifest"})

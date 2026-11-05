@@ -1,7 +1,10 @@
 package prepare
 
 import (
+	"crypto/sha512"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +18,13 @@ import (
 	"bennypowers.dev/larry/internal/github"
 	"bennypowers.dev/larry/internal/httpclient"
 )
+
+// sha512Hex returns the lowercase hex SHA512 of b (test helper for
+// building Manifest fixtures whose hashes must match produced distfiles).
+func sha512Hex(b []byte) string {
+	h := sha512.Sum512(b)
+	return hex.EncodeToString(h[:])
+}
 
 // ---------------------------------------------------------------------------
 // npmResolveSRCURI tests
@@ -642,16 +652,20 @@ SRC_URI="https://registry.npmjs.org/${MY_NPM_SCOPE}/${PN}/-/${P}.tgz -> ${P}.tgz
 	if err := os.WriteFile(ebuildPath, []byte(raw), 0644); err != nil {
 		t.Fatal(err)
 	}
+	tarballContent := []byte("fake-npm-tarball-content")
 	// The manifest runner is stubbed below, but verifyManifestValid still
 	// requires <pkgDir>/Manifest with DIST entries for every distfile.
-	manifest := "DIST my-pkg-1.0.0.tgz 23 BLAKE2B abc SHA512 def\n" +
-		"DIST my-pkg-1.0.0-deps.tar.xz 11 BLAKE2B abc SHA512 def\n" +
-		"DIST webui-1.0.0.tgz 23 BLAKE2B abc SHA512 def\n"
+	// SHA512 must match the distfile content the pipeline produces: a
+	// genuinely stale Manifest now triggers a full regeneration, which
+	// would drop this file.
+	depsContent := []byte("placeholder") // written by the stubbed archiver
+	manifest := "" +
+		fmt.Sprintf("DIST my-pkg-1.0.0.tgz %d BLAKE2B abc SHA512 %s\n", len(tarballContent), sha512Hex(tarballContent)) +
+		fmt.Sprintf("DIST my-pkg-1.0.0-deps.tar.xz %d BLAKE2B abc SHA512 %s\n", len(depsContent), sha512Hex(depsContent)) +
+		fmt.Sprintf("DIST webui-1.0.0.tgz %d BLAKE2B abc SHA512 %s\n", len(tarballContent), sha512Hex(tarballContent))
 	if err := os.WriteFile(filepath.Join(pkgDir, "Manifest"), []byte(manifest), 0644); err != nil {
 		t.Fatal(err)
 	}
-
-	tarballContent := []byte("fake-npm-tarball-content")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(tarballContent) // httptest writer; a write error cannot occur here

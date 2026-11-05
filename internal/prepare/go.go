@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/ulikunitz/xz"
 
@@ -439,6 +440,10 @@ func createGoVendorTarball(srcDir, outPath string) error {
 			return fmt.Errorf("create tar header: %w", err)
 		}
 		hdr.Name = rel
+		// Normalise mtime so repeated prepares produce byte-identical
+		// tarballs — a changing hash churns the Manifest and the release
+		// asset even when the vendored content did not change.
+		hdr.ModTime = time.Unix(0, 0)
 
 		if err := tr.WriteHeader(hdr); err != nil {
 			return fmt.Errorf("write tar header: %w", err)
