@@ -372,7 +372,13 @@ func runGoModVendor(dir string, runner github.CmdRunner) error {
 
 // createGoVendorTarball creates a gzip- or xz-compressed tarball of the
 // vendor/ directory at outPath, choosing the compressor from the extension.
-// The tarball root is vendor/ (matching what the go-module eclass expects).
+// The top-level entry is the source directory name (e.g. proj-1.0.0/),
+// so the tarball unpacks vendor/ directly into ${S}. That matters: the
+// go-module eclass only skips 'ego mod verify' during unpack when
+// ${S}/vendor already exists, and mod verify needs network or a primed
+// module cache — which the build sandbox does not provide. A root-level
+// vendor/ entry would unpack into ${WORKDIR} instead, forcing the network
+// call. (Matches the gentoo-golang-dist layout.)
 func createGoVendorTarball(srcDir, outPath string) error {
 	vendorDir := filepath.Join(srcDir, "vendor")
 	if _, err := os.Stat(vendorDir); err != nil {
@@ -414,17 +420,19 @@ func createGoVendorTarball(srcDir, outPath string) error {
 	tr := tar.NewWriter(comp)
 	defer func() { _ = tr.Close() }() // best-effort close
 
-	// Walk vendor/ and write entries with "vendor/" prefix
+	// Walk vendor/ and write entries under the source directory name
+	// (so the archive unpacks into ${S} with vendor/ inside it)
+	prefix := filepath.Base(srcDir)
 	return filepath.Walk(vendorDir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 
-		// Compute the name relative to srcDir (so vendor/ is at the root)
 		rel, err := filepath.Rel(srcDir, path)
 		if err != nil {
 			return fmt.Errorf("compute rel path: %w", err)
 		}
+		rel = filepath.Join(prefix, rel)
 
 		hdr, err := tar.FileInfoHeader(info, "")
 		if err != nil {

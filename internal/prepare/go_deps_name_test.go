@@ -110,12 +110,12 @@ func TestPrepareGo_DepsFilenameMatchesSrcURI_Gz(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read tar entry: %v", err)
 		}
-		if hdr.Name == "vendor/x/y.go" {
+		if hdr.Name == "proj/vendor/x/y.go" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("tarball does not contain vendor/x/y.go")
+		t.Error("tarball does not contain proj/vendor/x/y.go")
 	}
 }
 

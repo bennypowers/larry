@@ -329,22 +329,25 @@ defer func() { if err := f.Close(); err != nil { t.Fatal(err) } }()
 		if header.Name == "./" {
 			hasDotPrefix = true
 		}
-		if !strings.HasPrefix(header.Name, "vendor/") && header.Name != "vendor" {
+		// Entries must be under the source directory name (proj/) so the
+		// archive unpacks vendor/ into ${S}, letting the go-module eclass skip
+		// 'ego mod verify' (which needs network) during unpack.
+		if !strings.HasPrefix(header.Name, "proj/") {
 			hasNoVendorPrefix = true
 		}
-		if header.Name == "vendor/x/y.go" {
+		if header.Name == "proj/vendor/x/y.go" {
 			foundVendorX = true
 		}
 	}
 
 	if hasDotPrefix {
-		t.Error("tarball root contains './' prefix — should be vendor/ at root")
+		t.Error("tarball root contains './' prefix — should be proj/ at root")
 	}
 	if hasNoVendorPrefix {
-		t.Error("tarball contains entries without vendor/ prefix")
+		t.Error("tarball contains entries outside the proj/ prefix")
 	}
 	if !foundVendorX {
-		t.Error("tarball does not contain vendor/x/y.go")
+		t.Error("tarball does not contain proj/vendor/x/y.go")
 	}
 }
 
@@ -1360,7 +1363,7 @@ func TestCreateGoVendorTarball(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create a srcDir with vendor/
-	srcDir := filepath.Join(tmpDir, "src")
+	srcDir := filepath.Join(tmpDir, "proj-1.0.0")
 	if err := os.MkdirAll(filepath.Join(srcDir, "vendor", "x", "y"), 0o755); err != nil {
 		t.Fatalf("create vendor dir: %v", err)
 	}
@@ -1382,7 +1385,7 @@ func TestCreateGoVendorTarball(t *testing.T) {
 		t.Fatalf("tarball not created: %v", err)
 	}
 
-	// Verify contents start with vendor/
+	// Verify contents start with the source directory name
 	f, err := os.Open(outPath)
 	if err != nil {
 		t.Fatalf("open tarball: %v", err)
@@ -1404,12 +1407,12 @@ defer func() { if err := f.Close(); err != nil { t.Fatal(err) } }()
 		if err != nil {
 			t.Fatalf("read tar entry: %v", err)
 		}
-		if header.Name == "vendor/x/y/z.go" {
+		if header.Name == "proj-1.0.0/vendor/x/y/z.go" {
 			foundVendor = true
 		}
 	}
 	if !foundVendor {
-		t.Error("vendor/x/y/z.go not found in tarball")
+		t.Error("proj-1.0.0/vendor/x/y/z.go not found in tarball")
 	}
 }
 
