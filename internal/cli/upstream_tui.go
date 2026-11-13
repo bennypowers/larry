@@ -393,12 +393,17 @@ func (m *UpstreamModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.actionErr = ev.err
 			m.mode = modeBrowse
 			if ev.err == nil {
-				if m.pending == ActionBump && m.autoprune && !m.dryRun {
-					if removed, err := m.pruneOlder(m.actionPkg); err == nil {
-						for _, name := range removed {
-							m.appendActionLine("autopruned " + name)
+				if m.pending == ActionBump {
+					if m.autoprune && !m.dryRun {
+						if removed, err := m.pruneOlder(m.actionPkg); err == nil {
+							for _, name := range removed {
+								m.appendActionLine("autopruned " + name)
+							}
 						}
 					}
+					// A bump's outcome is already known; a rescan here only
+					// shuffles the list. The user can press R to rescan.
+					return m, nil
 				}
 				return m, m.startFetch()
 			}
@@ -890,24 +895,36 @@ func (m *UpstreamModel) ActionSteps() []actionStep { return m.actionSteps }
 func (m *UpstreamModel) ActionErr() error { return m.actionErr }
 
 func (m *UpstreamModel) applyFilter() {
+	byPkg := make(map[string]upstream.UpstreamResult, len(m.results))
+	for _, r := range m.results {
+		byPkg[r.Package] = r
+	}
+
+	// Rows already on screen keep their position across refreshes, so a
+	// bump that turns a package up to date never shuffles the list. Rows
+	// unseen in the previous view are appended: actionable first, then the
+	// rest, both in deterministic discovery order.
+	prev := m.visible
 	m.visible = m.visible[:0]
-	if !m.showAll {
-		for _, r := range m.results {
-			if r.Status.IsSignificant() {
-				m.visible = append(m.visible, r)
-			}
+	seen := make(map[string]bool, len(prev)+len(m.results))
+	for _, r := range prev {
+		nr, ok := byPkg[r.Package]
+		if ok && (m.showAll || nr.Status.IsSignificant()) {
+			m.visible = append(m.visible, nr)
+			seen[r.Package] = true
 		}
-	} else {
-		// Actionable rows first, then the rest. Both passes preserve the
-		// deterministic discovery order, so rows never shuffle between checks.
-		for _, r := range m.results {
-			if r.Status.IsSignificant() {
-				m.visible = append(m.visible, r)
-			}
+	}
+	for _, r := range m.results {
+		if !seen[r.Package] && r.Status.IsSignificant() {
+			m.visible = append(m.visible, r)
+			seen[r.Package] = true
 		}
+	}
+	if m.showAll {
 		for _, r := range m.results {
-			if !r.Status.IsSignificant() {
+			if !seen[r.Package] {
 				m.visible = append(m.visible, r)
+				seen[r.Package] = true
 			}
 		}
 	}

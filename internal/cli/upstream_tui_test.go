@@ -266,6 +266,56 @@ func TestUpstreamModel_RefreshKeepsSelectedPackage(t *testing.T) {
 	}
 }
 
+func TestUpstreamModel_NoRescanAfterSuccessfulBump(t *testing.T) {
+	m := actionModel(t, UpstreamActions{Bump: func(context.Context, string, func(string), func(ActionProgress)) error {
+		return nil
+	}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	drainCmd(t, m, cmd)
+
+	if m.state == upstreamFetching {
+		t.Error("successful bump started a rescan; the table should stay put")
+	}
+	view := m.View()
+	if strings.Contains(view, "Checking upstream") {
+		t.Errorf("view after successful bump is rescanning:\n%s", view)
+	}
+	if !strings.Contains(view, "dev-util/alpha") {
+		t.Errorf("table disappeared after successful bump:\n%s", view)
+	}
+}
+
+func TestUpstreamModel_StableOrderWhenRowBecomesDone(t *testing.T) {
+	m, _ := newModelForTest(t, true)
+	first := []upstream.UpstreamResult{
+		{Package: "app/alpha", Current: "1.0.0", Latest: "1.0.0", Status: upstream.StatusUpToDate},
+		{Package: "app/beta", Current: "1.0.0", Latest: "2.0.0", Status: upstream.StatusOutdated},
+		{Package: "app/gamma", Current: "1.0.0", Latest: "1.0.0", Status: upstream.StatusUpToDate},
+	}
+	m.Update(upstreamDoneMsg{Results: first})
+	// showAll: actionable rows first, discovery order within each block.
+	want := []string{"app/beta", "app/alpha", "app/gamma"}
+	for i, pkg := range want {
+		if m.visible[i].Package != pkg {
+			t.Fatalf("initial visible[%d] = %q, want %q", i, m.visible[i].Package, pkg)
+		}
+	}
+
+	// beta was bumped and is now up to date; it must keep its position
+	// instead of shuffling into the trailing block.
+	m.Update(upstreamDoneMsg{Results: []upstream.UpstreamResult{
+		{Package: "app/alpha", Current: "1.0.0", Latest: "1.0.0", Status: upstream.StatusUpToDate},
+		{Package: "app/beta", Current: "2.0.0", Latest: "2.0.0", Status: upstream.StatusUpToDate},
+		{Package: "app/gamma", Current: "1.0.0", Latest: "1.0.0", Status: upstream.StatusUpToDate},
+	}})
+	for i, pkg := range want {
+		if m.visible[i].Package != pkg {
+			t.Errorf("after refresh visible[%d] = %q, want %q (order must be stable)", i, m.visible[i].Package, pkg)
+		}
+	}
+}
+
 func TestUpstreamModel_ColumnsFitContent(t *testing.T) {
 	results := []upstream.UpstreamResult{{
 		Package: "dev-util/alpha", Current: "0.11.0", Latest: "0.11.3",
@@ -372,14 +422,14 @@ func TestUpstreamModel_ActionConfirmation(t *testing.T) {
 func TestUpstreamModel_RunsAction(t *testing.T) {
 	var calledPkg string
 	var lines []string
-	m := actionModel(t, UpstreamActions{Bump: func(_ context.Context, pkg string, onLine func(string), _ func(ActionProgress)) error {
+	m := actionModel(t, UpstreamActions{Prepare: func(_ context.Context, pkg string, onLine func(string), _ func(ActionProgress)) error {
 		calledPkg = pkg
-		onLine("bumped " + pkg)
+		onLine("prepared " + pkg)
 		onLine("committed")
 		return nil
 	}})
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	drainCmd(t, m, cmd)
 
@@ -387,10 +437,10 @@ func TestUpstreamModel_RunsAction(t *testing.T) {
 		t.Errorf("action ran for %q, want dev-util/alpha", calledPkg)
 	}
 	lines = m.ActionLines()
-	if len(lines) != 2 || !strings.Contains(lines[0], "bumped dev-util/alpha") {
+	if len(lines) != 2 || !strings.Contains(lines[0], "prepared dev-util/alpha") {
 		t.Errorf("action lines = %v", lines)
 	}
-	// A successful action refreshes the table.
+	// A successful non-bump action refreshes the table.
 	if !strings.Contains(m.View(), "Checking upstream") {
 		t.Errorf("view after successful action:\n%s", m.View())
 	}
@@ -625,8 +675,8 @@ func TestUpstreamModel_BlankOutputLineDoesNotStallAction(t *testing.T) {
 	if m.mode == modeRunning {
 		t.Error("blank output line left the action running")
 	}
-	if !strings.Contains(m.View(), "Checking upstream") {
-		t.Errorf("successful action did not refresh:\n%s", m.View())
+	if lines := m.ActionLines(); len(lines) != 2 || lines[1] != "Preparing foo..." {
+		t.Errorf("completion was stranded after a blank line: %v", lines)
 	}
 }
 
